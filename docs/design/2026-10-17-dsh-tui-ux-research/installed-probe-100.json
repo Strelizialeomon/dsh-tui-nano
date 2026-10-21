@@ -1,0 +1,66 @@
+{
+  "installedVersion": "0.15.0 with local scroll patch",
+  "columns": 100,
+  "terminalRows": 40,
+  "fabricatedTurns": 120,
+  "results": [
+    {
+      "label": "warmup",
+      "screenRow": 15,
+      "events": 3,
+      "gapMs": 200,
+      "scrollTopBefore": 299,
+      "scrollTopAfter": 298,
+      "distance": 1,
+      "frames": 4
+    },
+    {
+      "label": "content-slow",
+      "screenRow": 15,
+      "events": 3,
+      "gapMs": 200,
+      "scrollTopBefore": 298,
+      "scrollTopAfter": 297,
+      "distance": 1,
+      "frames": 2
+    },
+    {
+      "label": "footer-slow",
+      "screenRow": 39,
+      "events": 3,
+      "gapMs": 200,
+      "scrollTopBefore": 297,
+      "scrollTopAfter": 294,
+      "distance": 3,
+      "frames": 2
+    },
+    {
+      "label": "content-fast",
+      "screenRow": 15,
+      "events": 24,
+      "gapMs": 8,
+      "scrollTopBefore": 294,
+      "scrollTopAfter": 202,
+      "distance": 92,
+      "frames": 22
+    },
+    {
+      "label": "footer-fast",
+      "screenRow": 39,
+      "events": 24,
+      "gapMs": 8,
+      "scrollTopBefore": 202,
+      "scrollTopAfter": 148,
+      "distance": 54,
+      "frames": 19
+    }
+  ],
+  "renderOnly": {
+    "frames": 48,
+    "p50Ms": 0.8119999999998981,
+    "p95Ms": 2.2412500000000364,
+    "maxMs": 3.044167000000016,
+    "outputBytes": 40782
+  },
+  "limitations": "Memory-backed output; no terminal emulator or compositor. Render timings exclude React work outside the onFrame interval and are not input-to-display latency."
+}

@@ -1,0 +1,495 @@
+{
+  "checks": [
+    {
+      "check": "default details collapsed",
+      "passed": true
+    },
+    {
+      "check": "terminal has no pictographic emoji",
+      "passed": true
+    },
+    {
+      "check": "footer is reduced to permission and working directory",
+      "passed": true
+    },
+    {
+      "check": "context occupancy is visible as a partial pair of input borders",
+      "passed": true
+    },
+    {
+      "check": "single tool opens without opening others",
+      "passed": true
+    },
+    {
+      "check": "copy returns the entire 11-line script",
+      "passed": true
+    },
+    {
+      "check": "clicking Bash script body collapses the whole card",
+      "passed": true
+    },
+    {
+      "check": "clicking Bash output preview expands the whole card",
+      "passed": true
+    },
+    {
+      "check": "drag-selecting Bash code does not collapse the card",
+      "passed": true
+    },
+    {
+      "check": "explicit tool expansion survives state change",
+      "passed": true
+    },
+    {
+      "check": "global expansion can be closed",
+      "passed": true
+    },
+    {
+      "check": "running tail occupies exactly two visual rows",
+      "passed": true
+    },
+    {
+      "check": "one running indicator",
+      "passed": true
+    },
+    {
+      "check": "reading history stays anchored after new sample output",
+      "passed": true
+    },
+    {
+      "check": "jump-to-latest shown while reading history",
+      "passed": true
+    },
+    {
+      "check": "jump-to-latest reaches the bottom",
+      "passed": true
+    },
+    {
+      "check": "failure visible with details collapsed",
+      "passed": true
+    },
+    {
+      "check": "approval includes full command before any decision",
+      "passed": true
+    },
+    {
+      "check": "refusal is explicit and does not run a command",
+      "passed": true
+    },
+    {
+      "check": "60-column transcript does not overflow horizontally",
+      "passed": true
+    },
+    {
+      "check": "60-column compact command headers stay one row",
+      "passed": true
+    },
+    {
+      "check": "60-column terminal still contains no pictographic emoji",
+      "passed": true
+    },
+    {
+      "check": "edit block has a file path and exact change counts",
+      "passed": true
+    },
+    {
+      "check": "removed and added code have distinct full-row backgrounds",
+      "passed": true
+    },
+    {
+      "check": "word highlights differ from their line backgrounds",
+      "passed": true
+    },
+    {
+      "check": "line coordinates come from the sample patch",
+      "passed": true
+    },
+    {
+      "check": "60-column diff remains inside transcript width",
+      "passed": true
+    },
+    {
+      "check": "removed diff action buttons are absent",
+      "passed": true
+    },
+    {
+      "check": "short diff stays fully visible without a redundant expansion hint",
+      "passed": true
+    },
+    {
+      "check": "unapplied edit is labelled as a preview",
+      "passed": true
+    },
+    {
+      "check": "long diff is capped to at most eight visual rows",
+      "passed": true
+    },
+    {
+      "check": "long diff preserves all-file change totals",
+      "passed": true
+    },
+    {
+      "check": "long diff has a count and whole-block affordance",
+      "passed": true
+    },
+    {
+      "check": "clicking code content reveals the same styled diff",
+      "passed": true
+    },
+    {
+      "check": "expanding a diff preserves its header position",
+      "passed": true
+    },
+    {
+      "check": "selection inside a code diff does not trigger folding",
+      "passed": true
+    },
+    {
+      "check": "clicking code content again collapses the diff",
+      "passed": true
+    },
+    {
+      "check": "rapid whole-block toggles alternate without delayed state",
+      "passed": true
+    },
+    {
+      "check": "long diff remains capped at 60 columns",
+      "passed": true
+    },
+    {
+      "check": "one huge source line is capped by visual rows too",
+      "passed": true
+    },
+    {
+      "check": "explicit expansion preserves the tail of a long line",
+      "passed": true
+    },
+    {
+      "check": "edit specimen contains no pictographic emoji",
+      "passed": true
+    },
+    {
+      "check": "the parent dock contains only four child entries and overflow, never a main-agent entry",
+      "passed": true
+    },
+    {
+      "check": "all dock rows fit their container without clipping",
+      "passed": true
+    },
+    {
+      "check": "dock retains the existing text and color states",
+      "passed": true
+    },
+    {
+      "check": "subagent mode focuses a real prompt",
+      "passed": true
+    },
+    {
+      "check": "a physical mouse click enters a subordinate view and hides the parent task list",
+      "passed": true
+    },
+    {
+      "check": "the obsolete Peek and Attach overlays are absent",
+      "passed": true
+    },
+    {
+      "check": "child view stays inside the terminal rather than covering the browser",
+      "passed": true
+    },
+    {
+      "check": "the shared prompt is addressed to the viewed subagent",
+      "passed": true
+    },
+    {
+      "check": "arrow keys do not leave a non-empty prompt",
+      "passed": true
+    },
+    {
+      "check": "one Escape exits the child with its unsent draft intact and restores the entry focus",
+      "passed": true
+    },
+    {
+      "check": "exiting the child does not stop its running task",
+      "passed": true
+    },
+    {
+      "check": "returning to the subagent restores its draft",
+      "passed": true
+    },
+    {
+      "check": "Enter appends a local message only to the viewed subagent",
+      "passed": true
+    },
+    {
+      "check": "empty Enter cannot submit a duplicate message",
+      "passed": true
+    },
+    {
+      "check": "Shift+Enter creates a newline without sending",
+      "passed": true
+    },
+    {
+      "check": "IME confirmation does not send a message",
+      "passed": true
+    },
+    {
+      "check": "the send button delivers a multiline local message",
+      "passed": true
+    },
+    {
+      "check": "message text is escaped instead of becoming HTML",
+      "passed": true
+    },
+    {
+      "check": "left arrow on an empty child prompt restores the parent draft and caret selection",
+      "passed": true
+    },
+    {
+      "check": "Escape from the child prompt returns to its parent entry",
+      "passed": true
+    },
+    {
+      "check": "one Escape exits the child from #subagent-transcript",
+      "passed": true
+    },
+    {
+      "check": "one Escape exits the child from #subagent-transcript summary",
+      "passed": true
+    },
+    {
+      "check": "one Escape exits the child from #agent-composer button[type=submit]",
+      "passed": true
+    },
+    {
+      "check": "empty parent prompt arrows select a child without entering it",
+      "passed": true
+    },
+    {
+      "check": "right arrow on a dock row directly opens its conversation",
+      "passed": true
+    },
+    {
+      "check": "empty child prompt cannot focus its hidden sibling list",
+      "passed": true
+    },
+    {
+      "check": "Escape exits the child immediately instead of first returning to an internal prompt",
+      "passed": true
+    },
+    {
+      "check": "Enter on a dock row uses the same direct route as a click",
+      "passed": true
+    },
+    {
+      "check": "overflow opens the all-agent list with real keyboard focus",
+      "passed": true
+    },
+    {
+      "check": "the all-agent list is confined to the conversation viewport",
+      "passed": true
+    },
+    {
+      "check": "keyboard navigation in the all-child list enters the selected child",
+      "passed": true
+    },
+    {
+      "check": "exiting a child opened from the list returns to that list and selection",
+      "passed": true
+    },
+    {
+      "check": "a second Escape closes the list to reveal the parent conversation",
+      "passed": true
+    },
+    {
+      "check": "a mouse click in the all-agent list opens the requested child",
+      "passed": true
+    },
+    {
+      "check": "a child reached through overflow has no parallel parent or sibling selector",
+      "passed": true
+    },
+    {
+      "check": "the header exit button restores the originating list and child selection",
+      "passed": true
+    },
+    {
+      "check": "Escape closes the all-agent list without changing the viewed conversation",
+      "passed": true
+    },
+    {
+      "check": "the all-agent close button also works with Enter",
+      "passed": true
+    },
+    {
+      "check": "main conversation restores its reading position after a child visit",
+      "passed": true
+    },
+    {
+      "check": "each subagent restores its own reading position",
+      "passed": true
+    },
+    {
+      "check": "child transcript arrow scrolling moves the visible conversation",
+      "passed": true
+    },
+    {
+      "check": "PageDown scrolls the child rather than the hidden main transcript",
+      "passed": true
+    },
+    {
+      "check": "jump-to-latest targets the visible child transcript",
+      "passed": true
+    },
+    {
+      "check": "sending to main preserves loaded history and does not write to a child",
+      "passed": true
+    },
+    {
+      "check": "settlement cleanup does not close the currently viewed child or steal its draft",
+      "passed": true
+    },
+    {
+      "check": "success, failure and cancellation all leave the dock after the grace period",
+      "passed": true
+    },
+    {
+      "check": "completed facts remain accessible from the main conversation",
+      "passed": true
+    },
+    {
+      "check": "a completed result can still open its conversation after dock cleanup",
+      "passed": true
+    },
+    {
+      "check": "child detail and input fit 100 columns in dark without a sibling dock",
+      "passed": true
+    },
+    {
+      "check": "child detail and input fit 60 columns in dark without a sibling dock",
+      "passed": true
+    },
+    {
+      "check": "child detail and input fit 60 columns in light without a sibling dock",
+      "passed": true
+    },
+    {
+      "check": "mobile viewport does not acquire document-level horizontal overflow",
+      "passed": true
+    },
+    {
+      "check": "mobile child transcript and prompt remain inside the terminal without peer navigation",
+      "passed": true
+    },
+    {
+      "check": "mobile terminal controls are visible after scrolling to the specimen",
+      "passed": true
+    },
+    {
+      "check": "leaving subagent mode removes its input and restores the question focus",
+      "passed": true
+    },
+    {
+      "check": "question focus does not preselect an answer",
+      "passed": true
+    },
+    {
+      "check": "arrow navigation changes focus without answering",
+      "passed": true
+    },
+    {
+      "check": "single-select digit chooses and finishes directly",
+      "passed": true
+    },
+    {
+      "check": "multi-select Enter submits checked items without adding the focused item",
+      "passed": true
+    },
+    {
+      "check": "empty multi-select remains open with a visible error",
+      "passed": true
+    },
+    {
+      "check": "Other accepts digits, spaces, letters and pasted text as input",
+      "passed": true
+    },
+    {
+      "check": "returning to change one question preserves another question selection",
+      "passed": true
+    },
+    {
+      "check": "multi-question answers wait for the final submit screen",
+      "passed": true
+    },
+    {
+      "check": "final submit returns both questions with their original ids",
+      "passed": true
+    },
+    {
+      "check": "skipped questions cannot silently submit",
+      "passed": true
+    },
+    {
+      "check": "Escape cancels without fabricating answered results",
+      "passed": true
+    },
+    {
+      "check": "question card fits 60 columns and keeps the footer visible",
+      "passed": true
+    },
+    {
+      "check": "question card contains no pictographic decoration",
+      "passed": true
+    },
+    {
+      "check": "question footer also omits model, context number and Ctrl+O hint",
+      "passed": true
+    },
+    {
+      "check": "question state keeps the same input-border context signal",
+      "passed": true
+    },
+    {
+      "check": "no remote requests while using the offline specimen",
+      "passed": true
+    },
+    {
+      "check": "no uncaught browser exceptions",
+      "passed": true
+    }
+  ],
+  "narrow": {
+    "terminalFits": true,
+    "transcriptFits": true,
+    "summariesOneRow": true,
+    "noEmoji": true,
+    "viewportWidth": 541.4375,
+    "contrast": [
+      [
+        "--fg",
+        "#343945"
+      ],
+      [
+        "--muted",
+        "#626978"
+      ],
+      [
+        "--accent",
+        "#365f9d"
+      ],
+      [
+        "--error",
+        "#a33e4c"
+      ],
+      [
+        "--warning",
+        "#855b18"
+      ],
+      [
+        "--bg",
+        "#f6f3ed"
+      ]
+    ]
+  },
+  "browserErrors": [],
+  "scope": "Browser layout and specimen interactions only; no terminal performance claim."
+}

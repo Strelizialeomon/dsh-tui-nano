@@ -1,0 +1,666 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>dsh-TUI · 默认界面样稿</title>
+  <style>
+    :root { color-scheme: light; --page:#f3f2ef; --ink:#30343b; --secondary:#646a73; --edge:#d5d6d6; --focus:#365f9d; }
+    * { box-sizing:border-box; }
+    [hidden] { display:none !important; }
+    body { margin:0; background:var(--page); color:var(--ink); font:14px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    button,select,input { font:inherit; }
+    button,select { cursor:pointer; }
+    button:focus-visible,select:focus-visible,a:focus-visible { outline:2px solid var(--focus); outline-offset:3px; }
+    a { color:var(--focus); text-underline-offset:3px; }
+    main { max-width:1320px; margin:auto; padding:32px 36px 24px; }
+    .page-heading { display:flex; justify-content:space-between; align-items:baseline; gap:20px; }
+    h1 { margin:0; font-size:23px; line-height:1.4; font-weight:650; letter-spacing:-.02em; }
+    .subtitle { margin:8px 0 22px; color:var(--secondary); }
+    .source-link { white-space:nowrap; font-size:13px; }
+    .toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:16px 24px; padding:0 0 16px; border-bottom:1px solid var(--edge); }
+    .group { display:flex; align-items:center; gap:4px; }
+    .group-label { color:var(--secondary); margin-right:8px; }
+    .mode { border:0; border-radius:3px; background:transparent; color:var(--secondary); padding:6px 12px; }
+    .mode[aria-pressed="true"] { background:#dfe5ec; color:#223b5f; font-weight:600; }
+    .mode:hover { background:#e6e8e9; color:var(--ink); }
+    .select-label { display:flex; align-items:center; gap:8px; color:var(--secondary); }
+    select { color:var(--ink); background:transparent; border:1px solid var(--edge); border-radius:3px; padding:5px 22px 5px 9px; }
+    .workspace { display:grid; grid-template-columns:minmax(0,1fr) 218px; gap:28px; align-items:start; margin-top:22px; }
+    .stage { min-width:0; }
+    .terminal-wrap { overflow-x:auto; padding:3px; margin:-3px; }
+    .terminal {
+      --cols:100; --line:22px; --bg:#17191d; --fg:#e8e6e0; --muted:#8d95a6; --accent:#7da1de; --error:#da8a93; --warning:#d8b270; --rule:#424953; --hover:#242b35; --selected:#3b4a66;
+      width:calc(var(--cols) * 1ch + 4ch + 2px); max-width:100%; height:704px; margin:0;
+      display:flex; flex-direction:column; overflow:hidden;
+      border:1px solid var(--rule); border-radius:3px; background:var(--bg); color:var(--fg);
+      font:14px/var(--line) "SFMono-Regular",Menlo,Consolas,"Liberation Mono",monospace;
+      font-variant-numeric:tabular-nums; --focus:var(--accent);
+    }
+    .terminal.light { --bg:#f6f3ed; --fg:#343945; --muted:#626978; --accent:#365f9d; --error:#a33e4c; --warning:#855b18; --rule:#c4c6c9; --hover:#e8e8e5; --selected:#d5def2; }
+    .terminal ::selection { background:var(--selected); color:var(--fg); }
+    .terminal * { font-size:inherit; line-height:inherit; }
+    .terminal-head { flex:none; padding:var(--line) 2ch 0; display:flex; gap:2ch; }
+    .app-name { font-weight:700; }
+    .muted { color:var(--muted); }
+    .accent { color:var(--accent); }
+    .viewport-shell { position:relative; min-height:0; flex:1; margin-top:var(--line); }
+    .transcript { height:100%; overflow:auto; padding:0 2ch var(--line); scrollbar-width:thin; scrollbar-color:var(--rule) var(--bg); scroll-behavior:auto; overflow-anchor:none; }
+    .transcript::-webkit-scrollbar { width:6px; }
+    .transcript::-webkit-scrollbar-thumb { background:var(--rule); }
+    .transcript:focus { outline:none; }
+    .term-row { min-height:var(--line); white-space:pre-wrap; overflow-wrap:anywhere; }
+    .cjk { display:inline-block; width:2ch; text-align:center; }
+    .user { color:var(--accent); font-weight:700; padding-bottom:var(--line); }
+    .narration { margin:0 0 var(--line); }
+    .process { color:var(--muted); margin:0 0 var(--line); }
+    details { padding:0; }
+    summary { list-style:none; cursor:pointer; display:flex; align-items:baseline; gap:1ch; width:100%; min-height:var(--line); }
+    summary::-webkit-details-marker { display:none; }
+    summary:hover { background:var(--hover); color:var(--fg); }
+    summary:focus-visible { outline:1px solid var(--accent); outline-offset:1px; }
+    .disclose { width:1ch; flex:none; text-align:center; color:var(--muted); user-select:none; }
+    .disclose::before { content:"▸"; }
+    details[open] > summary .disclose::before { content:"▾"; }
+    .summary-count { flex:none; color:var(--muted); white-space:nowrap; }
+    .summary-kind { flex:none; color:var(--muted); }
+    .summary-name { min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; flex:1; }
+    .summary-meta { flex:none; white-space:nowrap; }
+    .detail { padding:var(--line) 0 var(--line) 2ch; color:var(--fg); }
+    .detail-title { color:var(--muted); margin-bottom:0; }
+    pre { margin:0; font:inherit; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .body-section { margin-top:var(--line); }
+    .copy-command { background:transparent; border:0; color:var(--accent); padding:0; margin-top:var(--line); text-decoration:underline; text-underline-offset:3px; }
+    .tool-note { margin-left:2ch; color:var(--muted); }
+    .live-tail { margin-left:2ch; color:var(--muted); height:calc(var(--line) * 2); overflow:hidden; }
+    .live-line { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .error-line { margin-left:2ch; color:var(--error); }
+    .answer { margin-top:var(--line); }
+    .answer p { margin:0 0 var(--line); }
+    .answer h2 { margin:var(--line) 0 0; font-size:inherit; font-weight:700; }
+    .answer ul { margin:0; padding:0; list-style:none; }
+    .answer li { padding-left:2ch; position:relative; }
+    .answer li::before { content:"-"; position:absolute; left:0; color:var(--muted); }
+    .answer .lead { font-weight:700; }
+    .failed-answer { color:var(--fg); }
+    .answer strong { font-weight:700; }
+    .approval { margin-top:var(--line); border-top:1px solid var(--rule); padding-top:var(--line); }
+    .approval-title { font-weight:700; color:var(--warning); }
+    .approval-command { margin:var(--line) 0; }
+    .approval-options { display:flex; gap:2ch; flex-wrap:wrap; margin-top:var(--line); }
+    .terminal-action { background:transparent; padding:0; border:0; color:var(--accent); text-decoration:underline; text-underline-offset:3px; }
+    .terminal-action:hover { color:var(--fg); }
+    .approval-result { color:var(--muted); }
+    .jump { position:absolute; right:2ch; bottom:0; padding:0 1ch; border:1px solid var(--rule); background:var(--bg); color:var(--accent); cursor:pointer; }
+    .jump[hidden] { display:none; }
+    .activity { flex:none; height:var(--line); margin:0 2ch; color:var(--muted); overflow:hidden; white-space:nowrap; }
+    .activity-glyph { display:inline-block; width:2ch; }
+    .subagent-dock { flex:none; margin:0 2ch; border-top:1px solid var(--rule); padding:5px 0; }
+    .subagent-row { display:flex; align-items:baseline; gap:1ch; width:100%; height:var(--line); min-width:0; padding:0; border:0; border-radius:0; background:transparent; color:var(--fg); text-align:left; font:inherit; cursor:pointer; }
+    .subagent-row[data-focused="true"], .subagent-row:hover { background:var(--hover); }
+    .subagent-row:focus-visible { outline:1px solid var(--accent); outline-offset:-1px; }
+    .subagent-pointer { width:1ch; flex:none; color:var(--accent); }
+    .subagent-light { width:1ch; flex:none; }
+    .subagent-light.running { color:var(--accent); animation:subagent-blink .8s steps(1,end) infinite; }
+    .subagent-light.error, .agent-output.error { color:var(--error); }
+    .subagent-light.cancelled, .agent-output.cancelled { color:var(--warning); }
+    .subagent-light.completed { color:#9ac4a6; }
+    .light .subagent-light.completed { color:#315f3e; }
+    .subagent-name { min-width:0; flex:1; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+    .subagent-status { flex:none; color:var(--muted); white-space:nowrap; }
+    .subagent-more { color:var(--accent); }
+    .subagent-context { flex:none; display:flex; align-items:center; gap:1ch; min-width:0; margin:11px 2ch 0; }
+    #subagent-title { min-width:0; flex:1; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+    .agent-icon { display:inline-flex; align-items:center; justify-content:center; width:3ch; height:var(--line); flex:none; padding:0; border:0; background:transparent; color:var(--accent); font:inherit; }
+    .agent-icon:hover { background:var(--hover); }
+    .subagent-dashboard { position:absolute; inset:0; z-index:2; display:flex; flex-direction:column; min-height:0; padding:0 2ch var(--line); background:var(--bg); color:var(--fg); }
+    .agent-list-head { display:flex; justify-content:space-between; align-items:center; gap:1ch; padding-bottom:11px; border-bottom:1px solid var(--rule); }
+    .agent-list-body { flex:1; min-height:0; overflow:auto; padding-top:11px; scrollbar-width:thin; scrollbar-color:var(--rule) var(--bg); }
+    .agent-list-body .subagent-row { margin-bottom:5px; }
+    .agent-message, .agent-output { white-space:pre-wrap; overflow-wrap:anywhere; margin:var(--line) 0; }
+    .agent-message.user { padding-bottom:0; }
+    .agent-result { margin:var(--line) 0; }
+    .agent-result-link { padding:0; margin-right:1ch; border:0; background:transparent; color:var(--accent); text-decoration:underline; text-underline-offset:3px; }
+    #agent-composer { display:flex; align-items:flex-start; gap:1ch; min-width:0; }
+    #agent-prompt { display:block; flex:1; min-width:0; height:22px; min-height:22px; max-height:88px; padding:0; border:0; border-radius:0; outline:none; resize:none; background:transparent; color:var(--fg); caret-color:var(--fg); font:inherit; scrollbar-width:thin; scrollbar-color:var(--rule) var(--bg); }
+    #agent-prompt::placeholder { color:var(--muted); }
+    .composer:focus-within { border-color:var(--accent); }
+    @keyframes subagent-blink { 0%,45% { opacity:1; } 46%,100% { opacity:.25; } }
+    @media (prefers-reduced-motion:reduce) { .subagent-light.running { animation:none; } }
+    .composer { position:relative; flex:none; margin:0 2ch; border-top:1px solid var(--rule); border-bottom:1px solid var(--rule); padding:11px 0; }
+    .composer::before,.composer::after { content:""; position:absolute; left:0; width:var(--context-pct); border-top:2px solid var(--context-color); pointer-events:none; z-index:1; }
+    .composer::before { top:-2px; }
+    .composer::after { bottom:-2px; }
+    .input-placeholder { color:var(--muted); }
+    .status { flex:none; padding:11px 2ch; display:flex; flex-direction:column; color:var(--muted); }
+    .status-row { display:flex; justify-content:space-between; gap:2ch; white-space:nowrap; }
+    .status-extra { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+    .status-mode { color:var(--muted); }
+    .status-mode.waiting { color:var(--warning); }
+    .choice-host { flex:none; max-height:484px; min-height:0; margin:0 2ch; border-top:1px solid var(--accent); padding:11px 0; overflow:hidden; }
+    .choice-panel { display:flex; flex-direction:column; max-height:460px; outline:none; }
+    .choice-title { font-weight:700; margin-bottom:11px; }
+    .choice-context { margin-bottom:11px; }
+    .choice-body { overflow:auto; min-height:0; scrollbar-width:thin; scrollbar-color:var(--rule) var(--bg); }
+    .choice-tabs { display:flex; gap:2ch; flex-wrap:wrap; margin-bottom:11px; }
+    .choice-tab { border:0; padding:0; background:transparent; color:var(--muted); }
+    .choice-tab[aria-current="true"] { color:var(--accent); font-weight:700; }
+    .choice-row { margin:0; cursor:default; }
+    .choice-label { display:flex; gap:1ch; min-height:var(--line); align-items:baseline; }
+    .choice-pointer { width:1ch; flex:none; white-space:pre; color:var(--accent); }
+    .choice-number { flex:none; width:2ch; color:var(--muted); }
+    .choice-check { flex:none; white-space:pre; }
+    .choice-text { min-width:0; }
+    .choice-description { padding-left:5ch; color:var(--muted); margin-bottom:5px; }
+    .choice-row[data-focused="true"] .choice-text { color:var(--accent); font-weight:700; }
+    .choice-row[data-selected="true"] .choice-text,.choice-row[data-selected="true"] .choice-check,.choice-picked { color:#9ac4a6; font-weight:700; }
+    .light .choice-row[data-selected="true"] .choice-text,.light .choice-row[data-selected="true"] .choice-check,.light .choice-picked { color:#315f3e; }
+    .choice-other input { flex:1; min-width:0; padding:0; border:0; outline:none; color:var(--fg); caret-color:var(--fg); background:transparent; font:inherit; }
+    .choice-other input::placeholder { color:var(--muted); }
+    .choice-footer { flex:none; color:var(--muted); margin-top:11px; }
+    .choice-confirm { display:block; margin:11px 0 0 5ch; padding:0; border:0; background:transparent; color:var(--accent); font:inherit; }
+    .choice-error { color:var(--error); }
+    .choice-review { margin-bottom:11px; }
+    .choice-review > div + div { padding-left:4ch; }
+    .choice-host .approval-command { overflow:auto; max-height:154px; margin:0 0 11px; color:var(--muted); scrollbar-width:thin; scrollbar-color:var(--rule) var(--bg); }
+    .choice-receipt { max-height:88px; overflow:auto; }
+    .review-notes { padding-top:2px; }
+    .review-notes h2 { font-size:14px; font-weight:650; margin:0 0 14px; }
+    .review-notes dl { margin:0; }
+    .review-notes dt { margin:20px 0 4px; font-weight:600; }
+    .review-notes dd { margin:0; color:var(--secondary); font-size:13px; }
+    .review-actions { border-top:1px solid var(--edge); margin-top:24px; padding-top:16px; display:flex; flex-direction:column; align-items:start; gap:10px; }
+    .plain-button { padding:0; border:0; color:var(--focus); background:none; text-decoration:underline; text-underline-offset:3px; }
+    .plain-button:disabled { color:var(--secondary); cursor:default; text-decoration:none; }
+    .preview-caption { display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px; color:var(--secondary); font-size:12px; margin:12px 0 0; }
+    .diff-block { margin:var(--line) 0; color:var(--fg); }
+    .diff-block[data-foldable="true"], .tool-block { cursor:default; }
+    .diff-block:focus-visible { outline:1px solid var(--accent); outline-offset:2px; }
+    .diff-head { display:flex; gap:1ch; align-items:baseline; width:100%; padding:0 0 5px; border:0; border-bottom:1px solid var(--rule); background:transparent; color:inherit; text-align:left; font:inherit; }
+    .diff-block[data-foldable="true"]:hover .diff-arrow { color:var(--accent); }
+    .diff-body { max-height:calc(var(--line) * 8); overflow:hidden; }
+    .diff-body.expanded { max-height:none; }
+    .diff-fold-note { color:var(--muted); border-bottom:1px solid var(--rule); }
+    .diff-fold-note[hidden] { display:none; }
+    .diff-separator { min-height:var(--line); color:var(--muted); }
+    .diff-path { flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font-weight:700; }
+    .diff-stat { flex:none; white-space:nowrap; }
+    .diff-add-count { color:#a1c8aa; }
+    .diff-del-count { color:#e2a0aa; }
+    .diff-state { color:var(--muted); margin:5px 0; }
+    .diff-line { display:flex; min-height:var(--line); }
+    .diff-no { width:4ch; padding-right:1ch; flex:none; text-align:right; color:var(--muted); user-select:none; }
+    .diff-mark { width:2ch; flex:none; text-align:center; color:var(--muted); user-select:none; }
+    .diff-code { flex:1; min-width:0; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .diff-line.del { background:#38252a; }
+    .diff-line.add { background:#24382c; }
+    .diff-line.del .diff-mark { color:#e2a0aa; }
+    .diff-line.add .diff-mark { color:#a1c8aa; }
+    .diff-word { font-weight:700; color:inherit; }
+    .del .diff-word { background:#653641; }
+    .add .diff-word { background:#385b42; }
+    .syntax-key { color:#b9cdee; }
+    .syntax-type { color:#cbbce0; }
+    .light .diff-add-count,.light .diff-line.add .diff-mark { color:#315f3e; }
+    .light .diff-del-count,.light .diff-line.del .diff-mark { color:#8f3545; }
+    .light .diff-line.del { background:#f1dcdf; }
+    .light .diff-line.add { background:#dcebdd; }
+    .light .del .diff-word { background:#e9bac3; }
+    .light .add .diff-word { background:#b6d6bc; }
+    .light .syntax-key { color:#304f82; }
+    .light .syntax-type { color:#664776; }
+    .scope { margin-top:24px; padding-top:16px; border-top:1px solid var(--edge); color:var(--secondary); font-size:13px; }
+    .scope strong { color:var(--ink); }
+    .history-turn { margin-bottom:calc(var(--line) * 2); }
+    .history-turn .user { padding-bottom:0; }
+    .history-turn p { margin:var(--line) 0 0; }
+    .mono-proof { font-family:"SFMono-Regular",Menlo,Consolas,monospace; }
+    @media (max-width:1050px) {
+      main { padding:24px; }
+      .workspace { grid-template-columns:minmax(0,1fr); gap:20px; }
+      .review-notes { display:grid; grid-template-columns:1fr 1fr; column-gap:24px; }
+      .review-notes h2 { grid-column:1/-1; margin-bottom:0; }
+      .review-actions { margin-top:20px; }
+    }
+    @media (max-width:620px) {
+      main { padding:18px 12px; }
+      .page-heading { display:block; }
+      .source-link { display:inline-block; margin-top:8px; }
+      h1 { font-size:20px; }
+      .subtitle { font-size:13px; }
+      .toolbar { gap:12px; }
+      .group { flex-wrap:wrap; }
+      .mode { padding:6px 9px; }
+      .review-notes { display:block; }
+      .terminal-wrap { padding-bottom:8px; }
+    }
+    @media (prefers-reduced-motion:reduce) { * { animation:none !important; transition:none !important; } }
+  </style>
+</head>
+<body>
+<main>
+  <header class="page-heading">
+    <h1>dsh-TUI 默认界面样稿</h1>
+    <a class="source-link" href="../README.md">查看调研依据</a>
+  </header>
+  <p class="subtitle">用于确认层级、折叠与状态。以下对话、时长和验证结果均为演示数据。</p>
+  <nav class="toolbar" aria-label="样稿控制">
+    <div class="group" aria-label="示例状态">
+      <span class="group-label">状态</span>
+      <button class="mode" data-scene="done" aria-pressed="true">已完成</button>
+      <button class="mode" data-scene="running" aria-pressed="false">执行中</button>
+      <button class="mode" data-scene="failed" aria-pressed="false">执行失败</button>
+      <button class="mode" data-scene="approval" aria-pressed="false">等待确认</button>
+      <button class="mode" data-scene="edit" aria-pressed="false">代码变更</button>
+      <button class="mode" data-scene="questions" aria-pressed="false">选项卡</button>
+      <button class="mode" data-scene="subagents" aria-pressed="false">子代理</button>
+    </div>
+    <label class="select-label">宽度 <select id="width"><option value="100">100 列</option><option value="60">60 列</option></select></label>
+    <label class="select-label">明暗 <select id="theme"><option value="dark">深色</option><option value="light">浅色</option></select></label>
+  </nav>
+  <div class="workspace">
+    <section class="stage" aria-label="终端样稿">
+      <div class="terminal-wrap">
+        <div class="terminal" id="terminal">
+          <div class="terminal-head"><span class="app-name">dsh-tui</span><span class="muted">~/code/dsh-TUI</span></div>
+          <div class="subagent-context" id="subagent-context" hidden>
+            <button type="button" class="agent-icon" id="subagent-back" aria-label="退出子代理" title="退出子代理">←</button>
+            <span class="muted">子代理</span><strong id="subagent-title"></strong><span class="subagent-status" id="subagent-view-status"></span>
+          </div>
+          <div class="viewport-shell">
+            <div class="transcript" id="transcript" tabindex="0" aria-label="示例对话，可滚动"></div>
+            <div class="transcript" id="subagent-transcript" tabindex="0" aria-label="子代理对话，可滚动" hidden></div>
+            <section class="subagent-dashboard" id="subagent-dashboard" aria-label="全部子代理" hidden></section>
+            <button class="jump" id="jump" hidden>回到最新</button>
+          </div>
+          <div class="choice-host" id="choice-host" hidden></div>
+          <div class="activity" id="activity" aria-live="off"></div>
+          <div class="composer" aria-label="消息输入区">
+            <span id="composer-static"><span class="accent">&gt; </span><span class="input-placeholder">继续提问…</span></span>
+            <form id="agent-composer" hidden>
+              <span class="accent" aria-hidden="true">&gt;</span>
+              <textarea id="agent-prompt" rows="1" maxlength="2000" aria-label="发送消息" placeholder="继续提问…" spellcheck="false"></textarea>
+              <button type="submit" class="agent-icon" aria-label="发送消息" title="发送消息">↑</button>
+            </form>
+          </div>
+          <footer class="status">
+            <div class="status-row"><span class="status-mode" id="permission">权限：工作区写入</span><span class="status-extra">~/code/dsh-TUI</span></div>
+          </footer>
+          <div class="subagent-dock" id="subagent-dock" hidden></div>
+        </div>
+      </div>
+      <div class="preview-caption"><span id="geometry">100 列 · 输入框边框的着色段表示上下文占用</span><span>精确数值仍从 /tokens、/status 查看</span></div>
+    </section>
+    <aside class="review-notes">
+      <h2>这版怎么读</h2>
+      <dl>
+        <dt>先读回答</dt><dd>正文保持正常亮度。结论与小标题加粗，段落间隔一行。</dd>
+        <dt>随手展开，再点收起</dt><dd>代码块和 Bash 整块都可单击开关，原位完成。拖动仍然选择文字，正文不跟着折叠。</dd>
+        <dt>状态明确</dt><dd>运行、失败、等待确认直接写明。已完成记录静止，不使用装饰性 emoji。</dd>
+        <dt>代码独立成块</dt><dd>文件名与增删统计在顶部，红绿底色标记改动行，行内变化进一步强调。</dd>
+        <dt>键盘直接选择</dt><dd>沿用 Pi 选项卡：单列编号，焦点和已选分开，多选空格勾选，其他答案行内填写。</dd>
+        <dt>输入框就是容量线</dt><dd>上下边框左侧着色段表示上下文占用；底部不再重复显示模型、百分比或快捷键提示。</dd>
+        <dt>窄屏有预算</dt><dd>紧凑命令一行，运行输出两行。错误原因独立显示，避免被省略。</dd>
+      </dl>
+      <div class="review-actions">
+        <button id="toggle-all" class="plain-button">展开所有详情</button>
+        <button id="history" class="plain-button" aria-pressed="false">载入较长示例</button>
+        <button id="append" class="plain-button" disabled>追加一条运行输出</button>
+        <label id="diff-example-control" class="select-label" hidden>变更样例 <select id="diff-example"><option value="short">短改动</option><option value="long">多处长改动</option><option value="wide">超长单行</option></select></label>
+        <button id="diff-status" class="plain-button" hidden>切换到“待应用”</button>
+        <label id="question-mode-control" class="select-label" hidden>问卷样例 <select id="question-mode"><option value="single">单选</option><option value="multi">多选</option><option value="batch">多题</option></select></label>
+        <button id="question-reset" class="plain-button" hidden>重新打开本题</button>
+        <span id="action-feedback" role="status" style="font-size:12px;color:var(--secondary)"></span>
+      </div>
+    </aside>
+  </div>
+  <p class="scope"><strong>首版范围：</strong>单条折叠、文本状态、清楚的代码变更块、保留必要配色、统一滚轮规则。每轮工具汇总与 Focus 视图留作后续。此处使用浏览器滚动，只验证展示与交互；终端手感需由真实 TUI 回放验收。</p>
+</main>
+<script src="choices.js"></script>
+<script src="subagents.js"></script>
+<script>
+(() => {
+  'use strict'
+  const $ = selector => document.querySelector(selector)
+  const terminal = $('#terminal'), transcript = $('#transcript')
+  const feedback = $('#action-feedback')
+  const parameters = new URLSearchParams(location.search)
+  const state = {
+    scene: ['done','running','failed','approval','edit','questions','subagents'].includes(parameters.get('scene')) ? parameters.get('scene') : 'done',
+    width: parameters.get('width') === '60' ? 60 : 100,
+    theme: parameters.get('theme') === 'light' ? 'light' : 'dark',
+    expanded: new Set(), long: false, outputIndex: 0, decision: null, editPending:false,
+    editKind:['short','long','wide'].includes(parameters.get('diff')) ? parameters.get('diff') : 'short',
+    questionMode:['single','multi','batch'].includes(parameters.get('question')) ? parameters.get('question') : 'single',
+    choiceEpoch:0,
+  }
+  const choicePreview = new window.TuiChoicePreview({host:$('#choice-host'),cells,onChange:picker=>{
+    $('.composer').hidden=picker.pending
+    if(picker.pending) $('#activity').textContent=picker.kind==='approval'?'等待你的授权':'等待你的选择'
+    else if(state.scene==='questions'||state.scene==='approval') $('#activity').textContent=''
+    if(picker.result?.kind==='permission') {state.decision=picker.result.decision;$('#permission').classList.remove('waiting')}
+  }})
+  const subagentPreview = new window.SubagentPreview({terminal,mainTranscript:transcript,cells,onChange:()=>{updateJump();updateExpandLabel()}})
+
+  const command = [
+    "node --input-type=module - <<'JS'",
+    "import assert from 'node:assert/strict'",
+    'function readValues(raw) {',
+    '  const doc = JSON.parse(raw)',
+    "  return doc && typeof doc === 'object' ? doc.values ?? {} : {}",
+    '}',
+    '',
+    "assert.deepEqual(readValues('{}'), {})",
+    "assert.throws(() => readValues('invalid'), SyntaxError)",
+    "console.log('PASS 两项边界检查通过')",
+    'JS',
+  ].join('\n')
+  const logs = [
+    '已读取检查入口',
+    'PASS 空配置使用默认值',
+    'PASS 无效 JSON 返回明确错误',
+    '已保留测试前配置',
+    '2 项检查通过',
+  ]
+  function escape(text) {
+    return String(text).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
+  }
+  // Reserve two terminal columns for Chinese characters in this browser specimen.
+  function cells(text) {
+    return Array.from(String(text), c => /[\u2e80-\ua4cf\uac00-\ud7af\uf900-\ufaff\uff01-\uff60]/u.test(c)
+      ? `<span class="cjk">${escape(c)}</span>` : escape(c)).join('')
+  }
+  function detail(id, kind, name, meta, body, options = {}) {
+    return `<details data-key="${id}" data-detail="${id}"${state.expanded.has(id) ? ' open' : ''}>
+      <summary aria-label="${escape(`${kind} ${name}，${meta}，展开或收起详情`)}">
+        <span class="disclose" aria-hidden="true"></span>
+        <span class="summary-kind">${cells(kind)}</span>
+        <span class="summary-name">${cells(name)}</span>
+        ${options.hiddenLines ? `<span class="summary-count">${cells(`+${options.hiddenLines} 行`)}</span>` : ''}
+        <span class="summary-meta${options.error ? ' error-line' : ''}">${cells(meta)}</span>
+      </summary>
+      <div class="detail">${body}</div>
+    </details>`
+  }
+  function history() {
+    if (!state.long) return ''
+    return Array.from({length:10}, (_, i) => `<section class="history-turn" data-key="history-${i}">
+      <div class="term-row user">${cells(`> 示例问题 ${i+1}：检查配置读取的一个边界。`)}</div>
+      <p>${cells('已核对这一步的输入和返回值。完整检查记录可以在对应工具行展开查看。')}</p>
+      <p class="muted">${cells('这段历史用于演示阅读位置，所有内容均为虚构。')}</p>
+    </section>`).join('')
+  }
+  function editFixture() {
+    // Synthetic hunk coordinates, never inferred from an unpositioned snippet.
+    const rows = [
+      {kind:'context',no:20,code:'<span class="syntax-key">export function</span> readValues(raw: <span class="syntax-type">string</span>) {'},
+      {kind:'context',no:21,code:'  <span class="syntax-key">const</span> parsed = JSON.parse(raw)'},
+      {kind:'del',no:22,code:'  <span class="syntax-key">return</span> <span class="diff-word">parsed.values</span>'},
+      {kind:'add',no:22,code:'  <span class="syntax-key">const</span> values = <span class="diff-word">parsed?.values</span>'},
+      {kind:'add',no:23,code:'  <span class="syntax-key">return</span> values <span class="diff-word">?? {}</span>'},
+      {kind:'context',no:24,code:'}'},
+    ]
+    if (state.editKind === 'long') {
+      rows.push({kind:'separator',code:'… 另一处修改（旧 80 行 / 新 81 行）'})
+      for(let i=0;i<12;i++) {
+        rows.push({kind:'del',no:80+i,code:`  config.set('feature_${i+1}', <span class="diff-word">false</span>)`})
+        rows.push({kind:'add',no:81+i,code:`  config.set('feature_${i+1}', <span class="diff-word">true</span>)`})
+      }
+    }
+    if (state.editKind === 'wide') {
+      const entries = Array.from({length:48},(_,i)=>`['feature_${i+1}', true]`).join(', ')
+      rows.splice(3,3,
+        {kind:'add',no:22,code:`  <span class="syntax-key">return</span> parsed?.values <span class="diff-word">?? Object.fromEntries([${escape(entries)}])</span>`},
+        {kind:'context',no:23,code:'}'})
+    }
+    return rows
+  }
+  function editBlock() {
+    if (state.scene !== 'edit') return ''
+    const rows = editFixture()
+    const added = rows.filter(row=>row.kind==='add').length
+    const removed = rows.filter(row=>row.kind==='del').length
+    const open = state.expanded.has('edit')
+    return `<section class="diff-block" data-card="edit" data-key="edit-block" role="button" tabindex="0" aria-expanded="${open}" aria-label="单击代码变更块展开，再次单击收起">
+      <div class="diff-head" aria-expanded="${open}"><span class="diff-arrow muted" aria-hidden="true">${open?'▾':'▸'}</span><span class="muted">Edit</span><span class="diff-path">src/config-reader.ts</span><span class="diff-stat"><span class="diff-add-count">+${added}</span> <span class="diff-del-count">-${removed}</span></span></div>
+      <div class="diff-state">${cells(state.editPending ? '修改预览 · 尚未应用' : '已应用 · 0.2s')}</div>
+      <div class="diff-body${open?' expanded':''}">${rows.map(row=>row.kind==='separator' ? `<div class="diff-separator">${cells(row.code)}</div>` : `<div class="diff-line ${row.kind}"><span class="diff-no">${row.no}</span><span class="diff-mark">${row.kind==='del'?'-':row.kind==='add'?'+':' '}</span><span class="diff-code">${row.code}</span></div>`).join('')}</div>
+      <div class="diff-fold-note" hidden></div>
+    </section>`
+  }
+  function measureDiff() {
+    const body = $('.diff-body')
+    if (!body) return
+    const children = Array.from(body.children)
+    const heights = children.map(row=>Math.round(row.getBoundingClientRect().height/22))
+    const total = heights.reduce((sum,height)=>sum+height,0)
+    let budget = 8, used = 0
+    for(let i=0;i<children.length;i++) {
+      if(children[i].classList.contains('diff-separator') && used>0 && used+heights[i]+(heights[i+1]??0)+(heights[i+2]??0)>8) { budget=used; break }
+      if(used+heights[i]>8) break
+      used+=heights[i]
+    }
+    const hidden = Math.max(0,total-budget)
+    const open = state.expanded.has('edit')
+    body.style.maxHeight = open ? 'none' : `${budget*22}px`
+    const note = $('.diff-fold-note')
+    note.hidden = hidden===0
+    note.innerHTML = cells(open ? `已展开 ${total} 行 · 再点此块收起` : `… 还有 ${hidden} 行未显示 · 点击此块展开`)
+    const block = $('.diff-block')
+    block.dataset.foldable = String(hidden>0)
+    block.setAttribute('aria-disabled', String(hidden===0))
+    block.tabIndex = hidden===0 ? -1 : 0
+    $('.diff-arrow').style.visibility = hidden===0 ? 'hidden' : 'visible'
+    body.dataset.totalRows = total
+    body.dataset.hiddenRows = open ? 0 : hidden
+  }
+  function answer() {
+    if (state.scene === 'running' || state.scene === 'approval') return ''
+    if (state.scene === 'edit') return `<section class="answer" data-key="answer"><p class="lead">${cells(state.editPending ? '准备为空配置补上默认返回值。' : '已为空配置补上默认返回值。')}</p><p>${cells('缺少 values 时返回空对象，JSON 解析错误仍向调用方报告。')}</p><p class="muted">${cells('这里只演示编辑块；后续验证状态由真实工具结果报告。')}</p></section>`
+    if (state.scene === 'failed') return `<section class="answer failed-answer" data-key="answer">
+      <p class="lead">${cells('修改已准备好，验证尚未通过。')}</p>
+      <p>${cells('检查脚本退出码为 1。当前结果不能说明修复已经生效。')}</p>
+      <h2>${cells('下一步')}</h2>
+      <p>${cells('补齐脚本需要的测试数据，再运行同一组验证。')}</p>
+    </section>`
+    return `<section class="answer" data-key="answer">
+      <p class="lead">${cells('空配置已按默认值处理。')}</p>
+      <p>${cells('读取到空文档时会返回默认配置；解析失败时会保留原文件，并给出具体错误。')}</p>
+      <h2>${cells('改动')}</h2>
+      <ul><li>${cells('空配置与损坏配置分别处理。')}</li><li>${cells('读取失败不会覆盖已有内容。')}</li></ul>
+      <h2>${cells('验证')}</h2>
+      <p>${cells('空配置和解析失败两项检查通过。')}</p>
+    </section>`
+  }
+  function syncChoices() {
+    const key=`${state.scene}:${state.questionMode}:${state.choiceEpoch}`
+    if(state.scene==='questions') choicePreview.showQuestions(state.questionMode,key)
+    else if(state.scene==='approval') choicePreview.showApproval(command,key)
+    else {choicePreview.hide();$('.composer').hidden=false}
+    $('#question-mode-control').hidden=state.scene!=='questions'
+    $('#question-reset').hidden=state.scene!=='questions'
+    $('#question-mode').value=state.questionMode
+  }
+  function draw(options = {}) {
+    const stick = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 4
+    const previousTop = transcript.scrollTop
+    const viewportTop = transcript.getBoundingClientRect().top
+    const anchor = Array.from(transcript.querySelectorAll('[data-key]')).find(el => el.getBoundingClientRect().bottom > viewportTop + 1)
+    const anchorKey = anchor?.dataset.key
+    const anchorOffset = anchor ? anchor.getBoundingClientRect().top - viewportTop : 0
+    const running = state.scene === 'running'
+    const failed = state.scene === 'failed'
+    const waiting = state.scene === 'approval'
+    terminal.style.setProperty('--cols', state.width)
+    terminal.classList.toggle('light', state.theme === 'light')
+    const ratioByScene = {done:.18,running:.63,failed:.95,approval:.76,edit:.31,questions:.42,subagents:.42}
+    const contextRatio = ratioByScene[state.scene] ?? .18
+    const contextColor = contextRatio >= .95 ? (state.theme === 'light' ? '#a33e4c' : '#da8a93') : contextRatio >= .8 ? (state.theme === 'light' ? '#855b18' : '#d8b270') : (state.theme === 'light' ? '#365f9d' : '#7da1de')
+    terminal.style.setProperty('--context-pct', `${Math.max(0,Math.min(1,contextRatio))*100}%`)
+    terminal.style.setProperty('--context-color', contextColor)
+    $('#width').value = String(state.width)
+    $('#theme').value = state.theme
+    $('#geometry').textContent = `${state.width} 列 · 输入框边框的着色段表示上下文占用`
+    document.querySelectorAll('[data-scene]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.scene === state.scene)))
+    const thoughtBody = `<div class="detail-title">${cells('思考记录（演示文字）')}</div><div>${cells('核对空配置与 JSON 解析失败的返回方式。')}</div><div>${cells('确认检查命令覆盖这两个边界。')}</div>`
+    const readBody = `<div class="detail-title">${state.scene === 'edit' ? 'src/config-reader.ts' : 'src/tuiSettingsFile.ts'} ${cells('· 内容示意')}</div><pre>${cells('export function readValues(raw) {\n  const doc = JSON.parse(raw)\n  return doc?.values ?? {}\n}')}</pre>`
+    const output = failed
+      ? "Error: fixture file was not found\nThe requested test input could not be read.\nProcess exited with code 1."
+      : logs.join('\n')
+    const commandBody = `<div class="detail-title">${cells('完整脚本 · 11 行')}</div><pre>${cells(command)}</pre><button class="copy-command" data-copy>${cells('复制脚本')}</button><div class="body-section"><div class="detail-title">${cells('输出')}</div><pre>${cells(waiting ? '等待允许，尚未执行。' : running ? logs.slice(0, 2 + state.outputIndex).join('\n') : output)}</pre></div>`
+    const currentPair = [logs[state.outputIndex % logs.length], logs[(state.outputIndex + 1) % logs.length]]
+    transcript.innerHTML = state.scene==='subagents' ? history() + subagentPreview.mainTranscriptHtml() : history() + (state.scene==='questions' ? `<section class="turn"><div class="term-row user">${cells('> 请先确认验证方式和需要覆盖的终端场景。')}</div><p>${cells('我会按你选择的范围准备验证。')}</p></section>` : `<section class="turn" data-key="current-turn">
+      <div class="term-row user" data-key="prompt">${cells('> 检查配置读取，修复空配置报错，再跑验证。')}</div>
+      <p class="narration" data-key="narration">${cells('我会先核对读取入口，再检查空配置和解析失败两条路径。')}</p>
+      ${state.scene === 'edit' ? `<div class="process">${detail('thinking', '思考', '已完成', '4s', thoughtBody)}${detail('read', 'Read', 'src/config-reader.ts', '完成 · 0.1s', readBody)}</div>${editBlock()}` : `<section class="process" aria-label="过程记录">
+        ${detail('thinking', '思考', '已完成', '4s', thoughtBody)}
+        ${detail('read', 'Read', 'src/tuiSettingsFile.ts', '完成 · 0.1s', readBody)}
+        <div class="tool-block" data-card="bash">${detail('bash', 'Bash', command.split('\n')[0], waiting ? '等待确认' : running ? '运行中 · 8s' : failed ? '失败 · 1.2s' : '完成 · 2.4s', commandBody, {error:failed,hiddenLines:command.split('\n').length-1})}
+        ${failed ? `<div class="error-line" data-key="failure">${cells('失败：测试数据文件不存在（退出码 1）。')}</div>` : ''}
+        ${running ? `<div class="live-tail" data-key="live"><div class="live-line">${cells(currentPair[0])}</div><div class="live-line">${cells(currentPair[1])}</div></div>` : ''}
+        ${!running && !failed && !waiting ? `<div class="tool-note" data-key="result-summary">${cells('完成：2 项边界检查通过；点击此块查看，再点收起。')}</div>` : ''}</div>
+      </section>`}
+      ${answer()}
+    </section>`)
+    $('#activity').innerHTML = running
+      ? `<span class="activity-glyph" aria-hidden="true">-</span>${cells('正在运行检查 · Esc 可停止')}`
+      : waiting && !state.decision ? cells('等待你的确认') : ''
+    $('#permission').classList.toggle('waiting', waiting && !state.decision)
+    $('#permission').textContent = waiting && !state.decision ? '权限：逐次确认（演示）' : '权限：工作区写入'
+    $('#append').disabled = !running
+    $('#diff-status').hidden = state.scene !== 'edit'
+    $('#diff-example-control').hidden = state.scene !== 'edit'
+    $('#diff-example').value = state.editKind
+    $('#diff-status').textContent = state.editPending ? '切换到“已应用”' : '切换到“待应用”'
+    $('#history').textContent = state.long ? '移除较长示例' : '载入较长示例'
+    $('#history').setAttribute('aria-pressed', String(state.long))
+    $('#toggle-all').disabled=state.scene==='questions'
+    syncChoices()
+    subagentPreview.sync(state.scene==='subagents',state.long)
+    updateExpandLabel()
+    measureDiff()
+    if (options.top) transcript.scrollTop = 0
+    else if (options.bottom || (stick && !options.hold)) transcript.scrollTop = transcript.scrollHeight
+    else {
+      const nextAnchor = anchorKey && Array.from(transcript.querySelectorAll('[data-key]')).find(el => el.dataset.key === anchorKey)
+      transcript.scrollTop = nextAnchor ? previousTop + nextAnchor.getBoundingClientRect().top - viewportTop - anchorOffset : previousTop
+    }
+    updateJump()
+  }
+  function visibleDetailKeys() { return state.scene === 'edit' ? ['thinking','read','edit'] : ['thinking','read','bash'] }
+  function updateExpandLabel() {
+    const details = [...subagentPreview.activeTranscript().querySelectorAll('details')]
+    const allOpen = state.scene==='subagents'
+      ? details.length > 0 && details.every(detail=>detail.open)
+      : visibleDetailKeys().every(key => state.expanded.has(key))
+    if(state.scene==='subagents') $('#toggle-all').disabled=details.length===0
+    $('#toggle-all').textContent = allOpen ? '收起所有详情' : '展开所有详情'
+  }
+  function toggleAll() {
+    if(state.scene==='subagents') {subagentPreview.toggleDetails();updateExpandLabel();return}
+    const allOpen = visibleDetailKeys().every(key => state.expanded.has(key))
+    state.expanded = new Set(allOpen ? [] : visibleDetailKeys())
+    draw({hold:true})
+  }
+  function updateJump() {
+    const area=subagentPreview.activeTranscript()
+    $('#jump').hidden = subagentPreview.active && subagentPreview.dashboardOpen || area.scrollHeight - area.scrollTop - area.clientHeight < 4
+  }
+  document.querySelectorAll('[data-scene]').forEach(button => button.addEventListener('click', () => {
+    state.scene = button.dataset.scene
+    state.choiceEpoch++
+    subagentPreview.reset()
+    state.decision = null
+    state.outputIndex = 0
+    feedback.textContent = ''
+    draw({top:true})
+  }))
+  $('#question-mode').addEventListener('change',event=>{state.questionMode=event.target.value;state.choiceEpoch++;draw({top:true})})
+  $('#question-reset').addEventListener('click',()=>{state.choiceEpoch++;draw({top:true})})
+  $('#width').addEventListener('change', event => { state.width = Number(event.target.value); draw() })
+  $('#theme').addEventListener('change', event => { state.theme = event.target.value; draw() })
+  $('#toggle-all').addEventListener('click', toggleAll)
+  $('#history').addEventListener('click', () => { state.long = !state.long; draw({bottom:true}) })
+  $('#append').addEventListener('click', () => { state.outputIndex++; draw(); feedback.textContent = '已追加示例输出。阅读历史时保持当前位置。' })
+  $('#diff-example').addEventListener('change', event => { state.editKind=event.target.value; state.expanded.delete('edit'); draw({top:true}) })
+  $('#diff-status').addEventListener('click', () => { state.editPending = !state.editPending; draw() })
+  $('#jump').addEventListener('click', () => { const area=subagentPreview.activeTranscript();area.scrollTop=area.scrollHeight;updateJump() })
+  transcript.addEventListener('scroll', updateJump, {passive:true})
+  transcript.addEventListener('toggle', event => {
+    const id = event.target.dataset?.detail
+    if (!id) return
+    if (event.target.open) state.expanded.add(id)
+    else state.expanded.delete(id)
+    updateExpandLabel()
+    updateJump()
+  }, true)
+  let pointerStart = null
+  let pointerDragged = false
+  transcript.addEventListener('pointerdown', event => {
+    pointerStart={x:event.clientX,y:event.clientY}
+    pointerDragged=false
+  }, true)
+  transcript.addEventListener('pointermove', event => {
+    if(pointerStart && event.buttons && Math.hypot(event.clientX-pointerStart.x,event.clientY-pointerStart.y)>4) pointerDragged=true
+  }, true)
+  transcript.addEventListener('pointercancel', () => { pointerDragged=true; pointerStart=null }, true)
+  function toggleCard(id) {
+    if (state.expanded.has(id)) state.expanded.delete(id)
+    else state.expanded.add(id)
+    draw({hold:true})
+    const target = id==='edit' ? $('.diff-block') : $('[data-detail="bash"] summary')
+    target?.focus({preventScroll:true})
+  }
+  transcript.addEventListener('click', async event => {
+    const dragged = pointerDragged
+    pointerDragged=false
+    pointerStart=null
+    const copy = event.target.closest('[data-copy]')
+    if (copy) {
+      try {
+        await navigator.clipboard.writeText(command)
+        copy.textContent = '已复制脚本'
+        feedback.textContent = '已复制完整 11 行脚本。'
+      } catch {
+        const selection = window.getSelection()
+        const range = document.createRange()
+        range.selectNodeContents(copy.previousElementSibling)
+        selection.removeAllRanges(); selection.addRange(range)
+        feedback.textContent = '已选中完整脚本，可使用系统复制快捷键。'
+      }
+      return
+    }
+    const card = event.target.closest('[data-card]')
+    if (card && !event.target.closest('a,button,input,select')) {
+      event.preventDefault()
+      const selection=window.getSelection()
+      if (dragged || (selection && !selection.isCollapsed) || event.button!==0 || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return
+      if (card.dataset.card==='edit' && card.dataset.foldable!=='true') return
+      toggleCard(card.dataset.card)
+      return
+    }
+  })
+  terminal.addEventListener('keydown', event => {
+    if(subagentPreview.handleKey(event)) return
+    if(choicePreview.handleKey(event)) return
+    if ((event.key==='Enter' || event.key===' ') && event.target.matches('.diff-block[data-foldable="true"]')) {
+      event.preventDefault(); toggleCard('edit'); return
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'o') { event.preventDefault(); toggleAll() }
+  })
+  let tick = 0
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)')
+  const frames = ['-', '\\', '|', '/']
+  setInterval(() => {
+    const glyph = $('.activity-glyph')
+    if (glyph && !reducedMotion.matches && !document.hidden) glyph.textContent = frames[tick++ % frames.length]
+  }, 500)
+  draw({top:true})
+  new ResizeObserver(() => { measureDiff(); updateJump() }).observe(terminal)
+  // A tiny read-only surface for the bounded browser verification script.
+  window.previewSnapshot = () => ({scene:state.scene,width:state.width,theme:state.theme,open:[...state.expanded],scrollTop:transcript.scrollTop,scrollHeight:transcript.scrollHeight,viewport:transcript.clientHeight,choices:choicePreview.snapshot(),subagents:subagentPreview.snapshot()})
+})()
+</script>
+</body>
+</html>

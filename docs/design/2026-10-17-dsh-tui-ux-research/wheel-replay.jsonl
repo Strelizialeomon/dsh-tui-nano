@@ -1,0 +1,6 @@
+{"label":"slow: 3 events 200ms apart","events":3,"rows":[0,0,1],"total":1}
+{"label":"fast: 15 events 25ms apart","events":15,"rows":[0,0,1,0,0,1,0,0,1,1,2,3,3,5,5],"total":22}
+{"label":"steady burst: 24 events 8ms apart","events":24,"rows":[0,0,1,0,0,1,0,0,1,1,2,3,3,5,5,7,7,8,8,8,8,8,8,8],"total":92}
+{"label":"same 24 events delivered in one batch","events":24,"rows":[0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1,0,0,1],"total":8}
+{"label":"reverse immediately after 24 fast events","events":27,"rows":[0,0,1,0,0,1,0,0,1,1,2,3,3,5,5,7,7,8,8,8,8,8,8,8,-8,-8,-8],"total":68}
+{"label":"fresh reverse without preceding gesture","events":3,"rows":[0,0,-1],"total":-1}
