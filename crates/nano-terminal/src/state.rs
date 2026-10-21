@@ -99,6 +99,8 @@ pub enum Command {
         method: &'static str,
         /// Protocol params.
         params: Value,
+        /// Operation epoch; stale responses are ignored.
+        epoch: u64,
     },
     /// Send one client-to-host notification.
     Notify {
@@ -155,6 +157,8 @@ struct ShellPicker {
 pub struct TerminalState {
     store: Option<TerminalStore>,
     store_error: Option<String>,
+    root_session_id: String,
+    epoch: u64,
     phase: Phase,
     environment: Option<TerminalEnvironment>,
     shells: Vec<TerminalShell>,
@@ -195,6 +199,8 @@ impl TerminalState {
         Self {
             store: None,
             store_error: None,
+            root_session_id: String::new(),
+            epoch: 0,
             phase: Phase::Idle,
             environment: None,
             shells: Vec::new(),
@@ -231,6 +237,16 @@ impl TerminalState {
         state.phase = Phase::Failed;
         state.error = state.store_error.clone();
         state
+    }
+
+    /// Bind the official root session used by attach requests.
+    pub fn set_root_session_id(&mut self, session_id: impl Into<String>) {
+        self.root_session_id = session_id.into();
+    }
+
+    /// Current operation epoch. Responses from an older epoch are ignored.
+    pub fn epoch(&self) -> u64 {
+        self.epoch
     }
 
     /// Current phase.
@@ -278,11 +294,12 @@ impl TerminalState {
             return self.fail(error);
         }
         self.shell_picker = None;
+        self.epoch = self.epoch.saturating_add(1);
         self.error = None;
         self.notice = None;
         self.phase = Phase::Loading;
         self.busy = true;
-        vec![request(RequestKind::List, "nano.terminal.list", json!({}))]
+        vec![self.cmd(RequestKind::List, "nano.terminal.list", json!({}))]
     }
 
     /// Close the process range. The response decides closing/closed/failed.
@@ -290,15 +307,16 @@ impl TerminalState {
         if self.phase == Phase::Closing {
             return Vec::new();
         }
-        self.shell_picker = None;
         if matches!(self.phase, Phase::Loading | Phase::Creating) && self.terminal_id.is_none() {
             self.notice = Some("终端正在创建或读取，请稍候再关闭".to_string());
             return vec![status_ok("终端正在创建或读取，请稍候再关闭")];
         }
+        self.epoch = self.epoch.saturating_add(1);
+        self.shell_picker = None;
         if let Some(id) = self.terminal_id.clone() {
             self.phase = Phase::Closing;
             self.writable = false;
-            return vec![request(
+            return vec![self.cmd(
                 RequestKind::Close,
                 "nano.terminal.close",
                 json!({ "terminalId": id }),
@@ -315,7 +333,7 @@ impl TerminalState {
         if !pending.is_empty() {
             self.phase = Phase::Closing;
             self.close_after_list = true;
-            return vec![request(RequestKind::List, "nano.terminal.list", json!({}))];
+            return vec![self.cmd(RequestKind::List, "nano.terminal.list", json!({}))];
         }
         self.phase = Phase::Closed;
         self.notice = Some("终端已关闭".to_string());
@@ -324,17 +342,29 @@ impl TerminalState {
 
     /// Show the shell picker for the next terminal.
     pub fn choose_shell(&mut self) -> Vec<Command> {
-        if self.terminal_id.is_some() {
-            self.notice = Some("关闭当前终端后才能更换 shell".to_string());
-            return vec![status_ok("关闭当前终端后才能更换 shell")];
+        let pending = self
+            .store
+            .as_ref()
+            .map(|store| !store.pending().is_empty())
+            .unwrap_or(false);
+        if self.terminal_id.is_some()
+            || self.creating_id.is_some()
+            || self.hold_id.is_some()
+            || self.attachment_id.is_some()
+            || pending
+            || matches!(
+                self.phase,
+                Phase::Loading | Phase::Creating | Phase::Connecting | Phase::Closing
+            )
+        {
+            self.notice = Some("终端正在创建、连接或已打开；先按 F11 关闭再选 shell".to_string());
+            return vec![status_ok(
+                "终端正在创建、连接或已打开；先按 F11 关闭再选 shell",
+            )];
         }
         if self.shells.is_empty() {
             self.busy = true;
-            return vec![request(
-                RequestKind::ShellsPicker,
-                "nano.terminal.shells",
-                json!({}),
-            )];
+            return vec![self.cmd(RequestKind::ShellsPicker, "nano.terminal.shells", json!({}))];
         }
         self.shell_picker = Some(ShellPicker {
             selected: self.current_shell_index(),
@@ -348,6 +378,7 @@ impl TerminalState {
             self.notice = Some("没有可重新附着的终端".to_string());
             return vec![status_ok("没有可重新附着的终端")];
         }
+        self.epoch = self.epoch.saturating_add(1);
         self.error = None;
         self.attachment_id = None;
         self.writable = false;
@@ -415,7 +446,9 @@ impl TerminalState {
         if let Some(parser) = &self.parser {
             let mode = parser.screen().mouse_protocol_mode();
             let encoding = parser.screen().mouse_protocol_encoding();
-            if mode != vt100::MouseProtocolMode::None {
+            if mode != vt100::MouseProtocolMode::None
+                && !event.modifiers.contains(KeyModifiers::SHIFT)
+            {
                 if let Some(bytes) = encode_mouse(&event, area, mode, encoding) {
                     return self.send_input(bytes);
                 }
@@ -459,7 +492,11 @@ impl TerminalState {
                 if let Some(selection) = self.selection.as_mut() {
                     selection.update(cell);
                 }
-                self.copy_selection()
+                let commands = self.copy_selection();
+                // The drag is over: release the selection so the wheel scrolls
+                // again. A plain click never produces a clipboard payload.
+                self.selection = None;
+                commands
             }
             _ => Vec::new(),
         }
@@ -492,6 +529,9 @@ impl TerminalState {
         self.set_viewport(area.width, area.height);
         if self.parser.is_none() {
             self.draw_placeholder(frame, area);
+            if self.shell_picker.is_some() {
+                self.draw_picker(frame, area);
+            }
             return;
         }
         let parser = self.parser.as_ref().expect("parser checked");
@@ -564,6 +604,14 @@ impl TerminalState {
             } else {
                 "只读".to_string()
             });
+            if self
+                .info
+                .as_ref()
+                .map(|info| !info.state.is_running())
+                .unwrap_or(false)
+            {
+                parts.push("输出未确认排空".to_string());
+            }
         } else if self.phase == Phase::Connected {
             parts.push(if self.output_drained {
                 "输出已收完".to_string()
@@ -591,12 +639,26 @@ impl TerminalState {
         parts.join(" · ")
     }
 
-    /// Apply one request result. `result` is classified by the host link.
+    /// Apply one request result from the current operation epoch.
     pub fn on_response(
         &mut self,
         kind: RequestKind,
         result: Result<Value, Failure>,
     ) -> Vec<Command> {
+        self.on_response_epoch(self.epoch, kind, result)
+    }
+
+    /// Apply one request result. Stale epochs are discarded so a timeout from
+    /// an earlier create/attach cannot mutate the current view.
+    pub fn on_response_epoch(
+        &mut self,
+        epoch: u64,
+        kind: RequestKind,
+        result: Result<Value, Failure>,
+    ) -> Vec<Command> {
+        if epoch != self.epoch {
+            return Vec::new();
+        }
         self.busy = false;
         let value = match result {
             Ok(value) => value,
@@ -606,11 +668,7 @@ impl TerminalState {
             RequestKind::Environment => match parse_environment(&value) {
                 Ok(environment) => {
                     self.environment = Some(environment);
-                    vec![request(
-                        RequestKind::Shells,
-                        "nano.terminal.shells",
-                        json!({}),
-                    )]
+                    vec![self.cmd(RequestKind::Shells, "nano.terminal.shells", json!({}))]
                 }
                 Err(error) => self.fail(error),
             },
@@ -666,10 +724,10 @@ impl TerminalState {
                 match parse_hold(&value) {
                     Ok(hold_id) => {
                         self.hold_id = Some(hold_id);
-                        vec![request(
+                        vec![self.cmd(
                             RequestKind::Attach,
                             "nano.terminal.attach",
-                            json!({ "terminalId": self.terminal_id }),
+                            json!({ "sessionId": self.root_session_id, "terminalId": self.terminal_id }),
                         )]
                     }
                     Err(error) => self.fail(error),
@@ -798,6 +856,7 @@ impl TerminalState {
         if self.phase == Phase::Closed {
             return Vec::new();
         }
+        self.epoch = self.epoch.saturating_add(1);
         self.attachment_id = None;
         self.hold_id = None;
         self.writable = false;
@@ -832,18 +891,13 @@ impl TerminalState {
                 }
             }
         }
-        if recovered.is_none() {
+        if recovered.is_none() && pending.is_empty() {
             // A single retained terminal in this host is this window's view.
             recovered = terminals.first().cloned();
         }
-        // Pending ids that are not in this host's list belong to an ended host.
-        if let Some(store) = self.store.as_mut() {
-            for entry in &pending {
-                if !terminals.iter().any(|info| info.id == entry.id) {
-                    let _ = store.clear_pending(&entry.id);
-                }
-            }
-        }
+        // A pending id absent from list may still be an in-flight allocation:
+        // list() excludes owner.pending. Keep it and retry create with the same
+        // id instead of allocating a second shell.
         if let Some(info) = recovered {
             self.terminal_id = Some(info.id.clone());
             self.info = Some(info);
@@ -867,18 +921,19 @@ impl TerminalState {
         {
             self.terminal_id = Some(info.id.clone());
             self.info = Some(info);
+        } else if let Some(entry) = pending.first() {
+            // list() cannot see an in-flight allocation. The official close()
+            // awaits owner.pending by id, so close that identity explicitly.
+            self.terminal_id = Some(entry.id.clone());
+        }
+        if let Some(id) = self.terminal_id.clone() {
             self.phase = Phase::Closing;
             self.writable = false;
-            return vec![request(
+            return vec![self.cmd(
                 RequestKind::Close,
                 "nano.terminal.close",
-                json!({ "terminalId": self.terminal_id }),
+                json!({ "terminalId": id }),
             )];
-        }
-        if let Some(store) = self.store.as_mut() {
-            for entry in &pending {
-                let _ = store.clear_pending(&entry.id);
-            }
         }
         self.phase = Phase::Closed;
         self.notice = Some("终端已关闭".to_string());
@@ -890,7 +945,7 @@ impl TerminalState {
             return self.fail(error);
         }
         self.phase = Phase::Loading;
-        vec![request(
+        vec![self.cmd(
             RequestKind::Environment,
             "nano.terminal.environment",
             json!({}),
@@ -924,7 +979,7 @@ impl TerminalState {
         if let Some(shell) = self.selected_shell.clone() {
             params["shellPath"] = Value::String(shell);
         }
-        vec![request(RequestKind::Create, "nano.terminal.create", params)]
+        vec![self.cmd(RequestKind::Create, "nano.terminal.create", params)]
     }
 
     fn begin_attach(&mut self) -> Vec<Command> {
@@ -932,13 +987,13 @@ impl TerminalState {
             return self.fail("没有终端身份");
         };
         if self.hold_id.is_none() {
-            return vec![request(
+            return vec![self.cmd(
                 RequestKind::Retain,
                 "nano.terminal.retain",
                 json!({ "terminalId": id }),
             )];
         }
-        vec![request(
+        vec![self.cmd(
             RequestKind::Attach,
             "nano.terminal.attach",
             json!({ "terminalId": id }),
@@ -955,7 +1010,7 @@ impl TerminalState {
             .map(|environment| environment.scrollback)
             .unwrap_or(1000);
         let mut parser = vt100::Parser::new(attachment.info.rows, attachment.info.cols, scrollback);
-        parser.process(attachment.screen.as_bytes());
+        parser.process(attachment.snapshot.as_bytes());
         self.parser = Some(parser);
         self.info = Some(attachment.info.clone());
         self.attachment_id = Some(attachment.attachment_id);
@@ -1032,7 +1087,7 @@ impl TerminalState {
         self.budget.reset();
         let mut commands = vec![status_err(message)];
         if let Some(attachment_id) = attachment {
-            commands.push(request(
+            commands.push(self.cmd(
                 RequestKind::Detach,
                 "nano.terminal.detach",
                 json!({ "attachmentId": attachment_id }),
@@ -1094,6 +1149,15 @@ impl TerminalState {
     }
 
     fn on_request_error(&mut self, kind: RequestKind, error: Failure) -> Vec<Command> {
+        if self.phase == Phase::Disconnected {
+            return Vec::new();
+        }
+        if kind == RequestKind::List && self.close_after_list {
+            self.close_after_list = false;
+            self.phase = Phase::Failed;
+            self.error = Some(format!("关闭对账失败：{}", error.message));
+            return vec![status_err(self.error.clone().unwrap_or_default())];
+        }
         if self.phase == Phase::Closing
             && matches!(
                 kind,
@@ -1132,16 +1196,10 @@ impl TerminalState {
                 self.phase = Phase::Failed;
                 self.writable = false;
                 self.attachment_id = None;
-                let mut commands = vec![status_err(format!("附着终端失败：{}", error.message))];
+                // Keep any existing hold: an attach failure is retryable and
+                // must not let unattended cleanup reclaim a visible terminal.
                 self.error = Some(format!("附着终端失败：{}", error.message));
-                if let Some(hold_id) = self.hold_id.take() {
-                    commands.push(request(
-                        RequestKind::Release,
-                        "nano.terminal.release",
-                        json!({ "holdId": hold_id }),
-                    ));
-                }
-                commands
+                vec![status_err(self.error.clone().unwrap_or_default())]
             }
             RequestKind::Close => {
                 self.phase = Phase::Failed;
@@ -1209,6 +1267,15 @@ impl TerminalState {
                 Vec::new()
             }
             KeyCode::Enter => {
+                if self.terminal_id.is_some()
+                    || self.creating_id.is_some()
+                    || self.hold_id.is_some()
+                    || self.attachment_id.is_some()
+                {
+                    self.shell_picker = None;
+                    self.notice = Some("终端已创建；未更换 shell".to_string());
+                    return vec![status_ok("终端已创建；未更换 shell")];
+                }
                 let selected = picker.selected;
                 let path = self.shells.get(selected).map(|shell| shell.path.clone());
                 self.shell_picker = None;
@@ -1218,6 +1285,7 @@ impl TerminalState {
                             let _ = store.set_shell_path(Some(path.clone()));
                         }
                         self.selected_shell = Some(path);
+                        self.epoch = self.epoch.saturating_add(1);
                         self.reset_terminal();
                         self.discover()
                     }
@@ -1289,6 +1357,7 @@ impl TerminalState {
         self.scroll = ScrollCurve::new(self.scroll_profile);
         self.reattach_attempts = 0;
         self.close_after_list = false;
+        self.error = None;
     }
 
     fn fail(&mut self, message: impl Into<String>) -> Vec<Command> {
@@ -1297,6 +1366,15 @@ impl TerminalState {
         self.error = Some(message.clone());
         self.busy = false;
         vec![status_err(message)]
+    }
+
+    fn cmd(&self, kind: RequestKind, method: &'static str, params: Value) -> Command {
+        Command::Request {
+            kind,
+            method,
+            params,
+            epoch: self.epoch,
+        }
     }
 
     fn draw_placeholder(&self, frame: &mut Frame, area: Rect) {
@@ -1347,13 +1425,16 @@ impl TerminalState {
         let Some(picker) = &self.shell_picker else {
             return;
         };
-        let height = (self.shells.len().min(8) + 2) as u16;
-        let width = area.width.clamp(20, 60);
+        if area.width < 2 || area.height < 2 {
+            return;
+        }
+        let height = ((self.shells.len().min(8) + 2) as u16).min(area.height);
+        let width = area.width.min(60);
         let popup = Rect::new(
             area.x + area.width.saturating_sub(width) / 2,
             area.y + area.height.saturating_sub(height) / 2,
             width,
-            height.min(area.height),
+            height,
         );
         frame.render_widget(ratatui::widgets::Clear, popup);
         let block = Block::default().borders(Borders::ALL).title(" 选择 shell ");
@@ -1412,14 +1493,6 @@ pub fn is_reattach_key(key: &KeyEvent) -> bool {
 /// Shell picker key.
 pub fn is_shell_key(key: &KeyEvent) -> bool {
     key.modifiers.is_empty() && key.code == KeyCode::F(9)
-}
-
-fn request(kind: RequestKind, method: &'static str, params: Value) -> Command {
-    Command::Request {
-        kind,
-        method,
-        params,
-    }
 }
 
 fn status_ok(message: impl Into<String>) -> Command {
@@ -1536,7 +1609,7 @@ mod tests {
             "sequence": sequence,
             "writable": true,
             "info": info(),
-            "screen": "ready\r\n"
+            "snapshot": "ready\r\n"
         })
     }
 
@@ -1822,7 +1895,7 @@ mod scroll_tests {
                     "state": "running",
                     "exitCode": null
                 },
-                "screen": ""
+                "snapshot": ""
             })),
         );
         for sequence in 1..=40 {
@@ -1925,12 +1998,356 @@ mod close_reconcile_tests {
     }
 
     #[test]
-    fn closing_with_no_matching_orphan_prunes_the_pending_id() {
+    fn closing_an_in_flight_create_sends_close_for_the_pending_id() {
         let mut state = pending_state();
         let _ = state.close_terminal();
         let commands = state.on_response(RequestKind::List, Ok(json!({ "terminals": [] })));
+        assert!(matches!(
+            &commands[0],
+            Command::Request {
+                kind: RequestKind::Close,
+                params,
+                ..
+            } if params["terminalId"] == "term-orphan"
+        ));
+        assert_eq!(state.phase(), Phase::Closing);
+        assert_eq!(state.store.as_ref().unwrap().pending().len(), 1);
+    }
+
+    #[test]
+    fn an_in_flight_create_retries_with_the_same_id() {
+        let mut state = pending_state();
+        let _ = state.open();
+        let commands = state.on_response(RequestKind::List, Ok(json!({ "terminals": [] })));
+        assert!(matches!(
+            &commands[0],
+            Command::Request {
+                kind: RequestKind::Environment,
+                ..
+            }
+        ));
+        let _ = state.on_response(
+            RequestKind::Environment,
+            Ok(json!({
+                "cwd": "/work",
+                "maxInputBytes": 1024,
+                "maxBufferedBytes": 4096,
+                "maxCols": 120,
+                "maxRows": 40,
+                "scrollback": 100
+            })),
+        );
+        let commands = state.on_response(
+            RequestKind::Shells,
+            Ok(json!({ "shells": [{ "path": "/bin/zsh", "args": ["-i"], "name": "zsh" }] })),
+        );
+        assert!(matches!(
+            &commands[0],
+            Command::Request {
+                kind: RequestKind::Create,
+                params,
+                ..
+            } if params["terminalId"] == "term-orphan"
+        ));
+    }
+}
+
+#[cfg(test)]
+mod fix_tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn store() -> TerminalStore {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "nano-terminal-fix-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        TerminalStore::open(&root, "session-test").unwrap()
+    }
+
+    fn info() -> Value {
+        json!({
+            "id": "term-1",
+            "title": "zsh",
+            "shell": { "path": "/bin/zsh", "args": ["-i"], "name": "zsh" },
+            "cwd": "/work",
+            "cols": 80,
+            "rows": 24,
+            "state": "running",
+            "exitCode": null
+        })
+    }
+
+    fn connected() -> TerminalState {
+        let mut state = TerminalState::new(store(), (80, 24));
+        state.set_root_session_id("session-test");
+        let _ = state.open();
+        let _ = state.on_response(RequestKind::List, Ok(json!({ "terminals": [] })));
+        let _ = state.on_response(
+            RequestKind::Environment,
+            Ok(json!({
+                "cwd": "/work",
+                "maxInputBytes": 1024,
+                "maxBufferedBytes": 4096,
+                "maxCols": 120,
+                "maxRows": 40,
+                "scrollback": 100
+            })),
+        );
+        let _ = state.on_response(
+            RequestKind::Shells,
+            Ok(json!({ "shells": [{ "path": "/bin/zsh", "args": ["-i"], "name": "zsh" }] })),
+        );
+        let _ = state.on_response(RequestKind::Create, Ok(json!({ "terminal": info() })));
+        let _ = state.on_response(RequestKind::Retain, Ok(json!({ "holdId": "hold-1" })));
+        let _ = state.on_response(
+            RequestKind::Attach,
+            Ok(json!({
+                "attachmentId": "att-1",
+                "terminalId": "term-1",
+                "sequence": 0,
+                "writable": true,
+                "info": info(),
+                "snapshot": ""
+            })),
+        );
+        state
+    }
+
+    fn feed_history(state: &mut TerminalState) {
+        for sequence in 1..=40 {
+            let _ = state.on_notification(
+                "nano.terminal.output",
+                &json!({
+                    "attachmentId": "att-1",
+                    "terminalId": "term-1",
+                    "sequence": sequence,
+                    "data": format!("line {sequence}\r\n")
+                }),
+            );
+        }
+    }
+
+    fn mouse(kind: MouseEventKind, column: u16, row: u16, modifiers: KeyModifiers) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers,
+        }
+    }
+
+    #[test]
+    fn a_click_clears_the_selection_so_the_wheel_scrolls_again() {
+        let mut state = connected();
+        feed_history(&mut state);
+        let area = Rect::new(0, 0, 80, 24);
+        state.handle_mouse(
+            mouse(
+                MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                2,
+                2,
+                KeyModifiers::NONE,
+            ),
+            area,
+        );
+        state.handle_mouse(
+            mouse(
+                MouseEventKind::Up(crossterm::event::MouseButton::Left),
+                2,
+                2,
+                KeyModifiers::NONE,
+            ),
+            area,
+        );
+        state.handle_mouse(
+            mouse(MouseEventKind::ScrollUp, 2, 2, KeyModifiers::NONE),
+            area,
+        );
+        state.tick();
+        assert_eq!(state.parser.as_ref().unwrap().screen().scrollback(), 1);
+    }
+
+    #[test]
+    fn shift_bypasses_program_mouse_reporting_for_selection() {
+        let mut state = connected();
+        state.on_notification(
+            "nano.terminal.output",
+            &json!({
+                "attachmentId": "att-1",
+                "terminalId": "term-1",
+                "sequence": 1,
+                "data": "\u{1b}[?1000h\u{1b}[?1006h"
+            }),
+        );
+        let area = Rect::new(0, 0, 80, 24);
+        let plain = state.handle_mouse(
+            mouse(
+                MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                2,
+                2,
+                KeyModifiers::NONE,
+            ),
+            area,
+        );
+        assert!(
+            plain
+                .iter()
+                .any(|command| matches!(command, Command::Notify { .. })),
+            "plain mouse events go to the program"
+        );
+        let shifted = state.handle_mouse(
+            mouse(
+                MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                3,
+                3,
+                KeyModifiers::SHIFT,
+            ),
+            area,
+        );
+        assert!(
+            shifted
+                .iter()
+                .all(|command| !matches!(command, Command::Notify { .. })),
+            "Shift starts a local selection instead"
+        );
+    }
+
+    #[test]
+    fn choose_shell_is_refused_while_a_create_is_in_flight() {
+        let mut state = TerminalState::new(store(), (80, 24));
+        let _ = state.open();
+        let _ = state.on_response(RequestKind::List, Ok(json!({ "terminals": [] })));
+        let _ = state.on_response(
+            RequestKind::Environment,
+            Ok(json!({
+                "cwd": "/work",
+                "maxInputBytes": 1024,
+                "maxBufferedBytes": 4096,
+                "maxCols": 120,
+                "maxRows": 40,
+                "scrollback": 100
+            })),
+        );
+        let _ = state.on_response(
+            RequestKind::Shells,
+            Ok(json!({ "shells": [{ "path": "/bin/zsh", "args": ["-i"], "name": "zsh" }] })),
+        );
+        let commands = state.choose_shell();
         assert!(matches!(commands[0], Command::Status { error: false, .. }));
+        assert!(state.shell_picker.is_none());
+    }
+
+    #[test]
+    fn the_picker_renders_without_a_parser_and_clamps_to_narrow_areas() {
+        let mut state = TerminalState::new(store(), (80, 24));
+        state.shells = vec![TerminalShell {
+            path: "/bin/zsh".into(),
+            args: vec!["-i".into()],
+            name: "zsh".into(),
+        }];
+        state.shell_picker = Some(ShellPicker { selected: 0 });
+        let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
+        terminal
+            .draw(|frame| state.draw(frame, frame.area()))
+            .expect("picker draw");
+        let text = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(
+            text.contains("zsh"),
+            "picker list must be visible: {text:?}"
+        );
+
+        let mut narrow = Terminal::new(TestBackend::new(15, 6)).unwrap();
+        narrow
+            .draw(|frame| state.draw(frame, frame.area()))
+            .expect("narrow picker draw must not panic");
+    }
+
+    #[test]
+    fn a_disconnect_ignores_late_terminal_results() {
+        let mut state = connected();
+        let stale_epoch = state.epoch();
+        let _ = state.disconnect("host gone");
+        assert_eq!(state.phase(), Phase::Disconnected);
+        let _ = state.on_response_epoch(
+            stale_epoch,
+            RequestKind::Attach,
+            Ok(json!({
+                "attachmentId": "att-late",
+                "terminalId": "term-1",
+                "sequence": 9,
+                "writable": true,
+                "info": info(),
+                "snapshot": ""
+            })),
+        );
+        assert_eq!(state.phase(), Phase::Disconnected);
+        let _ = state.on_response_epoch(
+            state.epoch(),
+            RequestKind::Close,
+            Err(Failure::definite("closed after the transport ended")),
+        );
+        assert_eq!(state.phase(), Phase::Disconnected);
+    }
+
+    #[test]
+    fn an_attach_failure_keeps_the_hold_for_a_retry() {
+        let mut state = connected();
+        let _ = state.on_response(
+            RequestKind::Attach,
+            Err(Failure::definite("transient attach failure")),
+        );
+        assert_eq!(state.phase(), Phase::Failed);
+        assert_eq!(state.hold_id.as_deref(), Some("hold-1"));
+    }
+
+    #[test]
+    fn a_successful_close_clears_a_stale_error() {
+        let mut state = connected();
+        state.error = Some("inputFull: stale".to_string());
+        let commands = state.on_response(RequestKind::Close, Ok(json!({ "closed": true })));
         assert_eq!(state.phase(), Phase::Closed);
-        assert!(state.store.as_ref().unwrap().pending().is_empty());
+        assert!(state.error.is_none());
+        assert!(commands
+            .iter()
+            .any(|command| matches!(command, Command::Status { error: false, .. })));
+        assert!(!state.status_line().contains("inputFull: stale"));
+    }
+
+    #[test]
+    fn an_exited_process_with_an_open_attachment_says_output_is_not_confirmed_drained() {
+        let mut state = connected();
+        let mut exited = info();
+        exited["state"] = json!("exited");
+        exited["exitCode"] = json!(0);
+        state.info = Some(serde_json::from_value(exited).unwrap());
+        state.writable = false;
+        let status = state.status_line();
+        assert!(status.contains("进程已退出"), "{status}");
+        assert!(status.contains("输出未确认排空"), "{status}");
+    }
+
+    #[test]
+    fn scrolled_history_is_labelled_as_bounded() {
+        let mut state = connected();
+        feed_history(&mut state);
+        let area = Rect::new(0, 0, 80, 24);
+        state.handle_mouse(
+            mouse(MouseEventKind::ScrollUp, 2, 2, KeyModifiers::NONE),
+            area,
+        );
+        state.tick();
+        assert!(state.status_line().contains("受 scrollback 限制"));
     }
 }

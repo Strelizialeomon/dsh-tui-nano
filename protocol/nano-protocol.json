@@ -375,10 +375,10 @@
     "terminalAttachment": {
       "attachmentId": "string",
       "terminalId": "string",
-      "sequence": "integer",
+      "sequence": "integer; last output sequence included in the snapshot",
       "writable": "boolean",
       "info": "terminalInfo",
-      "screen": "string"
+      "snapshot": "string; bounded ANSI screen, including scrollback limits"
     }
   },
   "methods": [
@@ -861,9 +861,11 @@
       "status": "implemented",
       "params": {
         "required": [
-          "terminalId"
+          "sessionId"
         ],
-        "optional": []
+        "optional": [
+          "terminalId"
+        ]
       },
       "result": {
         "shape": "terminalAttachment",
@@ -873,9 +875,13 @@
           "sequence",
           "writable",
           "info",
-          "screen"
+          "snapshot"
         ],
         "optional": []
+      },
+      "paramsSemantics": {
+        "sessionId": "must equal the host root session id",
+        "terminalId": "terminal to attach; omitted selects the single retained terminal"
       }
     },
     {
@@ -990,7 +996,7 @@
         "optional": []
       },
       "paramsSemantics": {
-        "sequence": "monotonic across the attachment",
+        "sequence": "monotonic and consecutive: snapshot sequence + 1, + 2, ...",
         "data": "utf-8"
       }
     },
@@ -1290,6 +1296,7 @@
       "id": "req-5",
       "method": "nano.terminal.attach",
       "params": {
+        "sessionId": "session-fixture",
         "terminalId": "term-fixture"
       }
     },
@@ -1327,7 +1334,7 @@
           "state": "running",
           "exitCode": null
         },
-        "screen": "\u001b[?25h"
+        "snapshot": "\u001b[?25h"
       }
     }
   },

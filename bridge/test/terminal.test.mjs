@@ -44,9 +44,11 @@ class FakeWriter {
 }
 
 class FakeController {
-  constructor({ createError, inputMode = 'consume' } = {}) {
+  constructor({ createError, inputMode = 'consume', outputError, badState } = {}) {
     this.createError = createError
     this.inputMode = inputMode
+    this.outputError = outputError
+    this.badState = badState
     this.infos = new Map()
     this.ctx = { extend: (meta) => ({ ...meta }) }
   }
@@ -72,7 +74,13 @@ class FakeController {
 
   async create(agent, request) {
     if (this.createError !== undefined) throw this.createError
-    const info = { ...INFO, id: request.id, cols: request.cols, rows: request.rows }
+    const info = {
+      ...INFO,
+      id: request.id,
+      cols: request.cols,
+      rows: request.rows,
+      state: this.badState ?? INFO.state,
+    }
     this.infos.set(request.id, info)
     return info
   }
@@ -91,6 +99,7 @@ class FakeController {
     return (async function* () {
       const info = controller.infos.values().next().value ?? INFO
       yield { type: 'snapshot', sequence: 0, screen: '\u001b[31mready', info, writable: true }
+      if (controller.outputError !== undefined) throw controller.outputError
       if (controller.inputMode === 'consume') {
         const input = controller.ctx.invocation.uplink()
         for await (const item of input) {
@@ -159,9 +168,9 @@ test('attach returns the snapshot and forwards live frames', async () => {
   const controller = new FakeController({ inputMode: 'none' })
   const { service, writer } = serviceWith(controller)
   await service.create({ terminalId: 'term-1', cols: 80, rows: 24 })
-  const baseline = await service.attach({ terminalId: 'term-1' })
+  const baseline = await service.attach({ sessionId: SESSION, terminalId: 'term-1' })
   assert.equal(baseline.sequence, 0)
-  assert.equal(baseline.screen, '\u001b[31mready')
+  assert.equal(baseline.snapshot, '\u001b[31mready')
   assert.equal(baseline.writable, true)
   await writer.waitFor((frame) => frame.method === 'nano.terminal.output', 'output')
   await writer.waitFor((frame) => frame.method === 'nano.terminal.state', 'state')
@@ -177,7 +186,7 @@ test('input and resize share one attachment-local sequence', async () => {
   const controller = new FakeController({ inputMode: 'consume' })
   const { service, writer } = serviceWith(controller)
   await service.create({ terminalId: 'term-1', cols: 80, rows: 24 })
-  const baseline = await service.attach({ terminalId: 'term-1' })
+  const baseline = await service.attach({ sessionId: SESSION, terminalId: 'term-1' })
   service.handleNotification('nano.terminal.input', {
     attachmentId: baseline.attachmentId,
     sequence: 1,
@@ -192,7 +201,7 @@ test('a sequence gap ends the attachment without killing the terminal', async ()
   const controller = new FakeController({ inputMode: 'none' })
   const { service, writer } = serviceWith(controller)
   await service.create({ terminalId: 'term-1', cols: 80, rows: 24 })
-  const baseline = await service.attach({ terminalId: 'term-1' })
+  const baseline = await service.attach({ sessionId: SESSION, terminalId: 'term-1' })
   service.handleNotification('nano.terminal.input', {
     attachmentId: baseline.attachmentId,
     sequence: 2,
@@ -220,7 +229,7 @@ test('close waits for official cleanup and removes the identity', async () => {
   const controller = new FakeController({ inputMode: 'none' })
   const { service } = serviceWith(controller)
   await service.create({ terminalId: 'term-1', cols: 80, rows: 24 })
-  await service.attach({ terminalId: 'term-1' })
+  await service.attach({ sessionId: SESSION, terminalId: 'term-1' })
   const result = await service.close({ terminalId: 'term-1' })
   assert.deepEqual(result, { closed: true })
   assert.equal(service.list().terminals.length, 0)
@@ -258,7 +267,7 @@ test('the terminal surface never registers an Agent tool or Monitor route', asyn
     nonceRequired: false,
   })
   await service.create({ terminalId: 'term-1', cols: 80, rows: 24 })
-  await service.attach({ terminalId: 'term-1' })
+  await service.attach({ sessionId: SESSION, terminalId: 'term-1' })
   assert.deepEqual(registered, [])
   assert.equal(service.available, true)
 })
@@ -275,7 +284,7 @@ test('an out-of-bounds resize ends the attachment but keeps the terminal', async
   const controller = new FakeController({ inputMode: 'none' })
   const { service, writer } = serviceWith(controller)
   await service.create({ terminalId: 'term-1', cols: 80, rows: 24 })
-  const baseline = await service.attach({ terminalId: 'term-1' })
+  const baseline = await service.attach({ sessionId: SESSION, terminalId: 'term-1' })
   service.handleNotification('nano.terminal.resize', {
     attachmentId: baseline.attachmentId,
     sequence: 1,
@@ -287,4 +296,58 @@ test('an out-of-bounds resize ends the attachment but keeps the terminal', async
   assert.equal(ended.params.reason, 'input-failed')
   assert.match(ended.params.detail, /resize is outside/u)
   assert.equal(service.list().terminals.length, 1)
+})
+
+test('attach requires the host session id and can infer a single terminal', async () => {
+  const controller = new FakeController({ inputMode: 'none' })
+  const { service } = serviceWith(controller)
+  await service.create({ terminalId: 'term-1', cols: 80, rows: 24 })
+  await assert.rejects(
+    service.attach({ sessionId: 'other-session', terminalId: 'term-1' }),
+    (error) => error.code === -32602,
+  )
+  const baseline = await service.attach({ sessionId: SESSION })
+  assert.equal(baseline.terminalId, 'term-1')
+  assert.equal(typeof baseline.snapshot, 'string')
+})
+
+test('an unknown terminal state is rejected instead of being treated as running', async () => {
+  const controller = new FakeController({ badState: 'future' })
+  const { service } = serviceWith(controller)
+  await assert.rejects(
+    service.create({ terminalId: 'term-1', cols: 80, rows: 24 }),
+    (error) => error.code === 1026 && /unknown terminal state/u.test(error.message),
+  )
+})
+
+test('a follower buffer overflow ends as slow-consumer', async () => {
+  const controller = new FakeController({
+    inputMode: 'none',
+    outputError: new Error('Terminal output consumer exceeded its buffer'),
+  })
+  const { service, writer } = serviceWith(controller)
+  await service.create({ terminalId: 'term-1', cols: 80, rows: 24 })
+  await service.attach({ sessionId: SESSION, terminalId: 'term-1' })
+  await writer.waitFor((frame) => frame.method === 'nano.terminal.ended', 'ended')
+  const ended = writer.frames.find((frame) => frame.method === 'nano.terminal.ended')
+  assert.equal(ended.params.reason, 'slow-consumer')
+})
+
+test('rename reaches the official controller', async () => {
+  const controller = new FakeController()
+  const { service } = serviceWith(controller)
+  await service.create({ terminalId: 'term-1', cols: 80, rows: 24 })
+  assert.deepEqual(service.rename({ terminalId: 'term-1', title: 'work' }), { renamed: true })
+  assert.equal(controller.infos.get('term-1').title, 'work')
+})
+
+test('input queue clears queued commands on failure and enforces the byte cap', () => {
+  const input = new AttachmentInput(4)
+  assert.equal(input.push({ type: 'write', sequence: 1, data: 'abc' }), true)
+  assert.equal(input.push({ type: 'write', sequence: 2, data: 'de' }), false)
+  assert.equal(input.items.length, 0)
+  assert.equal(input.closed, true)
+  const bounded = new AttachmentInput(4)
+  assert.equal(bounded.push({ type: 'write', sequence: 1, data: 'abcd' }), true)
+  assert.equal(bounded.push({ type: 'resize', sequence: 2, cols: 80, rows: 24 }), false)
 })

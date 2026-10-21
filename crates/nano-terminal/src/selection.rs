@@ -79,10 +79,17 @@ impl Selection {
         if start_row == end_row && start_col == end_col {
             return None;
         }
-        // `contents_between` takes an exclusive end column.
+        // `contents_between` takes an exclusive end column. Clamp both ends to
+        // the parser width: a read-only attachment can be narrower than the
+        // viewport when the outer window grows.
         let (_, columns) = screen.size();
-        let end_column = end_col.saturating_add(1).min(columns);
-        let text = screen.contents_between(start_row, start_col, end_row, end_column);
+        let last_column = columns.saturating_sub(1);
+        let start_column = start_col.min(last_column);
+        let end_column = end_col.min(last_column).saturating_add(1);
+        if start_row == end_row && start_column >= end_column {
+            return None;
+        }
+        let text = screen.contents_between(start_row, start_column, end_row, end_column);
         if text.is_empty() {
             None
         } else {
@@ -138,5 +145,30 @@ mod tests {
         assert!(selection.contains(2, 2));
         assert!(!selection.contains(0, 3));
         assert!(!selection.contains(2, 3));
+    }
+}
+
+#[cfg(test)]
+mod clamp_tests {
+    use super::*;
+
+    #[test]
+    fn selection_columns_are_clamped_to_the_parser_width() {
+        let mut parser = vt100::Parser::new(4, 10, 0);
+        parser.process(b"hello\r\nworld");
+        let mut selection = Selection::start((0, 14));
+        selection.update((2, 14));
+        let text = selection.text(parser.screen());
+        assert!(text.is_none() || !text.unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_single_row_selection_beyond_the_width_is_empty() {
+        let mut parser = vt100::Parser::new(4, 10, 0);
+        parser.process(b"hello");
+        let mut selection = Selection::start((0, 9));
+        selection.update((0, 14));
+        // Both endpoints clamp to column 9, so there is no range to copy.
+        assert_eq!(selection.text(parser.screen()), None);
     }
 }

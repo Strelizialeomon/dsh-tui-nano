@@ -949,13 +949,19 @@ fn terminal_create_input_resize_reattach_close() {
     assert_eq!(create_again["terminal"]["id"], terminal_id);
 
     let hold = host
-        .request("nano.terminal.retain", json!({ "terminalId": terminal_id }))
+        .request(
+            "nano.terminal.retain",
+            json!({ "sessionId": session, "terminalId": terminal_id }),
+        )
         .expect("retain")["holdId"]
         .as_str()
         .expect("hold id")
         .to_string();
     let attached = host
-        .request("nano.terminal.attach", json!({ "terminalId": terminal_id }))
+        .request(
+            "nano.terminal.attach",
+            json!({ "sessionId": session, "terminalId": terminal_id }),
+        )
         .expect("attach");
     let attachment_id = attached["attachmentId"]
         .as_str()
@@ -963,7 +969,7 @@ fn terminal_create_input_resize_reattach_close() {
         .to_string();
     assert_eq!(attached["info"]["state"], "running");
     assert_eq!(attached["writable"], true);
-    assert!(attached["screen"].is_string());
+    assert!(attached["snapshot"].is_string());
 
     let marker = format!("nano-terminal-ok-{}", std::process::id());
     host.notify(
@@ -1005,9 +1011,12 @@ fn terminal_create_input_resize_reattach_close() {
     });
 
     let reattached = host
-        .request("nano.terminal.attach", json!({ "terminalId": terminal_id }))
+        .request(
+            "nano.terminal.attach",
+            json!({ "sessionId": session, "terminalId": terminal_id }),
+        )
         .expect("reattach");
-    let screen = reattached["screen"].as_str().expect("screen");
+    let screen = reattached["snapshot"].as_str().expect("screen");
     assert!(
         screen.contains(&marker),
         "reattached screen lost the prior output: {screen:?}"
@@ -1090,7 +1099,10 @@ fn terminal_retain_protects_the_process_until_release() {
     )
     .expect("terminal create");
     let hold = host
-        .request("nano.terminal.retain", json!({ "terminalId": terminal_id }))
+        .request(
+            "nano.terminal.retain",
+            json!({ "sessionId": session, "terminalId": terminal_id }),
+        )
         .expect("retain")["holdId"]
         .as_str()
         .expect("hold id")
@@ -1140,13 +1152,19 @@ fn terminal_process_exit_disables_input_then_drains() {
     )
     .expect("terminal create");
     let hold = host
-        .request("nano.terminal.retain", json!({ "terminalId": terminal_id }))
+        .request(
+            "nano.terminal.retain",
+            json!({ "sessionId": session, "terminalId": terminal_id }),
+        )
         .expect("retain")["holdId"]
         .as_str()
         .expect("hold id")
         .to_string();
     let attached = host
-        .request("nano.terminal.attach", json!({ "terminalId": terminal_id }))
+        .request(
+            "nano.terminal.attach",
+            json!({ "sessionId": session, "terminalId": terminal_id }),
+        )
         .expect("attach");
     let attachment_id = attached["attachmentId"]
         .as_str()
@@ -1219,7 +1237,10 @@ fn terminal_without_a_retain_hold_is_reclaimed() {
     )
     .expect("terminal create");
     let attached = host
-        .request("nano.terminal.attach", json!({ "terminalId": terminal_id }))
+        .request(
+            "nano.terminal.attach",
+            json!({ "sessionId": session, "terminalId": terminal_id }),
+        )
         .expect("attach without retain");
     let attachment_id = attached["attachmentId"]
         .as_str()
@@ -1308,4 +1329,84 @@ fn terminals_are_scoped_to_their_root_session_host() {
     assert!(closed.is_some(), "terminal close did not settle");
     clean_report(&host_a.shutdown());
     clean_report(&host_b.shutdown());
+}
+
+#[test]
+#[ignore = "spawns a real dsh host; run with --ignored"]
+fn nano_profile_has_no_user_terminal_agent_tool() {
+    let fixture = Fixture::new();
+    fixture.install();
+    let dsh_home = fixture
+        .options
+        .dsh_home
+        .clone()
+        .expect("fixture sets DSH_HOME");
+    let work = fixture.options.cwd.clone().expect("fixture sets cwd");
+    let output = Command::new("dsh")
+        .args(["--profile", "dsh-tui-nano", "--dump-config"])
+        .current_dir(&work)
+        .env("DSH_HOME", &dsh_home)
+        .output()
+        .expect("dsh --dump-config");
+    assert!(
+        output.status.success(),
+        "dump-config failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        text.contains("terminal-controller") && text.contains("dsh-api-terminal-controller"),
+        "the official user-terminal controller must be composed"
+    );
+    assert!(
+        !text.contains("dsh-tool-terminal"),
+        "the model-facing Agent terminal tool must not be composed: {text}"
+    );
+    assert!(
+        !text.contains("dsh-monitor"),
+        "the Monitor delivery path must not be composed by S09: {text}"
+    );
+}
+
+#[test]
+#[ignore = "spawns a real dsh host; run with --ignored"]
+fn host_shutdown_closes_a_live_terminal() {
+    let fixture = Fixture::new();
+    fixture.install();
+    let session = generate_root_session_id();
+    let host = fixture.start(&session, SessionMode::Create);
+    handshake(&host);
+    let shells = host
+        .request("nano.terminal.shells", json!({}))
+        .expect("terminal shells");
+    let shell = terminal_shell(&shells);
+    let terminal_id = format!("term-shutdown-{}", generate_root_session_id());
+    host.request(
+        "nano.terminal.create",
+        json!({ "terminalId": terminal_id, "cols": 80, "rows": 24, "shellPath": shell }),
+    )
+    .expect("terminal create");
+    host.request("nano.terminal.retain", json!({ "terminalId": terminal_id }))
+        .expect("retain");
+    host.request(
+        "nano.terminal.attach",
+        json!({ "sessionId": session, "terminalId": terminal_id }),
+    )
+    .expect("attach");
+    let outcome = host.shutdown();
+    clean_report(&outcome);
+    assert!(
+        outcome
+            .report
+            .as_ref()
+            .expect("report")
+            .steps
+            .iter()
+            .any(|step| step.name == "agents" && step.status == StepStatus::Stopped),
+        "the shutdown agents step owns terminal process cleanup: {outcome:?}"
+    );
 }

@@ -99,7 +99,7 @@ pub struct TerminalAttachment {
     /// Host metadata at attach time.
     pub info: TerminalInfo,
     /// Serialized bounded screen (ANSI), including scrollback limits.
-    pub screen: String,
+    pub snapshot: String,
 }
 
 /// Why an attachment ended.

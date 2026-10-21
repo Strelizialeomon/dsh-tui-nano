@@ -46,7 +46,6 @@ fn run() -> Result<(), String> {
     let mut terminal =
         TerminalGuard::new(!cli.no_alt_screen).map_err(|error| format!("terminal: {error}"))?;
     let mut dirty = true;
-    let mut mouse_capture = false;
     loop {
         let mut link_events = Vec::new();
         if let Some(link) = &app.link {
@@ -85,19 +84,7 @@ fn run() -> Result<(), String> {
                 _ => {}
             }
         }
-        let want_mouse = app.terminal_active();
-        if want_mouse != mouse_capture {
-            mouse_capture = want_mouse;
-            let mut stdout = io::stdout();
-            if mouse_capture {
-                let _ = execute!(stdout, EnableMouseCapture);
-            } else {
-                let _ = execute!(stdout, DisableMouseCapture);
-            }
-        }
-    }
-    if mouse_capture {
-        let _ = execute!(io::stdout(), DisableMouseCapture);
+        terminal.set_mouse_capture(app.terminal_active());
     }
     drop(terminal);
 
@@ -118,6 +105,7 @@ struct TerminalGuard {
     terminal: Terminal<CrosstermBackend<Stdout>>,
     alt_screen: bool,
     enhanced_keyboard: bool,
+    mouse_capture: bool,
 }
 
 impl TerminalGuard {
@@ -153,6 +141,7 @@ impl TerminalGuard {
                 terminal,
                 alt_screen,
                 enhanced_keyboard,
+                mouse_capture: false,
             })
         })();
         match result {
@@ -173,9 +162,28 @@ impl TerminalGuard {
     }
 }
 
+impl TerminalGuard {
+    /// Enable or disable mouse reporting; Drop always restores it.
+    fn set_mouse_capture(&mut self, enabled: bool) {
+        if self.mouse_capture == enabled {
+            return;
+        }
+        self.mouse_capture = enabled;
+        let mut stdout = io::stdout();
+        if enabled {
+            let _ = execute!(stdout, EnableMouseCapture);
+        } else {
+            let _ = execute!(stdout, DisableMouseCapture);
+        }
+    }
+}
+
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let mut stdout = io::stdout();
+        if self.mouse_capture {
+            let _ = execute!(stdout, DisableMouseCapture);
+        }
         if self.enhanced_keyboard {
             let _ = execute!(stdout, PopKeyboardEnhancementFlags);
         }

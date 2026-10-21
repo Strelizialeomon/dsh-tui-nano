@@ -119,4 +119,20 @@
 
 ## 10. 审核修订记录
 
-待本稿逐份过闸；上述验收均未执行。
+2026-10-21 实施 PR #25 重审（用户点重审；2 个只读 agent：规格符合性 + 对抗找 bug）。原始结论见 PR #25 评论。处置如下：
+
+| # | 严重度 | 发现 | 处置 |
+| --- | --- | --- | --- |
+| 1 | 重大 | 未知 create 的 pending id 被 list 结果误删，超时后另起新 id，旧 shell 变孤儿 | 已修：pending 不在 list 时保留并按同一 id 重试；close 按 pending id 发 `nano.terminal.close`；相关单测 |
+| 2 | 重大 | `nano.terminal.attach` 只收 terminalId、返回 screen，偏离 S01 的 sessionId/snapshot | 已修：协议、桥接、Rust、夹具与真实宿主测试全部对齐 S01 |
+| 3 | 重大 | 点击/拖选后 selection 不清，滚轮永久失效 | 已修：鼠标释放后清选择；单击不产生剪贴板；回归测试 |
+| 4 | 重大 | F9 选择器可在创建/连接中打开，选中后吞掉活动终端 | 已修：创建/连接/持有/pending 时拒绝；picker 入口再校验；epoch 丢弃迟到响应 |
+| 5 | 重大 | 正常状态下选择器不渲染（parser 为空时提前 return）；窄窗口越界 panic | 已修：picker 在占位页也绘制；按区域裁剪；TestBackend 回归 |
+| 6 | 次要 | 传输断开后迟到请求结果覆盖 disconnected；关闭成功后仍显示旧错误 | 已修：Disconnected 守卫 + epoch；close 成功清 error |
+| 7 | 次要 | 桥接输入队列无字节上限，失败后仍消费已排队命令 | 已修：按 maxBufferedBytes 计费、ack 释放、fail 清空；单测 |
+| 8 | 次要 | X10/UTF-8 鼠标释放按按下编码；选区列号未按 parser 宽度 clamp；鼠标捕获不随 panic 恢复 | 已修：release code 3、列 clamp、捕获移入 TerminalGuard::drop |
+| 9 | 次要 | Agent/Monitor 负向夹具是空断言 | 已修：真实 `--dump-config` 证明无 `dsh-tool-terminal`/`dsh-monitor` 行 |
+| 10 | 记录 | `slow-consumer` 不可达、未知 info.state 被吞、`--resume` 非安全 id 写路径、宿主关停终端 close 偶发失败 | 已修：原因分类、显式拒绝未知 state、id 校验、关停 close 有限重试 |
+| 11 | 记录 | 协议声明的部分错误码未使用；in-process carrier 无 inputWindow，Rust 以 maxBufferedBytes 为硬上限 | 保留：契约预留错误码；输入窗口简化写入 PR 自定细节，不伪造等待队列 |
+
+上述验收均未执行；真实 PTY 证据见 `docs/evidence/2026-10-21-s09/`，合并前逐项勾选。

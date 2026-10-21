@@ -22,19 +22,45 @@ const REMOTE_ERRORS = new Map([
 
 /** Bounded, single-consumer async input queue for one attachment. */
 export class AttachmentInput {
-  constructor() {
+  /**
+   * @param {number} maxBytes - provider buffer bound for unacknowledged bytes.
+   */
+  constructor(maxBytes = Number.POSITIVE_INFINITY) {
+    this.maxBytes = maxBytes
     this.items = []
     this.waiters = []
+    this.sizes = new Map()
+    this.bytes = 0
     this.error = undefined
     this.closed = false
   }
 
-  /** @param {object} item - official TerminalInput frame. */
+  /**
+   * Queue one official TerminalInput frame.
+   * @param {object} item - write or resize command.
+   * @returns {boolean} whether the frame was accepted.
+   */
   push(item) {
-    if (this.closed) return
+    if (this.closed) return false
+    const size = item.type === 'write' ? Buffer.byteLength(item.data, 'utf8') : 16
+    if (this.bytes + size > this.maxBytes) {
+      this.fail(new Error('inputFull: unacknowledged input exceeds maxBufferedBytes'))
+      return false
+    }
+    this.bytes += size
+    this.sizes.set(item.sequence, size)
     const waiter = this.waiters.shift()
     if (waiter !== undefined) waiter.resolve({ value: item, done: false })
     else this.items.push(item)
+    return true
+  }
+
+  /** Release one acknowledged command's byte budget. */
+  acknowledge(sequence) {
+    const size = this.sizes.get(sequence)
+    if (size === undefined) return
+    this.sizes.delete(sequence)
+    this.bytes = Math.max(0, this.bytes - size)
   }
 
   /** Fail the attachment without stopping the terminal process. */
@@ -42,14 +68,26 @@ export class AttachmentInput {
     if (this.closed) return
     this.closed = true
     this.error = error
+    // A failed attachment must not execute commands queued before the failure.
+    this.items = []
+    this.sizes.clear()
+    this.bytes = 0
     for (const waiter of this.waiters.splice(0)) waiter.reject(error)
   }
 
-  /** Half-close input. */
+  /** Half-close input; queued commands still drain in order. */
   close() {
     if (this.closed) return
     this.closed = true
     for (const waiter of this.waiters.splice(0)) waiter.resolve({ value: undefined, done: true })
+  }
+
+  /** Stop input and discard anything not yet read. */
+  discard() {
+    this.close()
+    this.items = []
+    this.sizes.clear()
+    this.bytes = 0
   }
 
   /**
@@ -63,7 +101,7 @@ export class AttachmentInput {
     return {
       next: () => this.next(),
       return: async () => {
-        this.close()
+        this.discard()
         return { value: undefined, done: true }
       },
       [Symbol.asyncIterator]() {
@@ -74,20 +112,18 @@ export class AttachmentInput {
 
   /** @returns {Promise<{value?: object, done: boolean}>} next command. */
   async next() {
-    while (true) {
-      if (this.items.length > 0) {
-        return { value: this.items.shift(), done: false }
-      }
-      if (this.error !== undefined) {
-        const error = this.error
-        this.error = undefined
-        throw error
-      }
-      if (this.closed) return { value: undefined, done: true }
-      const next = await new Promise((resolve, reject) => this.waiters.push({ resolve, reject }))
-      if (next.done) return { value: undefined, done: true }
-      return { value: next.value, done: false }
+    if (this.error !== undefined) {
+      const error = this.error
+      this.error = undefined
+      throw error
     }
+    if (this.items.length > 0) {
+      return { value: this.items.shift(), done: false }
+    }
+    if (this.closed) return { value: undefined, done: true }
+    const next = await new Promise((resolve, reject) => this.waiters.push({ resolve, reject }))
+    if (next.done) return { value: undefined, done: true }
+    return { value: next.value, done: false }
   }
 }
 
@@ -155,7 +191,11 @@ export class TerminalService {
    */
   list() {
     this.assertAvailable()
-    return { terminals: this.controller.list(this.session.id).map(sanitizeInfo) }
+    try {
+      return { terminals: this.controller.list(this.session.id).map(sanitizeInfo) }
+    } catch (error) {
+      throw mapRemoteError(error, 'list terminals')
+    }
   }
 
   /**
@@ -250,14 +290,30 @@ export class TerminalService {
    * Attach the current window to one terminal. The first official frame is a
    * bounded screen snapshot and is returned in the response; later output,
    * state and acknowledgements are live notifications.
-   * @param {{terminalId: string}} params - attach request.
+   * @param {{sessionId: string, terminalId?: string}} params - attach request.
    * @param {AbortSignal} [signal] - request cancellation before the snapshot.
    * @returns {Promise<object>} attachment baseline.
    */
   async attach(params, signal) {
     this.assertAvailable()
     this.assertLive()
-    const id = requireId(params?.terminalId)
+    if (typeof params?.sessionId !== 'string' || params.sessionId !== this.session.id) {
+      throw new RpcError('jsonrpc/invalid-params', 'sessionId must equal the host root session')
+    }
+    let id
+    if (params.terminalId !== undefined) {
+      id = requireId(params.terminalId)
+    } else {
+      const known = [...this.terminals.keys()]
+      const candidates = known.length > 0 ? known : this.controller.list(this.session.id).map((info) => info.id)
+      if (candidates.length !== 1) {
+        throw new RpcError(
+          'jsonrpc/invalid-params',
+          'terminalId is required when the session has no single terminal',
+        )
+      }
+      id = candidates[0]
+    }
     if (!this.terminals.has(id)) {
       // A recovered identity from a lost create response may already exist in
       // the official owner; only an explicit list/create may register it.
@@ -274,7 +330,7 @@ export class TerminalService {
     }
     if (record.attachment !== undefined) this.detachAttachment(record.attachment, 'detached')
     const attachmentId = `att-${String(++this.counter)}-${randomBytes(4).toString('hex')}`
-    const input = new AttachmentInput()
+    const input = new AttachmentInput(environment.maxBufferedBytes)
     const controller = new AbortController()
     const attachment = {
       id: attachmentId,
@@ -314,7 +370,7 @@ export class TerminalService {
         sequence: integer(frame.sequence, 'snapshot sequence'),
         writable: frame.writable === true && attachment.info.state === 'running',
         info: attachment.info,
-        screen: String(frame.screen ?? ''),
+        snapshot: String(frame.screen ?? ''),
       }
     } catch (error) {
       controller.abort(error)
@@ -398,11 +454,20 @@ export class TerminalService {
     }
     const failures = []
     for (const id of [...this.terminals.keys()]) {
-      try {
-        await this.controller.close(this.agent, id)
-      } catch (error) {
-        failures.push(`${id}: ${describe(error)}`)
+      let closed = false
+      let lastError
+      // The provider can report a surviving prompt child for one grace cycle.
+      // Keep shutdown clean by retrying the idempotent close within the budget.
+      for (let attempt = 0; attempt < 3 && !closed; attempt += 1) {
+        try {
+          await this.controller.close(this.agent, id)
+          closed = true
+        } catch (error) {
+          lastError = error
+          if (attempt < 2) await delay(150)
+        }
       }
+      if (!closed) failures.push(`${id}: ${describe(lastError)}`)
       this.terminals.delete(id)
     }
     this.closed = true
@@ -450,8 +515,15 @@ export class TerminalService {
       )
       return
     }
+    if (!attachment.input.push({ type: 'write', sequence, data: params.bytes })) {
+      this.failAttachment(
+        attachment,
+        'input-failed',
+        'inputFull: unacknowledged input exceeds maxBufferedBytes',
+      )
+      return
+    }
     attachment.lastInputSequence = sequence
-    attachment.input.push({ type: 'write', sequence, data: params.bytes })
   }
 
   /** Validate one ordered resize command. */
@@ -478,8 +550,15 @@ export class TerminalService {
       )
       return
     }
+    if (!attachment.input.push({ type: 'resize', sequence, cols: params.cols, rows: params.rows })) {
+      this.failAttachment(
+        attachment,
+        'input-failed',
+        'inputFull: unacknowledged input exceeds maxBufferedBytes',
+      )
+      return
+    }
     attachment.lastInputSequence = sequence
-    attachment.input.push({ type: 'resize', sequence, cols: params.cols, rows: params.rows })
   }
 
   /** Build an in-process invocation for the official attach uplink. */
@@ -523,9 +602,11 @@ export class TerminalService {
             info: attachment.info,
           })
         } else if (frame.type === 'ack') {
+          const sequence = integer(frame.sequence, 'ack sequence')
+          attachment.input.acknowledge(sequence)
           await this.emit('nano.terminal.ack', {
             attachmentId: attachment.id,
-            sequence: integer(frame.sequence, 'ack sequence'),
+            sequence,
             ...(frame.refusal === undefined ? {} : { refusal: frame.refusal }),
           })
         }
@@ -544,8 +625,14 @@ export class TerminalService {
       if (attachment.detaching || attachment.closeRequested || attachment.controller.signal.aborted) {
         endedReason = attachment.closeRequested ? 'closed' : 'detached'
       } else {
-        endedReason = 'failed'
-        endedDetail = describe(error)
+        const detail = describe(error)
+        if (/consumer exceeded|buffer/iu.test(detail)) {
+          endedReason = 'slow-consumer'
+          endedDetail = detail
+        } else {
+          endedReason = 'failed'
+          endedDetail = detail
+        }
       }
     } finally {
       this.attachments.delete(attachment.id)
@@ -594,7 +681,7 @@ export class TerminalService {
   detachAttachment(attachment, reason) {
     if (this.attachments.get(attachment.id) !== attachment) return
     attachment.detaching = true
-    attachment.input.close()
+    attachment.input.discard()
     attachment.controller.abort(new Error(`attachment ${reason}`))
     this.attachments.delete(attachment.id)
     const record = this.terminals.get(attachment.terminalId)
@@ -655,6 +742,9 @@ function integer(value, label) {
 
 function sanitizeInfo(info) {
   if (info === null || typeof info !== 'object') throw new Error('terminal info is missing')
+  if (info.state !== 'running' && info.state !== 'exited' && info.state !== 'failed') {
+    throw new Error(`unknown terminal state ${String(info.state)}`)
+  }
   const shell = info.shell ?? {}
   return {
     id: String(info.id),
@@ -667,7 +757,7 @@ function sanitizeInfo(info) {
     cwd: String(info.cwd ?? ''),
     cols: Number(info.cols ?? 0),
     rows: Number(info.rows ?? 0),
-    state: info.state === 'exited' || info.state === 'failed' ? info.state : 'running',
+    state: info.state,
     exitCode: Number.isSafeInteger(info.exitCode) ? info.exitCode : null,
     ...(typeof info.error === 'string' ? { error: info.error } : {}),
   }

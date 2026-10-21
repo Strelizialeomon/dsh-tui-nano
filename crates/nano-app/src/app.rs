@@ -83,8 +83,13 @@ pub enum Pending {
         /// Official message id being deleted.
         message_id: String,
     },
-    /// One S09 terminal request.
-    Terminal(RequestKind),
+    /// One S09 terminal request and the epoch it belongs to.
+    Terminal {
+        /// Pending identity.
+        kind: RequestKind,
+        /// Operation epoch; stale responses are ignored.
+        epoch: u64,
+    },
 }
 
 /// One frame of application state.
@@ -211,7 +216,11 @@ impl App {
         let data_root = link.data_root();
         let root_session_id = self.model.address().root_session_id.clone();
         self.terminal = Some(match TerminalStore::open(&data_root, &root_session_id) {
-            Ok(store) => TerminalState::new(store, (80, 24)),
+            Ok(store) => {
+                let mut terminal = TerminalState::new(store, (80, 24));
+                terminal.set_root_session_id(root_session_id);
+                terminal
+            }
             Err(error) => TerminalState::unavailable(error, (80, 24)),
         });
         self.link = Some(link);
@@ -231,21 +240,27 @@ impl App {
                     kind,
                     method,
                     params,
+                    epoch,
                 } => match self.link.as_ref().map(|link| link.request(method, params)) {
                     Some(Ok(id)) => {
-                        self.pending.insert(id, Pending::Terminal(kind));
+                        self.pending.insert(id, Pending::Terminal { kind, epoch });
                     }
                     Some(Err(message)) => {
                         if let Some(terminal) = self.terminal.as_mut() {
-                            commands
-                                .extend(terminal.on_response(kind, Err(Failure::unknown(message))));
+                            commands.extend(terminal.on_response_epoch(
+                                epoch,
+                                kind,
+                                Err(Failure::unknown(message)),
+                            ));
                         }
                     }
                     None => {
                         if let Some(terminal) = self.terminal.as_mut() {
-                            commands.extend(
-                                terminal.on_response(kind, Err(Failure::unknown("宿主未就绪"))),
-                            );
+                            commands.extend(terminal.on_response_epoch(
+                                epoch,
+                                kind,
+                                Err(Failure::unknown("宿主未就绪")),
+                            ));
                         }
                     }
                 },
@@ -778,7 +793,7 @@ impl App {
                     }
                 }
             }
-            Pending::Terminal(kind) => {
+            Pending::Terminal { kind, epoch } => {
                 let result = result.map_err(|error| Failure {
                     definite: !matches!(error.kind, RequestErrorKind::Unknown),
                     message: error.message,
@@ -786,7 +801,7 @@ impl App {
                 let commands = self
                     .terminal
                     .as_mut()
-                    .map(|terminal| terminal.on_response(kind, result))
+                    .map(|terminal| terminal.on_response_epoch(epoch, kind, result))
                     .unwrap_or_default();
                 self.dispatch_terminal(commands);
             }

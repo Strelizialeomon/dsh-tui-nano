@@ -59,6 +59,16 @@ impl TerminalStore {
     /// Open (or create) the store. A malformed file is an explicit error: the
     /// caller must not silently lose a pending identity.
     pub fn open(data_root: &Path, root_session_id: &str) -> Result<Self, String> {
+        if root_session_id.is_empty()
+            || root_session_id.len() > 128
+            || !root_session_id.chars().all(|character| {
+                character.is_ascii_alphanumeric() || character == '_' || character == '-'
+            })
+        {
+            return Err(format!(
+                "root session id {root_session_id:?} is not a safe identity; expected [A-Za-z0-9_-]{{1,128}}"
+            ));
+        }
         let directory = data_root.join("runtime-data").join(root_session_id);
         fs::create_dir_all(&directory).map_err(|error| {
             format!(
@@ -243,5 +253,20 @@ mod tests {
         fs::write(directory.join("terminal.json"), b"not json").unwrap();
         let error = TerminalStore::open(&root, "session-a").unwrap_err();
         assert!(error.contains("not valid JSON"), "{error}");
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    #[test]
+    fn unsafe_session_ids_are_rejected_before_any_path_join() {
+        let root = std::env::temp_dir().join(format!("nano-terminal-id-{}", std::process::id()));
+        for id in ["", "../escape", "/absolute", "with/slash", "with space"] {
+            let error = TerminalStore::open(&root, id).unwrap_err();
+            assert!(error.contains("not a safe identity"), "{id:?}: {error}");
+        }
+        assert!(TerminalStore::open(&root, "session-abc_123").is_ok());
     }
 }

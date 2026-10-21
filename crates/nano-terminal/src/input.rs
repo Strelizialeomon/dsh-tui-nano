@@ -251,7 +251,13 @@ pub fn encode_mouse(
         return None;
     }
     let modifiers = mouse_modifiers(event.modifiers);
-    let code = base + modifiers;
+    // SGR reports releases with a lowercase final byte. X10/UTF-8 releases use
+    // button code 3; reusing the pressed button would look like a second press.
+    let code = if encoding != MouseProtocolEncoding::Sgr && kind == 'm' {
+        3 + modifiers
+    } else {
+        base + modifiers
+    };
     let column = event.column - area.x + 1;
     let row = event.row - area.y + 1;
     match encoding {
@@ -460,5 +466,27 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn x10_release_uses_button_code_three() {
+        let area = Rect::new(0, 0, 20, 10);
+        let down = encode_mouse(
+            &mouse(MouseEventKind::Down(MouseButton::Left), 2, 3),
+            area,
+            MouseProtocolMode::PressRelease,
+            MouseProtocolEncoding::Default,
+        )
+        .unwrap();
+        let up = encode_mouse(
+            &mouse(MouseEventKind::Up(MouseButton::Left), 2, 3),
+            area,
+            MouseProtocolMode::PressRelease,
+            MouseProtocolEncoding::Default,
+        )
+        .unwrap();
+        assert_ne!(down, up);
+        assert_eq!(down[3], 32);
+        assert_eq!(up[3], 32 + 3);
     }
 }

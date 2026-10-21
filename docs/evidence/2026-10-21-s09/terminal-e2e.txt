@@ -1,11 +1,13 @@
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.02s
      Running tests/integration.rs (target/debug/deps/integration-2d092d642fa50042)
 
-running 5 tests
+running 7 tests
+test host_shutdown_closes_a_live_terminal ... ok
+test nano_profile_has_no_user_terminal_agent_tool ... ok
 test terminal_create_input_resize_reattach_close ... ok
 test terminal_process_exit_disables_input_then_drains ... ok
 test terminal_retain_protects_the_process_until_release ... ok
 test terminal_without_a_retain_hold_is_reclaimed ... ok
 test terminals_are_scoped_to_their_root_session_host ... ok
 
-test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 22.74s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 25.25s
