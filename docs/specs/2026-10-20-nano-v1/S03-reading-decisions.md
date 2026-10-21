@@ -59,7 +59,7 @@ S03 不生成第二份 transcript。所有正文、工具调用、工具结果�
 
 - 每个工具行保留业务身份和状态；失败、被中断、被拒绝、结果未知必须显式，不能显示成成功。
 - 有退出码时显示真实退出码或信号；缺失退出码时明确标记「未知」，不能补零或猜成功。
-- 参数与结果按原始字段展示；路径、文件名只在官方记录存在时显示。工具结果的 `FileDiff`/`FsDiffMeta` 没有增删统计字段、没有逐行坐标；`workspace-changes` 的 turn 级 diff 有 `added`/`deleted`/`oldStart`/`newStart`，但那是整轮摘要，不能贴到单个工具卡。工具卡统计由 `oldText`/`newText` 本地计算，UI 只显示 `+N -M`，不显示来源标签；来源说明放详情/诊断。`write` overwrite 的 `oldText` 是 null，删除数不可知：只显示已知新增，或不显示删除数，不伪造 `-0`。保留 demo 的 4ch 行号槽和 2ch 标记槽：只有官方/工具结果提供真实 patch 坐标时才逐行填数字，没有就留空；不复制 demo 的合成行号。`FileLocation.line` 是 read/insert 的焦点行，不是 diff 坐标。
+- 参数与结果按原始字段展示；路径、文件名只在官方记录存在时显示。工具结果的 `FileDiff`/`FsDiffMeta` 没有增删统计字段、没有逐行坐标；`workspace-changes` 的 turn 级 diff 有 `added`/`deleted`/`oldStart`/`newStart`，但那是整轮摘要，不能贴到单个工具卡。工具卡统计由 `oldText`/`newText` 本地计算，UI 只显示 `+N -M`，不显示来源标签；来源说明放详情/诊断。`write` overwrite 的 `oldText` 是 null，删除数不可知：只显示已知新增，或不显示删除数，不伪造 `-0`。保留 design-contract 的 4ch 行号槽和 2ch 标记槽：只有官方/工具结果提供真实 patch 坐标时才逐行填数字，没有就留空；不复制 demo 的合成行号。`FileLocation.line` 是 read/insert 的焦点行，不是 diff 坐标。
 - 代码差异使用统一的增删底色和行内变化强调；块头放文件名与 `+N -M`，不显示来源标签；待应用与已应用状态分开。
 - 长差异默认最多 8 个可视代码行，多个修改段共享预算，优先保留第一处完整变更；超长单行的续行也计入。隐藏范围必须明确提示。
 - 整块点击展开后仍是同一份差异，不提供「复制修改后代码」或「展开原始差异」按钮；系统文本选择与复制保留。
@@ -71,9 +71,9 @@ S03 不生成第二份 transcript。所有正文、工具调用、工具结果�
 问卷卡占用输入位，是场景上的独立焦点，不改变底层会话归属。视觉和行为沿用已确认的 Pi 风格：
 
 1. 单列编号；标题与说明分行；焦点指针与已选项分开，焦点不等于答案。
-2. 单选：焦点始终在选项或 Other 上；Enter 选中焦点项并提交，数字键直选。多选：空格切换勾选；Enter 不暗加焦点项，单题内提交所选，多题 batch 里翻到下一题。多题最后整体提交走 §4.4 的确认动作。这是 demo 的交互基线；官方 Web 的「Enter 提交整批不选中」不照搬。
+2. 单选：焦点始终在选项或 Other 上；Enter 选中焦点项并提交，数字键直选。多选：空格切换勾选；Enter 不暗加焦点项，单题内提交所选，多题 batch 里翻到下一题。多题最后整体提交走「提交页」：最后一题 Enter 先翻到提交页，再在提交页 Enter 或确认按钮提交；不是最后一题直接提交整批。焦点指针必须可见。这是 design-contract/样稿的交互基线；官方 Web 的「Enter 提交整批不选中」不照搬。
 3. Other 行内输入；多选草稿在打开或编辑 Other 时保留已选标签，提交项可以同时带 `selected` 和 `custom`；单选的自定义答案保持互斥。
-4. 多题可分页回看；Enter 在 batch 里翻到下一题，不直接提交整批；最后整体提交用确认动作。缺项返回第一个未完成题，不静默跳过。
+4. 多题可分页回看；Enter 在 batch 里翻到下一题，不直接提交整批；最后一题 Enter 翻到提交页，再在提交页 Enter/确认按钮整体提交。缺项返回第一个未完成题，不静默跳过。
 5. Skip 保留其他草稿，并为该题提交既有的空结果；Skip 不是取消整张卡。
 6. 关闭卡片不等于作答：有关联工具调用的请求，关闭只离开输入位，工具行可以重新打开；没有关联调用的请求，关闭即取消整个等待并明确告知。
 7. 结果契约是每题 `{ id, selected, custom? }`，不是只有 `selected/custom`。官方没有独立 Notes/Chat 通道时不画空入口，不发明无法回传的结果字段。
@@ -115,6 +115,7 @@ S03 不生成第二份 transcript。所有正文、工具调用、工具结果�
 
 - [ ] 用真实工具调用展示命令、输出、失败和退出码；缺失退出码、被中断、结果未知不显示成成功。
 - [ ] 用真实代码修改展示文件名、本地计算的 `+N -M`（UI 不显示来源标签）、增删底色和长差异预算；有真实坐标才填行号，没有就留空，不伪造。
+- [ ] `write` overwrite 没有 before-image 时，不显示删除数或标 coarse，不伪造 `-0`；该用例必须进验收。
 - [ ] 限时问卷走 `userQuestions` 投影；默认 blocking 问卷靠 pending request/transcript 记录；两者重连后都能恢复正确状态；tool-call-keyed 草稿可跨重载恢复，unkeyed 不能。
 - [ ] 审批在同一宿主 generation 内跨连接 replay；进程重启/回合结束只出现 `TOOL_OUTCOME_UNKNOWN`/`turn/end: interrupted`，不显示 cancelled/unavailable，也不重建可操作旧卡。
 - [ ] D04 接口：S12 能挂载只读/可交互 transcript 视图，复用同一渲染器，不另建输出文件或第二份日志。
@@ -144,6 +145,7 @@ S03 不生成第二份 transcript。所有正文、工具调用、工具结果�
 | 分设备滚轮 + 滚动抑制后台轮询 | 滚动手感一致、不掉帧；没有则速度异常/卡顿 | 参照 Claude Code；需终端实测 |
 | 整块点击开关 | 不新增小按钮，拖选复制不误触；没有则点击标题的窄入口难用 | 用户已确认；需处理选择手势 |
 | 统一差异块 | 文件名、`+N -M`、4ch/2ch 槽位、有坐标才填行号、增删色；没有则代码变更不可辨 | 用户已确认；统计本地计算，来源放详情 |
+| write overwrite 无 before-image | 删除数不可知，不伪造 -0；没有则统计撒谎 | 作者设计；只显示已知新增或标 coarse |
 | 单列问卷与焦点/选择分离 | 避免焦点冒充答案和多题误提交；没有则多选/Other 结果错 | 用户已确认；多题多一次整体确认 |
 | 每题 `{ id, selected, custom? }` | 官方答案批次要求逐题 id；没有则整批被拒 | 官方契约；不能只传 selected/custom |
 | 限时 continued / `ASK_TIMED_OUT` | 到期后仍可回答，答案改走 userQuestions/answer；没有则提交走死通道 | 官方 timed schema；需 profile 开 mode: timed |
@@ -166,7 +168,8 @@ S03 不生成第二份 transcript。所有正文、工具调用、工具结果�
 - 审批请求没有 `callId` 或关联不到工具参数时，不显示命令区域；这是作者设计，避免猜命令。
 - 本地审批超时只能映射到 `cancelled`/`unavailable`；官方没有 `timeout` outcome。这是作者设计。
 - 限时问卷需要 S01 的 profile 显式配置 `tool-ask-user` 的 `mode: timed`；未配置时按 blocking 处理，不伪造 timed 投影。
-- 官方 diff 没有每工具增删统计和逐行坐标；S03 的统计是本地从 `oldText`/`newText` 计算，但 UI 保持 demo 的 `+N -M`，不加「本地统计」字样；行号槽保留，有真实坐标才填数字。
+- 官方 diff 没有每工具增删统计和逐行坐标；S03 的统计是本地从 `oldText`/`newText` 计算，但 UI 保持 design-contract 的 `+N -M`，不加「本地统计」字样；行号槽保留，有真实坐标才填数字。
+- `write` overwrite 的 `oldText` 是 null：删除数不可知，不显示删除数或标 coarse，不伪造 `-0`。这是作者设计，必须进验收。
 - 视觉以 S13 的 design-contract 为准；design-contract 的基准是 `docs/design/2026-10-17-dsh-tui-ux-research/preview/index.html` 和同目录截图（4ch 行号槽、2ch 标记槽、8 行差异预算、颜色/间距）。S03 不另定颜色/间距/行高，也不把 demo 的浏览器 px 直接冻结成终端值。
 
 ## 10. 审核修订记录

@@ -29,7 +29,7 @@
 ## 3. 目录与导航
 
 - 原对话底部只列直接子代理，最多 4 个可直接展示，多余折叠为一个入口；不列父级对话。外部叶子项显示为不可导航项。底部 pill 显示 `N local agents`，不与 shell/monitor 混计。
-- 底部状态灯按 S13 design-contract（基准 demo）：running 用 accent 以 0.8s `steps(1,end)` 闪烁，`prefers-reduced-motion` 时静止；error 红色，cancelled 黄色，completed 绿色。Dock 显示最多 4 个直接子代理 + 1 个溢出入口（共 5 行）；settled 三态约 1.5 秒后清理，可续聊子代理的普通回合完成不清理。
+- 底部状态灯按 S13 design-contract：running 用 accent 亮/暗两态、0.8s 间隔闪烁；completed 绿；aborted/refusal/max-tokens 黄；error 红；unknown/inactive 用 muted。reduced-motion 的检测方式（设置或环境）由 S13 contract 定义，开启时闪烁静止。Dock 显示 4 个直接子代理 + 1 个溢出入口；只有 `subagent/end` 终态约 1.5 秒后清理，可续聊子代理的普通回合完成不清理。
 - 底部 dock 的键盘操作：↑↓ 选择，Enter/→/Space 进入，`f` 打开完整 transcript，`k` 停止，Esc 返回。停止只停当前回合，不清空排队消息（见 §6）。
 - 全部列表显示递归发现的后代，带父级关系；不可读的分支显示诊断，不静默丢弃。
 - 进入方式：点击、聚焦后 Enter/→ 或 Space；外部叶子项不响应进入。进入后隐藏原对话的同级任务列表，顶部只标识「子代理」和任务名称。
@@ -95,8 +95,8 @@
 - [ ] 状态分两层：持久 catalog 只有成员身份；控制面 `list_agents`/`SubagentCatalogRow.activity` 才报 running|inactive；`stopReason` 从 `subagent/end` 读取，未知值按 `unknown`；`lastTurnCompleted` 从 `subagentTiming` 读取。
 - [ ] exact parent live 时输入/Send 可用（child 运行中也一样）；parent 不可用且 child 未运行时只读 composer；parent 不可用且 child 运行中输入/Send 禁用但 Stop 可用。
 - [ ] 未知模式的行可点击，读 child history 确认 mode 后才恢复输入；不直接读原始日志。
-- [ ] 底部状态灯：running 0.8s 闪烁、error 红、cancelled 黄、completed 绿；`prefers-reduced-motion` 时闪烁停止；dock 显示 4 个直接子代理 + 1 个溢出入口。
-- [ ] settled 三态约 1.5 秒后清理；可续聊子代理的普通回合完成不清理，记录仍可从全部列表找回。
+- [ ] 底部状态灯：running 0.8s 亮/暗闪烁；completed 绿；aborted/refusal/max-tokens 黄；error 红；unknown/inactive muted；reduced-motion 开启时静止；dock 显示 4 个直接子代理 + 1 个溢出入口。
+- [ ] 只有 `subagent/end` 终态约 1.5 秒后清理；可续聊子代理的普通回合完成不清理，记录仍可从全部列表找回。
 - [ ] 底部 dock：↑↓ 选择、Enter/→/Space 进入、`f` 看 transcript、`k` 停止、Esc 返回；pill 显示 `N local agents`，不混 shell/monitor。
 - [ ] 子对话中的工具、差异、问卷与主会话渲染一致；审批策略被官方钉死为 `never`，不出现可放行的审批卡。
 - [ ] 子代理草稿独立；退出再进入恢复，不影响父草稿；中文输入组合态不误发。
@@ -130,8 +130,8 @@
 
 ## 10. 自定细节
 
-- 底部最多 4 个直接子代理 + 1 个溢出入口、settled 三态约 1.5 秒清理、可续聊普通回合不清理，均为样稿建议值，实施时可按终端实测调整，但必须保持「记录不丢」。
-- 底部 pill 显示 `N local agents`，不与 shell/monitor 混计；状态灯颜色/闪烁按 S13 design-contract（基准 demo：running accent 0.8s steps、error 红、cancelled 黄、completed 绿），reduced motion 时静止。
+- 底部最多 4 个直接子代理 + 1 个溢出入口、`subagent/end` 终态约 1.5 秒清理、可续聊普通回合不清理，均按 S13 design-contract 的初始值执行；改值需更新契约，不能由实现任意调整。
+- 底部 pill 显示 `N local agents`，不与 shell/monitor 混计；状态灯颜色/闪烁按 S13 design-contract（running accent 0.8s 亮暗、completed 绿、aborted/refusal/max-tokens 黄、error 红、unknown/inactive muted），reduced-motion 时静止。
 - 全部列表的默认排序按父事件顺序；S12 不另造最近使用排序。
 - 子代理输入框的提示语、只读标记和错误文案由 S12 定；最终键位由 S13 的 design-contract 冻结，不交给 S02。
 - 首版不提供跨父会话的子代理全局搜索。

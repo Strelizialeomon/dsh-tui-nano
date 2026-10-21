@@ -13,7 +13,7 @@
 
 S13 额外拥有 `docs/release/design-contract.md`：统一键位、布局槽位、主题 token 和视觉基准的冻结契约。S13 只定义/冻结这份契约并做发布验收，不实现界面；各子件引用同一份契约，不能各自再定义一套键位或主题。
 
-design-contract 的视觉基准固定为 `docs/design/2026-10-17-dsh-tui-ux-research/preview/index.html` 和同目录截图：dark/light 两套颜色 token、4ch 行号槽 + 2ch 标记槽、8 行差异预算、输入框上下各一条单单元格高的上下文线（左侧占比色段；正常 accent、约 80% warning、约 95% error、未知回退普通边框）、底部权限/瞬态/cwd、子代理状态灯（running 0.8s 闪烁、error 红、cancelled 黄、completed 绿，reduced motion 时静止）、装饰性 emoji 默认 0 个。间距以终端单元格为单位，不冻结浏览器 px、14px 字号或 22px 行高；字号由用户终端控制。
+design-contract 的视觉基准固定为 `docs/design/2026-10-17-dsh-tui-ux-research/preview/index.html` 和同目录截图：dark/light 两套颜色 token、4ch 行号槽 + 2ch 标记槽、8 行差异预算、输入框上下各一条单单元格高的上下文线（左侧占比色段；正常 accent、约 80% warning、约 95% error、未知回退普通边框）、底部权限/瞬态/cwd、子代理 dock 4 个直接行 + 1 个溢出入口、子代理状态灯（running 0.8s 亮/暗闪烁；completed 绿；aborted/refusal/max-tokens 黄；error 红；unknown/inactive muted）、主会话忙碌指示约 500ms、装饰性 emoji 默认 0 个。reduced-motion 的检测方式（设置项/环境变量/终端能力）由 design-contract 明确；开启时子代理闪烁和忙碌指示都静止。间距以终端单元格为单位，不冻结浏览器 px、14px 字号或 22px 行高；字号由用户终端控制。
 
 ## 2. 支持矩阵
 
