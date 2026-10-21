@@ -189,12 +189,26 @@ impl ConversationHistory {
     /// Apply one official durable event.
     pub fn apply(&mut self, event: &SessionEvent) -> HistoryEffect {
         let mut effect = HistoryEffect::default();
-        // A compaction summary is appended as a user message with a surface
-        // `replace` operation. Drop the shadowed display rows first so the feed
-        // matches the official current surface instead of keeping stale items.
-        if let Some((start, end)) = event.replacement_range() {
-            self.items
-                .retain(|item| !(start..=end).contains(&item_seq(item)));
+        // Surface replacements belong to the model view. The human transcript
+        // keeps the append-origin rows the user already saw, so a replacement
+        // message never adds a display row; Assistant settlements still retire
+        // their live preview.
+        if event.replacement_range().is_some() {
+            match event.event_type.as_str() {
+                "assistant/message" | "assistant/attempt" => {
+                    let turn = event.data.get("turn").and_then(Value::as_u64);
+                    let step = event.data.get("step").and_then(Value::as_u64);
+                    if let (Some(turn), Some(step)) = (turn, step) {
+                        if event.event_type == "assistant/message" {
+                            effect.assistant_settled = Some((turn, step));
+                        } else {
+                            effect.attempt_settled = Some((turn, step));
+                        }
+                    }
+                }
+                _ => {}
+            }
+            return effect;
         }
         match event.event_type.as_str() {
             "user/message" => {
@@ -246,6 +260,17 @@ impl ConversationHistory {
                     }
                 }
             }
+            // Compaction is a model-surface replacement, not a human history
+            // edit: the append-origin rows the user already saw stay, and the
+            // transaction gets its own boundary notice. The checkpoint message
+            // that shadows the range is skipped in `user_message`.
+            "compaction/summary" | "compaction/prune" => {
+                if let Some(message) =
+                    compaction_notice(event.seq, event.event_type.as_str(), &event.data)
+                {
+                    self.push(ConversationItem::Message(message));
+                }
+            }
             _ => {}
         }
         effect
@@ -273,7 +298,12 @@ impl ConversationHistory {
             .get("source")
             .and_then(|source| source.get("kind"))
             .and_then(Value::as_str);
-        let kind = if source_kind == Some("bash-mode") {
+        let kind = if source_kind == Some("compact-checkpoint") {
+            // The replacement message is the model-facing summary. The human
+            // transcript keeps the append-origin rows and shows the
+            // `compaction/summary` notice instead.
+            return None;
+        } else if source_kind == Some("bash-mode") {
             MessageKind::SyntheticBash
         } else if source_kind == Some("user") {
             // A real user prompt is never reclassified by its text, even when
@@ -458,12 +488,31 @@ fn is_synthetic_bash(text: &str) -> bool {
     TAGS.iter().any(|tag| text.contains(tag))
 }
 
-/// Durable sequence of one display item.
-fn item_seq(item: &ConversationItem) -> u64 {
-    match item {
-        ConversationItem::Message(message) => message.seq,
-        ConversationItem::ToolCall(call) => call.seq,
-    }
+/// Display-only boundary notice for one compaction transaction. Counts and the
+/// estimated price come from the official log-only event; no history is erased.
+fn compaction_notice(seq: u64, event_type: &str, data: &Value) -> Option<MessageView> {
+    let count = data.get("shadowedSeqs")?.as_array()?.len();
+    let tokens = data
+        .get("shadowedTokenCount")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let verb = if event_type == "compaction/prune" {
+        "裁剪"
+    } else {
+        "压缩"
+    };
+    Some(MessageView {
+        seq,
+        message_id: None,
+        kind: MessageKind::Notice,
+        text: format!("已{verb} {count} 条较老历史（约 {tokens} tokens）；最近历史保留"),
+        rpc_id: None,
+        turn: None,
+        step: None,
+        interrupted: false,
+        tool_call_id: None,
+        is_error: false,
+    })
 }
 
 #[cfg(test)]
@@ -639,10 +688,10 @@ mod tests {
     }
 
     #[test]
-    fn a_compaction_replacement_drops_the_shadowed_rows() {
+    fn a_compaction_replacement_keeps_append_origin_rows_and_hides_the_checkpoint() {
         let mut history = ConversationHistory::default();
         for seq in 1..=5 {
-            history.apply(&event(
+            let mut message = event(
                 seq,
                 "user/message",
                 json!({
@@ -651,7 +700,9 @@ mod tests {
                     "content": [{"type": "text", "text": format!("message {seq}")}],
                     "source": {"kind": "user"}
                 }),
-            ));
+            );
+            message.surface_op = Some(json!("append"));
+            history.apply(&message);
         }
         let mut replacement = event(
             6,
@@ -665,13 +716,69 @@ mod tests {
         );
         replacement.surface_op = Some(json!({"op": "replace", "startSeq": 3, "endSeq": 4}));
         history.apply(&replacement);
-        let seqs: Vec<u64> = history.items().iter().map(item_seq).collect();
-        assert_eq!(seqs, vec![1, 2, 5, 6]);
-        let ConversationItem::Message(summary) = &history.items()[3] else {
-            panic!("expected summary message");
+        // The model surface replaced 3..4, but the human transcript keeps every
+        // message the user already saw; the checkpoint is not a chat message.
+        let seqs: Vec<u64> = history
+            .items()
+            .iter()
+            .map(|item| match item {
+                ConversationItem::Message(message) => message.seq,
+                ConversationItem::ToolCall(call) => call.seq,
+            })
+            .collect();
+        assert_eq!(seqs, vec![1, 2, 3, 4, 5]);
+        assert!(history.items().iter().all(|item| {
+            !matches!(item, ConversationItem::Message(message) if message.text == "summary of 3..4")
+        }));
+    }
+
+    #[test]
+    fn a_replacement_assistant_message_retires_the_preview_without_adding_a_row() {
+        let mut history = ConversationHistory::default();
+        let mut replacement = event(
+            9,
+            "assistant/message",
+            json!({
+                "turn": 2,
+                "step": 1,
+                "message": {"id": "a-1", "content": [{"type": "text", "text": "model view only"}]}
+            }),
+        );
+        replacement.surface_op = Some(json!({"op": "replace", "startSeq": 3, "endSeq": 4}));
+        let effect = history.apply(&replacement);
+        assert_eq!(effect.assistant_settled, Some((2, 1)));
+        assert!(history.items().is_empty());
+    }
+
+    #[test]
+    fn a_compaction_transaction_adds_a_boundary_notice_with_official_counts() {
+        let mut history = ConversationHistory::default();
+        history.apply(&event(
+            7,
+            "compaction/summary",
+            json!({
+                "compactionId": "c-1",
+                "summary": [{"type": "text", "text": "older work"}],
+                "shadowedSeqs": [1, 2, 3],
+                "shadowedTokenCount": 456
+            }),
+        ));
+        let ConversationItem::Message(notice) = &history.items()[0] else {
+            panic!("expected compaction notice");
         };
-        assert_eq!(summary.kind, MessageKind::Injected);
-        assert_eq!(summary.text, "summary of 3..4");
+        assert_eq!(notice.kind, MessageKind::Notice);
+        assert!(notice.text.contains("3 条"));
+        assert!(notice.text.contains("456 tokens"));
+
+        history.apply(&event(
+            8,
+            "compaction/prune",
+            json!({"shadowedSeqs": [4], "shadowedTokenCount": 10}),
+        ));
+        let ConversationItem::Message(prune) = &history.items()[1] else {
+            panic!("expected prune notice");
+        };
+        assert!(prune.text.contains("裁剪 1 条"));
     }
 
     #[test]

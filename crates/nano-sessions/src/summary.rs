@@ -115,6 +115,13 @@ impl SessionSummary {
         self.origin.as_deref() != Some("subagent")
     }
 
+    /// Whether this row may become the main session in the given working
+    /// directory. The official resume rejects a session recorded under another
+    /// cwd; the list must not present it as openable.
+    pub fn switchable_in(&self, cwd: &str) -> bool {
+        self.switchable() && self.cwd.as_deref().is_none_or(|recorded| recorded == cwd)
+    }
+
     /// Sort key: last activity when known, otherwise creation time.
     pub fn activity_at(&self) -> u64 {
         self.updated_at.unwrap_or(self.created_at)
@@ -226,6 +233,26 @@ mod tests {
         .unwrap();
         assert!(!row.switchable());
         assert_eq!(row.parent_session_id.as_deref(), Some("s-root"));
+    }
+
+    #[test]
+    fn a_session_recorded_under_another_directory_is_not_openable_here() {
+        let row = SessionSummary::parse(&json!({
+            "sessionId": "s-other",
+            "createdAt": 1,
+            "agentAvailable": false,
+            "running": false,
+            "cwd": "/work/a",
+            "current": false
+        }))
+        .unwrap();
+        assert!(row.switchable());
+        assert!(row.switchable_in("/work/a"));
+        assert!(!row.switchable_in("/work/b"));
+        // A session without a recorded cwd passes the host's cwd check.
+        let mut no_cwd = row.clone();
+        no_cwd.cwd = None;
+        assert!(no_cwd.switchable_in("/work/b"));
     }
 
     #[test]

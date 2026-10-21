@@ -89,13 +89,10 @@ export class SessionsService {
       throw new RpcError('nano/sessions/unavailable', 'the official session query service is not composed')
     }
     const records = await query.listSessions()
-    const sessions = records.map((record) => this.summarize(record))
-    sessions.sort((left, right) => {
-      const leftAt = left.updatedAt ?? left.createdAt
-      const rightAt = right.updatedAt ?? right.createdAt
-      return rightAt - leftAt || left.sessionId.localeCompare(right.sessionId)
-    })
-    return { sessions }
+    // Keep the official query's newest-first order; S07 does not re-sort. A
+    // cold row's last activity is not known cheaply, and re-sorting by a
+    // synthetic key would silently diverge from the official list.
+    return { sessions: records.map((record) => this.summarize(record)) }
   }
 
   /** Build one summary from official header, live state, and cached title hints. */
@@ -218,23 +215,22 @@ export class SessionsService {
       throw new RpcError('nano/sessions/rejected', `the context projection failed: ${describe(error)}`)
     }
     const pressure = snapshot.values.contextPressure ?? {}
-    const usage = snapshot.values.tokenUsage ?? {
-      uncachedInputTokens: 0,
-      outputTokens: 0,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-    }
+    const usage = snapshot.values.tokenUsage
     const breakdown = snapshot.values.contextBreakdown
     const payload = {
       sessionId: this.rootSessionId,
       asOfSeq: snapshot.asOfSeq,
       approximate: true,
-      tokenUsage: {
+    }
+    // A missing projection is unknown, not a zero. Do not invent billing
+    // numbers when the token meter is not composed.
+    if (usage !== undefined) {
+      payload.tokenUsage = {
         uncachedInputTokens: usage.uncachedInputTokens ?? 0,
         outputTokens: usage.outputTokens ?? 0,
         cacheReadTokens: usage.cacheReadTokens ?? 0,
         cacheWriteTokens: usage.cacheWriteTokens ?? 0,
-      },
+      }
     }
     if (Number.isInteger(pressure.projectedTokens)) payload.projectedTokens = pressure.projectedTokens
     if (Number.isInteger(pressure.contextWindow)) payload.contextWindow = pressure.contextWindow
@@ -289,6 +285,13 @@ export class SessionsService {
     try {
       execution = await commands.execute(this.agent, line, [], controller.signal)
     } catch (error) {
+      if (controller.signal.aborted) {
+        // The official command registry races the handler with the abort
+        // signal (`withAbort`) and rejects before the handler can return its
+        // official `Compaction cancelled.` text. Preserve that stable text and
+        // let the caller reread history; the backend still finishes cleanup.
+        return { kind: 'error', text: 'Compaction cancelled.' }
+      }
       throw new RpcError(
         'nano/sessions/rejected',
         `the compact command failed before it settled: ${describe(error)}`,

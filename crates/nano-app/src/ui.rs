@@ -132,6 +132,10 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
 fn draw_sessions(frame: &mut Frame, app: &App, area: Rect) {
     let title = match &app.panel.rename {
         Some(_) => " 会话 · 输入新标题 · Enter 应用，Esc 取消 ".to_string(),
+        None if app.compact_in_flight || app.compact_maybe_running => {
+            " 会话 · ↑↓ 选择 · Enter 切换 · n 改名 · c 压缩 · r 刷新 · Esc 取消压缩等待 "
+                .to_string()
+        }
         None => " 会话 · ↑↓ 选择 · Enter 切换 · n 改名 · c 压缩 · r 刷新 · Esc 关闭 ".to_string(),
     };
     let block = Block::default().borders(Borders::ALL).title(title);
@@ -151,6 +155,7 @@ fn draw_sessions(frame: &mut Frame, app: &App, area: Rect) {
         )));
     }
     let prefix_rows = rows.len();
+    let host_cwd = app.hello.as_ref().map(|hello| hello.cwd.as_str());
     push_session_row(
         &mut rows,
         app.panel.selected == 0,
@@ -172,6 +177,14 @@ fn draw_sessions(frame: &mut Frame, app: &App, area: Rect) {
         }
         if !row.switchable() {
             line.push_str(" · 子代理（不可作主会话）");
+        } else if let (Some(host), Some(recorded)) = (host_cwd, row.cwd.as_deref()) {
+            if host != recorded {
+                let name = std::path::Path::new(recorded)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or(recorded);
+                line.push_str(&format!(" · 目录 {name}（不可切换）"));
+            }
         }
         push_session_row(&mut rows, app.panel.selected == index + 1, line);
     }
@@ -196,6 +209,11 @@ fn draw_sessions(frame: &mut Frame, app: &App, area: Rect) {
     if app.compact_in_flight {
         footer.push(Line::from(Span::styled(
             "压缩：等待官方结果…（Esc 取消等待，历史以后端为准）",
+            Style::default().fg(Color::Yellow),
+        )));
+    } else if app.compact_maybe_running {
+        footer.push(Line::from(Span::styled(
+            "压缩：结果未知，可能仍在运行；Esc 取消等待并重读官方状态",
             Style::default().fg(Color::Yellow),
         )));
     }
@@ -265,18 +283,23 @@ fn push_context_details(lines: &mut Vec<Line<'static>>, app: &App) {
                 format!("  {}", meter.provenance_label(now_ms())),
                 Style::default().fg(Color::DarkGray),
             )));
-            let usage = meter.token_usage;
-            lines.push(Line::from(Span::styled(
-                format!(
-                    "计费用量（整个日志）：输入 {} + 输出 {} + 缓存读 {} / 写 {} = {}",
-                    usage.uncached_input_tokens,
-                    usage.output_tokens,
-                    usage.cache_read_tokens,
-                    usage.cache_write_tokens,
-                    usage.total()
-                ),
-                Style::default().fg(Color::DarkGray),
-            )));
+            match meter.token_usage {
+                Some(usage) => lines.push(Line::from(Span::styled(
+                    format!(
+                        "计费用量（整个日志）：输入 {} + 输出 {} + 缓存读 {} / 写 {} = {}",
+                        usage.uncached_input_tokens,
+                        usage.output_tokens,
+                        usage.cache_read_tokens,
+                        usage.cache_write_tokens,
+                        usage.total()
+                    ),
+                    Style::default().fg(Color::DarkGray),
+                ))),
+                None => lines.push(Line::from(Span::styled(
+                    "计费用量：未知（官方投影未提供）",
+                    Style::default().fg(Color::Yellow),
+                ))),
+            }
             if let Some(breakdown) = meter.breakdown {
                 lines.push(Line::from(Span::styled(
                     format!(

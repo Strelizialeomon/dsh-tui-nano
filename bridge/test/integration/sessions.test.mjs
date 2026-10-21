@@ -15,6 +15,17 @@ import { fileURLToPath } from 'node:url'
 const bridgeRoot = fileURLToPath(new URL('../..', import.meta.url))
 const installScript = path.join(bridgeRoot, 'profile', 'install.mjs')
 
+function countSessionLogs(dir) {
+  let count = 0
+  if (!fs.existsSync(dir)) return count
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const child = path.join(dir, entry.name)
+    if (entry.isDirectory()) count += countSessionLogs(child)
+    else if (entry.name.endsWith('.jsonl')) count += 1
+  }
+  return count
+}
+
 function startHost({ dsh, dshHome, dataRoot, work, sessionId, mode, generation, nonce, patchName }) {
   const runtimeId = `rt-sessions-${randomUUID()}`
   const patchPath = path.join(dataRoot, 'runtime', patchName)
@@ -218,6 +229,7 @@ test(
 
     // A second host for the same root is rejected by the Nano ledger before it
     // touches the session, with the holder pid for the UI.
+    const logsBeforeRejectedHost = countSessionLogs(path.join(dataRoot, 'sessions'))
     const second = startHost({
       dsh,
       dshHome,
@@ -239,6 +251,11 @@ test(
     assert.equal(occupied.params.code, 'occupied')
     assert.equal(occupied.params.holderPid, host.child.pid)
     await second.exit()
+    assert.equal(
+      countSessionLogs(path.join(dataRoot, 'sessions')),
+      logsBeforeRejectedHost,
+      'the rejected host did not create a session log',
+    )
 
     const shutdown = await host.call('nano.shutdown', {})
     assert.equal(shutdown.result.clean, true)
@@ -302,8 +319,15 @@ test(
     const coldRow = resumedList.result.sessions.find((row) => row.sessionId === otherId)
     assert.ok(coldRow, 'the second session is listed without opening it')
     assert.equal(coldRow.current, false)
+    assert.equal(coldRow.cwd, work)
     assert.equal(coldRow.title, null, 'a cold title is not read from this root cache')
     assert.equal(coldRow.updatedAt, undefined, 'cold activity stays unknown')
+    // A real cold session is refused without resuming it or taking its writer.
+    const coldRename = await resumed.call('nano.sessions.rename', {
+      sessionId: otherId,
+      title: '不能改',
+    })
+    assert.equal(coldRename.error.code, 1020)
     const resumedShutdown = await resumed.call('nano.shutdown', {})
     assert.equal(resumedShutdown.result.clean, true)
     assert.equal(await resumed.exit(), 0, resumed.stderr().slice(-2000))

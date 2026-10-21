@@ -359,20 +359,20 @@
       "pressureTokens": "integer?",
       "pressureAt": "integer?",
       "contextWindowAt": "integer?",
-      "tokenUsage": {
+      "tokenUsage?": {
         "uncachedInputTokens": "integer",
         "outputTokens": "integer",
         "cacheReadTokens": "integer",
         "cacheWriteTokens": "integer"
       },
-      "contextBreakdown": {
+      "contextBreakdown?": {
         "systemTokens": "integer",
         "toolsTokens": "integer",
         "messageTokens": "integer"
       }
     },
     "sessionsCompact": {
-      "commandId": "string",
+      "commandId": "string?",
       "kind": "enum:success|error",
       "text": "string?",
       "sourceEventSeq": "integer?"
@@ -848,8 +848,7 @@
         "required": [
           "sessionId",
           "asOfSeq",
-          "approximate",
-          "tokenUsage"
+          "approximate"
         ],
         "optional": [
           "projectedTokens",
@@ -857,6 +856,7 @@
           "pressureTokens",
           "pressureAt",
           "contextWindowAt",
+          "tokenUsage",
           "contextBreakdown"
         ]
       }
@@ -876,10 +876,10 @@
       "result": {
         "shape": "sessionsCompact",
         "required": [
-          "commandId",
           "kind"
         ],
         "optional": [
+          "commandId",
           "text",
           "sourceEventSeq"
         ]
@@ -914,7 +914,7 @@
         "type": "string",
         "data": "object",
         "time": "integer?",
-        "surfaceOp": "object?",
+        "surfaceOp": "string|object?",
         "sourceEventSeqs": "array?"
       }
     },

@@ -127,6 +127,14 @@ impl SwitchState {
         }
     }
 
+    /// Failure diagnostic, for choosing a safe retry mode.
+    pub fn failure_message(&self) -> Option<&str> {
+        match self {
+            Self::Failed { message, .. } => Some(message),
+            _ => None,
+        }
+    }
+
     /// User-facing state label.
     pub fn label(&self) -> String {
         match self {
@@ -289,6 +297,11 @@ mod tests {
         );
         assert!(machine.state().failed());
         assert_eq!(machine.state().label(), "会话被 pid 4242 占用");
+        assert!(machine
+            .state()
+            .failure_message()
+            .unwrap()
+            .contains("owner holds the session"));
         assert_eq!(machine.retry_target().unwrap().session_id, "b");
         assert_eq!(machine.back_target().unwrap().session_id, "a");
     }

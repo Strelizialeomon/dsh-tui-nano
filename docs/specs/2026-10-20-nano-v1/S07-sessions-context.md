@@ -118,4 +118,26 @@
 
 ## 10. 审核修订记录
 
-待本稿逐份过闸；上述验收均未执行。
+2026-10-21 实施 PR #22 重审（用户点「重审」；2 个只读 agent：规格符合性 + 对抗找 bug）。原始结论见 PR #22 评论。处置如下：
+
+| # | 严重度 | 发现 | 处置 |
+| --- | --- | --- | --- |
+| 规格-M1 | major | `/compact` 取消在官方 `commands.execute` 的 `withAbort` 上先 reject，桥接把取消显示成「压缩失败」且不重读历史 | 已修：桥接捕获 abort 并返回官方 `Compaction cancelled.`；app 取消时停止等待、显示该文本并重读上下文/快照；测试按官方 reject 行为模拟 |
+| 对抗-1 | major | 压缩的 `surfaceOp: replace` 被当成人类 transcript 编辑，删掉用户已看的旧消息并插入模型 summary | 已修：保留 append-origin 行，跳过 checkpoint 消息，用 `compaction/summary`/`prune` 画边界提示；与官方 chat 的过滤方向一致 |
+| 对抗-2 | major | 跨目录会话在列表里看似可切换，选中后先拆当前宿主再必然 resume 失败 | 已修：`switchable_in(cwd)` 在拆宿主前拒绝，列表标「目录 X（不可切换）」 |
+| 规格-m1 | minor | 冷会话改名证据用的是不存在的 ID，不是真实冷行 | 已修：恢复后的宿主对共享 `sessions/` 里真实冷会话再验 1020 |
+| 规格-m2 | minor | 双窗口证据只断言 occupied，未断言未创建会话 | 已修：断言被拒宿主退出后 `sessions/` 日志数不变 |
+| 规格-m3 | minor | 手动压缩入口绕过 S04 命令路径，`/compact` 传参路径 TUI 不可达 | 记录：S04 未实施；S07 直接消费官方 `ctx.commands`，S04 落地后对齐入口；证据 README 已写明 |
+| 规格-m4 | minor | 切换不保留阅读位置 | 记录：S03 未实施的前置依赖；S07 不持有锚点，草稿按地址保留 |
+| 规格-m5 / 对抗-9 | minor | 缺 `tokenUsage` 时补四个 0，把未知显示成官方事实 | 已修：契约与 Rust 类型改为可选，缺失显示「未知（官方投影未提供）」 |
+| 规格-m6 | minor | 压缩进行中显示本地话术，不是官方不可用原因 | 已修：使用官方稳定 busy 文本 |
+| 规格-m7 | minor | 改名回执未知被当成失败并恢复编辑器 | 已修：Unknown 不判失败、不重发、重读列表；编辑器只在面板仍打开时恢复 |
+| 对抗-3 | minor | 新建会话在物化后失败，重试仍走 Create 必失败 | 已修：失败消息含 `already exists` 时重试改为恢复同一 ID |
+| 对抗-4 | minor | 压缩超时后再取消，官方取消结果无人接收 | 已修：超时后保留可取消状态；取消在 app 本地停止等待、显示官方取消文本并重读，忽略迟到的压缩响应 |
+| 对抗-5 | minor | `surfaceOp` 契约写成 `object?`（实际可为 `"append"`），`contextBreakdown` 缺 `?` | 已修：契约改为 `string|object?`，`tokenUsage`/`contextBreakdown` 均可选 |
+| 对抗-6 | minor | 面板提示「Esc 取消等待」但 Esc 实际关面板 | 已修：压缩等待中面板 Esc 取消等待，标题同步 |
+| 对抗-7 | minor | 切换后面板沿用旧列表和旧 `current` 标记 | 已修：关闭面板清空行与选择 |
+| 对抗-8 | minor | 改名失败响应会复活已关闭面板的编辑器 | 已修：只在面板仍打开时恢复 |
+| 对抗-10 | minor | 列表按合成 `updatedAt` 重排，偏离官方最新优先 | 已修：保留官方 `sessionQuery` 顺序 |
+
+已知未测项与规格偏差（`ctx.sessionController` 未组合，改用 `sessionPersistence.stat` / `agents.resume` 等官方公开链）记录在 `docs/evidence/2026-10-21-s07/README.md`；本轮未勾选的验收项保持未勾。

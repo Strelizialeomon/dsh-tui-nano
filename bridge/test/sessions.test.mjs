@@ -132,7 +132,7 @@ test('list reports live facts and leaves cold activity unknown', async () => {
   assert.equal(byId.cold.blank, undefined)
   assert.equal(byId.child.origin, 'subagent')
   assert.equal(byId.child.parentSessionId, ROOT)
-  // Newest activity first: the live root, then cold creation times.
+  // The official query order is preserved (no synthetic re-sort).
   assert.deepEqual(
     result.sessions.map((row) => row.sessionId),
     [ROOT, 'cold', 'child'],
@@ -405,8 +405,12 @@ test('a cancelled compact settles as the official cancellation text', async () =
       commands: {
         find: () => ({ name: 'compact' }),
         async execute(_agent, _line, _attachments, signal) {
+          // The official registry races the handler with the abort signal and
+          // rejects before the handler's own `Compaction cancelled.` result.
           assert.equal(signal.aborted, true)
-          return { commandId: 'cmd-2', result: { kind: 'error', text: 'Compaction cancelled.' } }
+          const error = new Error('This operation was aborted')
+          error.name = 'AbortError'
+          throw error
         },
       },
     }),
@@ -420,5 +424,26 @@ test('a cancelled compact settles as the official cancellation text', async () =
   const result = await service.compact({}, controller.signal)
   assert.equal(result.kind, 'error')
   assert.equal(result.text, 'Compaction cancelled.')
+  assert.equal(result.commandId, undefined)
+  service.close()
+})
+
+test('a missing token meter is unknown, not zero billing usage', () => {
+  const root = session()
+  const service = new SessionsService({
+    ctx: fakeCtx({
+      getSession: () => root,
+      projections: liveProjections({
+        contextPressure: { projectedTokens: 10, contextWindow: 100 },
+      }),
+    }),
+    hub: fakeHub(),
+    agent: { status: 'idle' },
+    session: root,
+    rootSessionId: ROOT,
+  })
+  const meter = service.context()
+  assert.equal(meter.tokenUsage, undefined)
+  assert.equal(meter.projectedTokens, 10)
   service.close()
 })

@@ -20,6 +20,11 @@ use serde_json::{json, Value};
 use crate::cli::Cli;
 use crate::link::{HostLink, LinkEvent, RequestError, RequestErrorKind};
 
+/// Official `/compact` busy sentence from `dsh-command-compact 0.2.1-rc.2`.
+/// Shown when this window already has a compaction wait in flight, so the
+/// second request is not queued behind the first on the long-request worker.
+const COMPACTION_BUSY_TEXT: &str = "Compaction is unavailable because this process has an active compaction, or the agent is not idle.";
+
 /// Connection lifecycle as the UI may claim it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Connection {
@@ -127,10 +132,13 @@ pub struct SessionPanel {
 }
 
 impl SessionPanel {
-    /// Close the panel and drop transient state.
+    /// Close the panel and drop transient state. The rows are cleared so a
+    /// stale `current` marker cannot survive a switch or a failed refresh.
     pub fn close(&mut self) {
         self.open = false;
         self.loading = false;
+        self.rows.clear();
+        self.selected = 0;
         self.rename = None;
         self.error = None;
     }
@@ -228,6 +236,10 @@ pub struct App {
     pub compact: Option<CompactionOutcome>,
     /// A `/compact` request is in flight.
     pub compact_in_flight: bool,
+    /// Local id of the in-flight `/compact` request, used to stop waiting.
+    pub compact_request_id: Option<u64>,
+    /// A compaction may still be running after a timeout; result unknown.
+    pub compact_maybe_running: bool,
 }
 
 impl App {
@@ -278,6 +290,8 @@ impl App {
             restart_rx: None,
             compact: None,
             compact_in_flight: false,
+            compact_request_id: None,
+            compact_maybe_running: false,
         }
     }
 
@@ -414,7 +428,7 @@ impl App {
             }
         }
         if matches!(key.code, KeyCode::Esc) {
-            if self.compact_in_flight {
+            if self.compact_in_flight || self.compact_maybe_running {
                 self.cancel_compact();
             } else if self.edit_target.is_some() {
                 self.cancel_queue_edit();
@@ -877,12 +891,38 @@ impl App {
                         self.panel.error = Some(format!("改名结果无效：{error}"));
                     }
                 },
+                Err(error)
+                    if matches!(error.kind, RequestErrorKind::Rpc | RequestErrorKind::Local) =>
+                {
+                    let message = format!("改名失败：{}", error.message);
+                    if self.panel.open {
+                        self.panel.error = Some(message);
+                        // Restore the editor only while its panel is still open;
+                        // a late response must not revive a closed panel.
+                        self.panel.rename = Some(RenameInput {
+                            session_id,
+                            buffer: InputBuffer::from_text(title),
+                        });
+                    } else {
+                        self.notice = Some(message);
+                    }
+                }
                 Err(error) => {
-                    self.panel.error = Some(format!("改名失败：{}", error.message));
-                    self.panel.rename = Some(RenameInput {
-                        session_id,
-                        buffer: InputBuffer::from_text(title),
-                    });
+                    // No receipt is not failure: the title may already have been
+                    // accepted and logged. Do not resend; reread the official list.
+                    let message = format!(
+                        "改名结果未知（{}）；正在重读官方标题，不自动重发",
+                        error.message
+                    );
+                    self.panel.rename = None;
+                    if self.panel.open {
+                        self.panel.error = Some(message);
+                        if self.link.is_some() {
+                            self.refresh_sessions();
+                        }
+                    } else {
+                        self.notice = Some(message);
+                    }
                 }
             },
             Pending::Context => {
@@ -900,6 +940,8 @@ impl App {
             }
             Pending::Compact => {
                 self.compact_in_flight = false;
+                self.compact_request_id = None;
+                self.compact_maybe_running = false;
                 match result {
                     Ok(value) => match CompactionOutcome::parse(&value) {
                         Ok(outcome) => {
@@ -928,7 +970,9 @@ impl App {
                     }
                     Err(error) => {
                         // The command may still be running; never claim failure
-                        // or success, and never retry automatically.
+                        // or success, and never retry automatically. Keep the
+                        // cancel entry reachable after the wait timed out.
+                        self.compact_maybe_running = true;
                         self.notice = Some(format!(
                             "压缩结果未知（{}）；正在重读官方状态，不自动重试",
                             error.message
@@ -945,7 +989,12 @@ impl App {
                         .and_then(Value::as_bool)
                         .unwrap_or(false);
                     if !cancelled {
-                        self.notice = Some("没有正在进行的压缩等待".to_string());
+                        // The wait may already have settled after a timeout.
+                        // Keep the local cancellation record and reread the
+                        // official state; do not claim success or failure.
+                        self.notice = Some("没有正在进行的压缩等待；已重读官方状态".to_string());
+                        self.refresh_context();
+                        self.refresh_snapshot();
                     }
                 }
                 Err(error) => {
@@ -1418,6 +1467,10 @@ impl App {
             return false;
         }
         match key.code {
+            KeyCode::Esc if self.compact_in_flight || self.compact_maybe_running => {
+                self.cancel_compact();
+                true
+            }
             KeyCode::Esc => {
                 self.close_session_panel();
                 true
@@ -1504,6 +1557,15 @@ impl App {
             self.panel.error = Some("子代理会话由 S12 接管，不能作为主会话".to_string());
             return;
         }
+        if let Some(cwd) = self.hello.as_ref().map(|hello| hello.cwd.as_str()) {
+            if !row.switchable_in(cwd) {
+                self.panel.error = Some(format!(
+                    "该会话记录在 {}，与当前目录 {cwd} 不同；不能作为主会话",
+                    row.cwd.as_deref().unwrap_or("未知目录")
+                ));
+                return;
+            }
+        }
         if row.current {
             self.notice = Some("已经在该会话".to_string());
             return;
@@ -1571,13 +1633,32 @@ impl App {
         self.begin_switch_inner(target, previous);
     }
 
-    /// Retry the failed target after a switch failure.
+    /// Retry the failed target after a switch failure. A create target that
+    /// already materialized its session before the handshake failed is retried
+    /// as a resume of the same identity, not as a second create.
     fn retry_switch(&mut self) {
         let previous = self.switch.state().previous().cloned();
-        let Some(target) = self.switch.retry_target() else {
+        let Some(target) = self.retry_target() else {
             return;
         };
         self.begin_switch_inner(target, previous);
+    }
+
+    /// Retry target with the one safe mode correction: a create target whose
+    /// session was already materialized before the handshake failed is resumed
+    /// under the same id instead of being created a second time.
+    fn retry_target(&self) -> Option<SwitchTarget> {
+        let mut target = self.switch.retry_target()?;
+        if target.mode == TargetMode::Create
+            && self
+                .switch
+                .state()
+                .failure_message()
+                .is_some_and(|message| message.contains("already exists"))
+        {
+            target.mode = TargetMode::Resume;
+        }
+        Some(target)
     }
 
     /// Return to the session that was active before the failed switch.
@@ -1671,6 +1752,8 @@ impl App {
         self.context_error = None;
         self.compact = None;
         self.compact_in_flight = false;
+        self.compact_request_id = None;
+        self.compact_maybe_running = false;
         self.scroll_back = 0;
         self.replay_truncated = false;
         self.panel.close();
@@ -1699,8 +1782,8 @@ impl App {
             self.notice = Some(self.switch.state().label());
             return;
         }
-        if self.compact_in_flight {
-            self.notice = Some("压缩请求已在进行中等官方结果".to_string());
+        if self.compact_in_flight || self.compact_maybe_running {
+            self.notice = Some(COMPACTION_BUSY_TEXT.to_string());
             return;
         }
         let Some(link) = &self.link else {
@@ -1710,6 +1793,8 @@ impl App {
         match link.request_long("nano.sessions.compact", json!({}), Duration::from_secs(120)) {
             Ok(id) => {
                 self.compact_in_flight = true;
+                self.compact_maybe_running = true;
+                self.compact_request_id = Some(id);
                 self.pending.insert(id, Pending::Compact);
                 self.notice = Some("已请求官方 /compact；等待官方结果".to_string());
             }
@@ -1719,14 +1804,25 @@ impl App {
         }
     }
 
-    /// Cancel the wait; the backend still finishes its cleanup.
+    /// Stop waiting for the running compaction. The backend still finishes its
+    /// cleanup and may already have changed history, so reread the official
+    /// state instead of keeping a stale transcript or a "nothing happened" view.
     fn cancel_compact(&mut self) {
+        if let Some(id) = self.compact_request_id.take() {
+            self.pending.remove(&id);
+        }
+        self.compact_in_flight = false;
+        self.compact_maybe_running = false;
+        let outcome = CompactionOutcome::cancelled_wait();
+        self.notice = Some(outcome.display_text());
+        self.compact = Some(outcome);
+        self.refresh_context();
+        self.refresh_snapshot();
         let Some(link) = &self.link else {
             return;
         };
         if let Ok(id) = link.request("nano.sessions.compactCancel", json!({})) {
             self.pending.insert(id, Pending::CompactCancel);
-            self.notice = Some("已请求取消压缩等待；历史仍以后端结果为准".to_string());
         }
     }
 
@@ -2406,7 +2502,7 @@ mod tests {
         )));
         let meter = app.context.as_ref().unwrap();
         assert_eq!(meter.occupancy().percent(), Some(50));
-        assert_eq!(meter.token_usage.total(), 127);
+        assert_eq!(meter.token_usage.unwrap().total(), 127);
     }
 
     #[test]
@@ -2440,7 +2536,6 @@ mod tests {
         app.handle_request_done(
             10,
             Ok(json!({
-                "commandId": "cmd-2",
                 "kind": "error",
                 "text": "Compaction cancelled."
             })),
@@ -2524,6 +2619,118 @@ mod tests {
         assert!(matches!(enter, Some(InputEvent::Insert(value)) if value == "a"));
         let alt = text_input_event(&KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT));
         assert!(alt.is_none());
+    }
+
+    #[test]
+    fn an_unknown_rename_result_is_not_reported_as_failure() {
+        let mut app = app();
+        app.ready = true;
+        app.panel.open = true;
+        app.pending.insert(
+            71,
+            Pending::Rename {
+                session_id: "root".into(),
+                title: "可能已生效".into(),
+            },
+        );
+        app.handle_request_done(
+            71,
+            Err(RequestError {
+                kind: RequestErrorKind::Unknown,
+                message: "transport closed".into(),
+            }),
+        );
+        assert!(app.panel.error.as_deref().unwrap().contains("未知"));
+        assert!(
+            app.panel.rename.is_none(),
+            "a lost receipt does not reopen the editor"
+        );
+    }
+
+    #[test]
+    fn esc_while_a_compact_wait_is_in_flight_cancels_the_wait() {
+        let mut app = app();
+        app.panel.open = true;
+        app.compact_in_flight = true;
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.panel.open, "the panel stays open");
+        assert!(!app.compact_in_flight);
+        assert!(app.compact.as_ref().unwrap().cancelled());
+        assert!(app
+            .notice
+            .as_deref()
+            .unwrap()
+            .contains("Compaction cancelled."));
+    }
+
+    #[test]
+    fn a_timed_out_compaction_can_still_be_cancelled() {
+        let mut app = app();
+        app.compact_in_flight = true;
+        app.compact_request_id = Some(5);
+        app.pending.insert(5, Pending::Compact);
+        app.handle_request_done(
+            5,
+            Err(RequestError {
+                kind: RequestErrorKind::Unknown,
+                message: "timed out".into(),
+            }),
+        );
+        assert!(!app.compact_in_flight);
+        assert!(app.compact_maybe_running);
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.compact_maybe_running);
+        assert!(app.compact.as_ref().unwrap().cancelled());
+        assert!(app
+            .notice
+            .as_deref()
+            .unwrap()
+            .contains("Compaction cancelled."));
+    }
+
+    #[test]
+    fn a_second_compact_shows_the_official_busy_sentence() {
+        let mut app = app();
+        app.ready = true;
+        app.compact_in_flight = true;
+        app.request_compact();
+        assert_eq!(app.notice.as_deref(), Some(COMPACTION_BUSY_TEXT));
+    }
+
+    #[test]
+    fn retry_of_a_materialized_create_target_resumes_the_same_id() {
+        let mut app = app();
+        let target = SwitchTarget::new("new-session", TargetMode::Create);
+        assert!(app.switch.begin(target, None));
+        assert!(app.switch.host_started());
+        app.switch.fail(
+            Some("startup-failed".into()),
+            None,
+            "session identity new-session already exists; refusing to create over it",
+        );
+        let retry = app.retry_target().unwrap();
+        assert_eq!(retry.session_id, "new-session");
+        assert_eq!(retry.mode, TargetMode::Resume);
+    }
+
+    #[test]
+    fn closing_the_panel_clears_stale_rows() {
+        let mut app = app();
+        app.panel.open = true;
+        app.panel.rows.push(
+            SessionSummary::parse(&json!({
+                "sessionId": "old",
+                "createdAt": 1,
+                "agentAvailable": false,
+                "running": false,
+                "current": true
+            }))
+            .unwrap(),
+        );
+        app.panel.selected = 1;
+        app.panel.close();
+        assert!(app.panel.rows.is_empty());
+        assert_eq!(app.panel.selected, 0);
     }
 
     #[test]

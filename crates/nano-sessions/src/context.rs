@@ -62,8 +62,9 @@ pub struct ContextMeter {
     pub pressure_at: Option<u64>,
     /// Durable event time of the last `request/context` record, when tracked.
     pub context_window_at: Option<u64>,
-    /// Cumulative billing usage for the whole log.
-    pub token_usage: TokenUsage,
+    /// Cumulative billing usage for the whole log, when the official
+    /// projection provides it. Missing stays unknown; it is never zero-filled.
+    pub token_usage: Option<TokenUsage>,
     /// Heuristic composition, when the projection provides it.
     pub breakdown: Option<ContextBreakdown>,
 }
@@ -121,11 +122,10 @@ impl ContextMeter {
             .get("approximate")
             .and_then(Value::as_bool)
             .ok_or_else(|| "context.approximate must be a boolean".to_string())?;
-        let token_usage = parse_token_usage(
-            object
-                .get("tokenUsage")
-                .ok_or_else(|| "context.tokenUsage is missing".to_string())?,
-        )?;
+        let token_usage = match object.get("tokenUsage") {
+            None | Some(Value::Null) => None,
+            Some(value) => Some(parse_token_usage(value)?),
+        };
         let breakdown = match object.get("contextBreakdown") {
             None | Some(Value::Null) => None,
             Some(value) => Some(parse_breakdown(value)?),
@@ -308,7 +308,7 @@ mod tests {
         );
         assert_eq!(meter.occupancy().percent(), Some(9));
         assert_eq!(meter.occupancy().label(), "12.3k/128k (9%)");
-        assert_eq!(meter.token_usage.total(), 127);
+        assert_eq!(meter.token_usage.unwrap().total(), 127);
     }
 
     #[test]
@@ -350,6 +350,14 @@ mod tests {
         let label = meter.provenance_label(now);
         assert!(label.contains("UTC"));
         assert!(label.contains("1 分钟前"));
+    }
+
+    #[test]
+    fn a_missing_billing_projection_stays_unknown() {
+        let mut value = payload();
+        value.as_object_mut().unwrap().remove("tokenUsage");
+        let meter = ContextMeter::parse(&value).unwrap();
+        assert_eq!(meter.token_usage, None);
     }
 
     #[test]

@@ -22,8 +22,10 @@ pub enum CompactionKind {
 /// One settled `/compact` invocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompactionOutcome {
-    /// Official command lifecycle identity.
-    pub command_id: String,
+    /// Official command lifecycle identity, when the official registry returned
+    /// one. A cancelled wait is settled by the host after the registry's abort
+    /// races the handler, so the id may be unavailable.
+    pub command_id: Option<String>,
     /// Success or official failure.
     pub kind: CompactionKind,
     /// Official text to show verbatim, when present.
@@ -39,8 +41,11 @@ impl CompactionOutcome {
             .as_object()
             .ok_or_else(|| "compact result must be an object".to_string())?;
         let command_id = match object.get("commandId") {
-            Some(Value::String(value)) if !value.is_empty() => value.clone(),
-            _ => return Err("compact.commandId must be a non-empty string".to_string()),
+            None | Some(Value::Null) => None,
+            Some(Value::String(value)) if !value.is_empty() => Some(value.clone()),
+            Some(_) => {
+                return Err("compact.commandId must be a non-empty string when present".to_string())
+            }
         };
         let kind = match object.get("kind").and_then(Value::as_str) {
             Some("success") => CompactionKind::Success,
@@ -59,6 +64,18 @@ impl CompactionOutcome {
             text,
             source_event_seq,
         })
+    }
+
+    /// Settled outcome for a cancelled wait. The official registry rejects an
+    /// aborted command before its handler can return, so the host preserves the
+    /// official stable text itself.
+    pub fn cancelled_wait() -> Self {
+        Self {
+            command_id: None,
+            kind: CompactionKind::Error,
+            text: Some(COMPACTION_CANCELLED.to_string()),
+            source_event_seq: None,
+        }
     }
 
     /// Text for the user; official text wins over any local wording.
@@ -100,6 +117,7 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(outcome.kind, CompactionKind::Success);
+        assert_eq!(outcome.command_id.as_deref(), Some("cmd-1"));
         assert_eq!(
             outcome.display_text(),
             "Compacted 12 history items (~3456 tokens)."
@@ -131,6 +149,22 @@ mod tests {
         .unwrap();
         assert!(outcome.cancelled());
         assert!(outcome.history_may_have_changed());
+    }
+
+    #[test]
+    fn an_aborted_wait_is_settled_without_a_command_id() {
+        let outcome = CompactionOutcome::parse(&json!({
+            "kind": "error",
+            "text": COMPACTION_CANCELLED
+        }))
+        .unwrap();
+        assert_eq!(outcome.command_id, None);
+        assert!(outcome.cancelled());
+        assert!(outcome.history_may_have_changed());
+        assert_eq!(
+            CompactionOutcome::cancelled_wait().display_text(),
+            COMPACTION_CANCELLED
+        );
     }
 
     #[test]
