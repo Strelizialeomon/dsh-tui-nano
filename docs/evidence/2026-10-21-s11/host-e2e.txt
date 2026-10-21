@@ -1,10 +1,11 @@
-✔ malformed frame is reported, subscription replays, shutdown is clean (1269.59225ms)
-✔ conversation surface submits, dedupes, and keeps official identity (2197.809666ms)
-ℹ tests 2
+✔ malformed frame is reported, subscription replays, shutdown is clean (1265.728916ms)
+✔ manual shell execution injects bash context and job observation is non-consuming (1283.0515ms)
+✔ conversation surface submits, dedupes, and keeps official identity (2055.171708ms)
+ℹ tests 3
 ℹ suites 0
-ℹ pass 2
+ℹ pass 3
 ℹ fail 0
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 3504.190708
+ℹ duration_ms 4638.445333
