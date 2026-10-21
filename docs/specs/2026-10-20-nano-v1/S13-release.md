@@ -13,6 +13,8 @@
 
 S13 额外拥有 `docs/release/design-contract.md`：统一键位、布局槽位、主题 token 和视觉基准的冻结契约。S13 只定义/冻结这份契约并做发布验收，不实现界面；各子件引用同一份契约，不能各自再定义一套键位或主题。
 
+design-contract 的视觉基准固定为 `docs/design/2026-10-17-dsh-tui-ux-research/preview/index.html` 和同目录截图：dark/light 两套颜色 token、4ch 行号槽 + 2ch 标记槽、8 行差异预算、输入框上下各一条单单元格高的上下文线（左侧占比色段；正常 accent、约 80% warning、约 95% error、未知回退普通边框）、底部权限/瞬态/cwd、子代理 dock 4 个直接行 + 1 个溢出入口、子代理状态灯（running 0.8s 亮/暗闪烁；completed 绿；aborted/refusal/max-tokens 黄；error 红；unknown/inactive muted）、主会话忙碌指示约 500ms、装饰性 emoji 默认 0 个。reduced-motion 的检测方式（设置项/环境变量/终端能力）由 design-contract 明确；开启时子代理闪烁和忙碌指示都静止。间距以终端单元格为单位，不冻结浏览器 px、14px 字号或 22px 行高；字号由用户终端控制。
+
 ## 2. 支持矩阵
 
 首版只宣称实际验证过的组合：
@@ -51,7 +53,7 @@ S13 额外拥有 `docs/release/design-contract.md`：统一键位、布局槽位
 8. **附件**：图片/通用文件发送、历史复用、失败整批回滚；会话事件不含路径/base64。
 9. **技能与规矩**：真实技能调用、项目规矩来源、预算截断提示、工作目录变化重载。
 10. **退出与崩溃**：正常退出、EOF、SIGTERM、Rust 崩溃、启动半途取消分别记录清理结果；不误杀独立 dsh。
-11. **视觉符合性**：真实 Ghostty 中对照已冻结的 design-contract 和样稿检查配色、层级、窄屏、CJK、选择复制、滚轮和退出；浏览器截图不能替代。
+11. **视觉符合性**：真实 Ghostty 中对照已冻结的 design-contract 和 `preview/index.html` 检查配色、层级、窄屏、CJK、选择复制、滚轮和退出；浏览器截图不能替代。
 
 ## 5. 证据标准
 
@@ -132,7 +134,7 @@ S13 额外拥有 `docs/release/design-contract.md`：统一键位、布局槽位
 - 截图/录屏的存放格式和命名由 S13 定，但必须能对应到版本和验收项。
 - 证据必须脱敏：密钥、凭据、PII、用户正文、完整环境和绝对路径不得进入 `docs/release/`；这是硬要求，不是「默认」。
 - 发布审核档位按 spec-flow 闸卡当场选择；本份不预设档位。
-- `docs/release/design-contract.md` 的格式和初始内容由 S13 在实施期定义；各子件只引用，不各写一份。
+- `docs/release/design-contract.md` 的格式和初始内容由 S13 在实施期定义；各子件只引用，不各写一份。颜色/间距/行号槽/状态灯/上下文线以 `preview/index.html` 为基准，但用终端单元格映射，不冻结浏览器 px/字号/行高。
 - 截图/录屏使用合成 home/workdir 或固定遮罩规则；未脱敏原件只留在受控本机目录，不进发布证据。
 
 ## 11. 审核修订记录
