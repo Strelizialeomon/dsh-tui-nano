@@ -158,7 +158,21 @@ async function runProbe(facility, root) {
   try {
     domain = await facility.open(PROBE_SPEC)
   } catch (error) {
-    throw new StartupError('unsupported', `调度探针域无法打开：${describe(error)}`, { cause: error })
+    // The probe unit is disposable and ours alone. A corrupt leftover must not
+    // brick every later startup, so remove it and retry once; the second
+    // failure reports the exact path.
+    try {
+      fs.rmSync(file, { force: true })
+    } catch {
+      // Fall through to the retry and final error.
+    }
+    try {
+      domain = await facility.open(PROBE_SPEC)
+    } catch (retryError) {
+      throw new StartupError('unsupported', `调度探针域无法打开（${file}）：${describe(retryError)}`, {
+        cause: retryError,
+      })
+    }
   }
   const key = `probe-${process.pid}-${Date.now()}`
   try {
@@ -176,7 +190,7 @@ async function runProbe(facility, root) {
     await domain.table('records').delete(key)
   } catch (error) {
     if (error instanceof StartupError) throw error
-    throw new StartupError('unsupported', `调度探针写入失败：${describe(error)}`, { cause: error })
+    throw new StartupError('unsupported', `调度探针写入失败（${file}）：${describe(error)}`, { cause: error })
   } finally {
     await domain.close().catch(() => {})
     try {

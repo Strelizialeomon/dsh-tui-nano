@@ -311,13 +311,18 @@ pub fn parse_update(value: &Value) -> Result<UpdateOutcome, String> {
         return Ok(UpdateOutcome::Updated);
     }
     if value.get("updated").and_then(Value::as_bool) == Some(false) {
-        let code = value
-            .get("code")
-            .and_then(Value::as_str)
-            .unwrap_or("schedule_not_found");
-        return Ok(UpdateOutcome::Miss {
-            code: code.to_string(),
-        });
+        // A no-op update returns `{id, updated:false, record}` with no code;
+        // a miss returns `{id, updated:false, code}`. Treating the no-op as a
+        // miss would close the form and falsely report a missing task.
+        if let Some(code) = value.get("code").and_then(Value::as_str) {
+            return Ok(UpdateOutcome::Miss {
+                code: code.to_string(),
+            });
+        }
+        if value.get("record").is_some() {
+            return Ok(UpdateOutcome::Updated);
+        }
+        return Err("update miss carries neither a code nor a record".to_string());
     }
     if let Some(code) = value.get("code").and_then(Value::as_str) {
         return Ok(UpdateOutcome::Invalid {
@@ -367,4 +372,84 @@ pub fn record_of(entry: &Value) -> Option<Value> {
         object.remove(wrapper);
     }
     Some(Value::Object(object))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn an_equivalent_update_is_a_no_op_not_a_miss() {
+        let outcome = parse_update(&json!({
+            "id": "s-1",
+            "updated": false,
+            "record": {"id": "s-1", "kind": "every", "title": "T", "prompt": "P",
+                "scheduledAt": "2099-01-01T00:00:00.000Z", "everySeconds": 60}
+        }))
+        .unwrap();
+        assert_eq!(outcome, UpdateOutcome::Updated);
+    }
+
+    #[test]
+    fn a_miss_still_carries_its_code() {
+        for code in ["schedule_conflict", "schedule_not_found", "schedule_ended"] {
+            assert_eq!(
+                parse_update(&json!({"id": "s-1", "updated": false, "code": code})).unwrap(),
+                UpdateOutcome::Miss {
+                    code: code.to_string()
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn a_validation_result_stays_an_invalid_result() {
+        assert_eq!(
+            parse_update(&json!({"id": "s-1", "code": "invalid_rule", "message": "bad cron"}))
+                .unwrap(),
+            UpdateOutcome::Invalid {
+                code: "invalid_rule".into(),
+                message: "bad cron".into()
+            }
+        );
+    }
+
+    #[test]
+    fn catalog_strips_wrappers_and_keeps_the_complete_record() {
+        let entries = parse_catalog(&json!({
+            "entries": [{
+                "id": "s-1", "kind": "at", "title": "T", "prompt": "P",
+                "scheduledAt": "2099-01-01T00:00:00.000Z",
+                "sessionId": "root", "status": "inactive",
+                "lastDelivery": {"scheduledAt": "2099-01-01T00:00:00.000Z",
+                    "deliveredAt": "2099-01-01T00:00:01.000Z", "messageId": "m-1"}
+            }]
+        }))
+        .unwrap();
+        assert_eq!(entries[0].status, "inactive");
+        assert_eq!(entries[0].record["id"], json!("s-1"));
+        assert!(entries[0].record.get("sessionId").is_none());
+        assert!(entries[0].record.get("lastDelivery").is_none());
+        assert_eq!(entries[0].last_delivery.as_ref().unwrap().message_id, "m-1");
+    }
+
+    #[test]
+    fn history_parse_keeps_the_two_flags_apart() {
+        let outcome = parse_history(&json!({
+            "id": "s-1",
+            "records": [],
+            "earlierRecordsUnavailable": true,
+            "earlierRecordsPruned": false,
+            "retention": {"days": 30, "records": 200}
+        }))
+        .unwrap();
+        match outcome {
+            HistoryOutcome::Page(page) => {
+                assert!(page.earlier_records_unavailable);
+                assert!(!page.earlier_records_pruned);
+            }
+            other => panic!("unexpected history outcome {other:?}"),
+        }
+    }
 }

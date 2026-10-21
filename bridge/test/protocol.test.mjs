@@ -79,6 +79,11 @@ test('event kinds match', () => {
   ])
 })
 
+test('the event shape enum and the event kind table agree', () => {
+  const shapeKinds = CONTRACT.shapes.event.kind.replace(/^enum:/, '').split('|')
+  assert.deepEqual([...shapeKinds].sort(), [...EVENT_KINDS.keys()].sort())
+})
+
 test('request fixture parses as a request', () => {
   const frame = parseFrameLine(JSON.stringify(CONTRACT.fixtures.request))
   assert.equal(frame.type, 'request')

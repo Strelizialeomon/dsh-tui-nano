@@ -1,13 +1,14 @@
-✔ official CRUD, delivery, cold catch-up, lease, and route refusal (72561.026041ms)
-✔ a live schedule lease refuses startup before the scheduler mounts (1196.646833ms)
-✔ a wrong schedule route refuses startup instead of falling back to json (1121.299375ms)
-✔ a missing backend service key times out as unsupported and never mounts the scheduler (11199.728ms)
-✔ two root sessions keep separate schedule tables (3014.178917ms)
-ℹ tests 5
+✔ official CRUD, delivery, cold catch-up, lease, and route refusal (137140.662958ms)
+✔ a live schedule lease refuses startup before the scheduler mounts (1132.832625ms)
+✔ a wrong schedule route refuses startup instead of falling back to json (1105.953416ms)
+✔ an unprovided backend service key times out as unsupported and never mounts the scheduler (11109.684167ms)
+✔ a corrupt probe leftover is replaced instead of bricking startup (1209.069959ms)
+✔ two root sessions keep separate schedule tables (2720.587584ms)
+ℹ tests 6
 ℹ suites 0
-ℹ pass 5
+ℹ pass 6
 ℹ fail 0
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 89134.255125
+ℹ duration_ms 154453.169583

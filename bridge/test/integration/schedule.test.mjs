@@ -224,6 +224,24 @@ test(
     assert.match(invalidTitle.error.message, /invalid_prompt/)
     assert.equal(invalidTitle.error.data.code, 'invalid_prompt')
 
+    const invalidPrompt = await host.call('nano.schedule.create', {
+      address: addr,
+      request: { title: '空白指令', prompt: '   ', after_seconds: 60 },
+    })
+    assert.equal(invalidPrompt.error.code, 1020)
+    assert.equal(invalidPrompt.error.data.code, 'invalid_prompt')
+
+    const invalidZone = await host.call('nano.schedule.create', {
+      address: addr,
+      request: {
+        title: '坏时区',
+        prompt: 'x',
+        daily: { time: '09:00:00', time_zone: 'Mars/Olympus' },
+      },
+    })
+    assert.equal(invalidZone.error.code, 1020)
+    assert.equal(invalidZone.error.data.code, 'invalid_time_zone')
+
     const invalidCron = await host.call('nano.schedule.create', {
       address: addr,
       request: { title: 'bad cron', prompt: 'x', cron: { expression: '61 * * * *', time_zone: 'Asia/Shanghai' } },
@@ -316,17 +334,34 @@ test(
     })
     assert.equal(deliveryHistory.result.result.records.length, 1)
     assert.equal(deliveryHistory.result.result.records[0].messageId, delivered.lastDelivery.messageId)
+    const activeAfterOneShot = await host.call('nano.schedule.list', { address: addr })
+    assert.ok(
+      !activeAfterOneShot.result.records.some((record) => record.id === dueId),
+      'list must exclude an inactive one-shot task',
+    )
     // A recurring task missed while the host is down gets exactly its latest
-    // occurrence. The interval floor is 60 seconds, so this waits for real time.
+    // occurrence. The interval floor is 60 seconds; waiting more than two
+    // intervals proves the host does not replay every missed occurrence.
     const recurring = await host.call('nano.schedule.create', {
       address: addr,
       request: { title: '周期补投', prompt: '周期提醒', every_seconds: 60 },
     })
     const recurringId = recurring.result.record.id
+    // A one-shot whose target passes while the host is down must still be
+    // delivered after the restart.
+    const overdue = await host.call('nano.schedule.create', {
+      address: addr,
+      request: {
+        title: '停机过期的提醒',
+        prompt: '停机后补投',
+        at: new Date(Date.now() + 4000).toISOString(),
+      },
+    })
+    const overdueId = overdue.result.record.id
     const exitCode = await host.stop()
     assert.equal(exitCode, 0, `host did not exit cleanly; stderr=${host.stderr.slice(-2000)}`)
 
-    await new Promise((resolve) => setTimeout(resolve, 65_000))
+    await new Promise((resolve) => setTimeout(resolve, 130_000))
 
     const resumePatch = writePatch({
       root,
@@ -341,20 +376,30 @@ test(
     assert.equal(resumed.hello.method, 'nano.hello', `startup error: ${JSON.stringify(resumed.hello)}`)
 
     let stillActive
+    let overdueAfter
     for (let attempt = 0; attempt < 60; attempt += 1) {
       const afterResume = await host.call('nano.schedule.catalog', { address: addr })
       stillActive = afterResume.result.entries.find((entry) => entry.id === recurringId)
-      if (stillActive?.lastDelivery) break
+      overdueAfter = afterResume.result.entries.find((entry) => entry.id === overdueId)
+      if (stillActive?.lastDelivery && overdueAfter?.lastDelivery) break
       await new Promise((resolve) => setTimeout(resolve, 1000))
     }
     assert.ok(stillActive.lastDelivery, 'the missed occurrence is delivered after restart')
     assert.equal(stillActive.status, 'active')
+    assert.ok(overdueAfter.lastDelivery, 'an expired one-shot is still delivered after restart')
+    assert.equal(overdueAfter.status, 'inactive')
     const everyHistory = await host.call('nano.schedule.history', {
       address: addr,
       id: recurringId,
       limit: 10,
     })
     assert.equal(everyHistory.result.result.records.length, 1, 'only the latest missed occurrence is delivered')
+    const overdueHistory = await host.call('nano.schedule.history', {
+      address: addr,
+      id: overdueId,
+      limit: 10,
+    })
+    assert.equal(overdueHistory.result.result.records.length, 1)
 
     const resumeExit = await host.stop()
     assert.equal(resumeExit, 0)
@@ -430,9 +475,13 @@ test(
 )
 
 test(
-  'a missing backend service key times out as unsupported and never mounts the scheduler',
+  'an unprovided backend service key times out as unsupported and never mounts the scheduler',
   { skip: process.env.NANO_E2E !== '1' ? 'set NANO_E2E=1' : false, timeout: 120_000 },
   async (t) => {
+    // A routed name whose service key is never provided makes storage-domain
+    // wait forever. `--patch` cannot register a backend from outside the
+    // bridge, so an unknown route name is the honest stand-in for "registered
+    // but forgot ctx.provide": both leave the injected key absent.
     const root = tempRoot()
     const dshHome = path.join(root, 'dsh-home')
     const dataRoot = path.join(root, 'data')
@@ -459,6 +508,34 @@ test(
     assert.match(frame.params.message, /storageDomain/)
     assert.equal(fs.existsSync(path.join(dataRoot, 'runtime-data', sessionId, 'storage', 'schedule.json')), false)
     if (host.child.exitCode === null) host.child.kill('SIGKILL')
+  },
+)
+
+test(
+  'a corrupt probe leftover is replaced instead of bricking startup',
+  { skip: process.env.NANO_E2E !== '1' ? 'set NANO_E2E=1' : false, timeout: 120_000 },
+  async (t) => {
+    const root = tempRoot()
+    const dshHome = path.join(root, 'dsh-home')
+    const dataRoot = path.join(root, 'data')
+    const work = path.join(root, 'work')
+    fs.mkdirSync(work, { recursive: true })
+    installProfile(dshHome, dataRoot)
+    const sessionId = `session-${randomUUID()}`
+    const storage = path.join(dataRoot, 'runtime-data', sessionId, 'storage')
+    fs.mkdirSync(storage, { recursive: true, mode: 0o700 })
+    const probeFile = path.join(storage, 'nano_probe.json')
+    fs.writeFileSync(probeFile, '{}', { mode: 0o600 })
+    const patch = writePatch({ root, dataRoot, sessionId, runtimeId: `rt-${randomUUID()}`, work })
+    const host = startHost({ dshHome, patchPath: patch, work })
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+    const frame = await host.waitFor(
+      (candidate) => candidate.method === 'nano.hello' || candidate.method === 'nano.startupError',
+      90_000,
+    )
+    assert.equal(frame.method, 'nano.hello', `startup error: ${JSON.stringify(frame)}`)
+    assert.equal(fs.existsSync(probeFile), false, 'the repaired probe unit is removed')
+    assert.equal(await host.stop(), 0)
   },
 )
 

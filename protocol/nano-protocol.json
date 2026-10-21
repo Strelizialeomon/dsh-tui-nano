@@ -277,7 +277,7 @@
       "generation": "integer",
       "subscriptionId": "string",
       "sequence": "integer",
-      "kind": "enum:session.event|conversation.status|conversation.inbox|conversation.stream",
+      "kind": "enum:session.event|conversation.status|conversation.inbox|conversation.stream|schedule.changed",
       "payload": "object"
     },
     "streamEnded": {

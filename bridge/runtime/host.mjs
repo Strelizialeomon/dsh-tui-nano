@@ -800,6 +800,7 @@ async function failStartup(state, error) {
       cleanupFailures.push(`subscriptions: ${describe(cleanupError)}`)
     }
   }
+  let scheduleCleanupFailed = false
   if (state.scheduleFiber !== undefined) {
     try {
       state.scheduleBridge?.close()
@@ -807,15 +808,22 @@ async function failStartup(state, error) {
       await withTimeout(state.scheduleFiber.dispose(), 3000, 'schedule dispose')
       state.scheduleFiber = undefined
     } catch (cleanupError) {
+      scheduleCleanupFailed = true
       cleanupFailures.push(`schedule: ${describe(cleanupError)}`)
     }
   }
   if (state.scheduleLease !== undefined) {
-    try {
-      releaseScheduleLease(state.scheduleLease)
-      state.scheduleLease = undefined
-    } catch (cleanupError) {
-      cleanupFailures.push(`schedule lease: ${describe(cleanupError)}`)
+    if (scheduleCleanupFailed) {
+      // A scheduler that may still be live must keep its lease. The pid is
+      // about to exit, so the next host sweeps it by liveness like a crash.
+      cleanupFailures.push('schedule lease retained because the scheduler did not stop')
+    } else {
+      try {
+        releaseScheduleLease(state.scheduleLease)
+        state.scheduleLease = undefined
+      } catch (cleanupError) {
+        cleanupFailures.push(`schedule lease: ${describe(cleanupError)}`)
+      }
     }
   }
   if (state.agentHandle !== undefined) {

@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
+import { pathToFileURL } from 'node:url'
 
 import {
   acquireScheduleLease,
@@ -123,6 +124,65 @@ test('release never removes a lock owned by another pid', (t) => {
   )
   assert.equal(releaseScheduleLease(lease), false)
   assert.equal(fs.existsSync(lease.file), true)
+})
+
+test('atomic publication leaves no temp files behind', (t) => {
+  const dataRoot = tempRoot()
+  t.after(() => fs.rmSync(dataRoot, { recursive: true, force: true }))
+  const lease = acquireScheduleLease({ dataRoot, rootSessionId: 'session-root' })
+  const files = fs.readdirSync(path.dirname(lease.file))
+  assert.deepEqual(files, ['schedule.lock'])
+  releaseScheduleLease(lease)
+})
+
+test('two hosts reclaiming one dead lock produce at most one owner', async (t) => {
+  const dataRoot = tempRoot()
+  t.after(() => fs.rmSync(dataRoot, { recursive: true, force: true }))
+  const child = sleepingChild()
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  const deadPid = child.pid
+  child.kill('SIGKILL')
+  await waitForExit(child)
+  const file = path.join(dataRoot, 'runtime-data', 'session-root', 'schedule.lock')
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+  fs.writeFileSync(
+    file,
+    JSON.stringify({ version: 1, sessionId: 'session-root', hostPid: deadPid, acquiredAt: new Date().toISOString() }),
+    { mode: 0o600 },
+  )
+  const leaseModule = pathToFileURL(path.join(import.meta.dirname, '..', 'schedule', 'lease.mjs')).href
+  const script = `
+    import { acquireScheduleLease } from ${JSON.stringify(leaseModule)}
+    try {
+      const lease = acquireScheduleLease({ dataRoot: process.argv[1], rootSessionId: 'session-root' })
+      console.log('OK ' + lease.hostPid)
+      await new Promise((resolve) => setTimeout(resolve, 400))
+    } catch (error) {
+      console.log('ERR ' + (error.code ?? '') + ' ' + (error.message ?? ''))
+    }
+  `
+  const children = [0, 1].map(() =>
+    spawn(process.execPath, ['--input-type=module', '-e', script, dataRoot], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }),
+  )
+  const outputs = await Promise.all(
+    children.map(
+      (runner) =>
+        new Promise((resolve) => {
+          let text = ''
+          runner.stdout.on('data', (chunk) => {
+            text += chunk.toString()
+          })
+          runner.once('exit', () => resolve(text.trim()))
+        }),
+    ),
+  )
+  const owners = outputs.filter((line) => line.startsWith('OK '))
+  assert.equal(owners.length, 1, `exactly one host may own the table; got ${JSON.stringify(outputs)}`)
+  const losers = outputs.filter((line) => !line.startsWith('OK '))
+  assert.equal(losers.length, 1)
+  assert.match(losers[0], /^ERR (held|unknown)\b/)
 })
 
 function fakeContext() {
@@ -262,4 +322,15 @@ test('history forwards the explicit limit and cursor', async () => {
     limit: 25,
     before: 'm-9',
   })
+})
+
+test('the post-flush write-failure fixture keeps the task active with no receipt', () => {
+  const fixture = JSON.parse(
+    fs.readFileSync(new URL('./fixtures/schedule-post-flush-write-failure.json', import.meta.url), 'utf8'),
+  )
+  assert.equal(fixture.catalog.entries[0].status, 'active')
+  assert.equal(fixture.catalog.entries[0].lastDelivery, undefined)
+  assert.deepEqual(fixture.history.records, [])
+  assert.equal(fixture.history.earlierRecordsUnavailable, false)
+  assert.equal(fixture.history.earlierRecordsPruned, false)
 })

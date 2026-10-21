@@ -57,10 +57,18 @@ impl TextField {
     }
 
     /// Insert a pasted string at the cursor, ignoring control characters.
+    /// One batch insert keeps a large paste linear instead of O(n²).
     pub fn insert_str(&mut self, value: &str) {
-        for character in value.chars().filter(|character| !character.is_control()) {
-            self.insert(character);
+        let filtered: String = value
+            .chars()
+            .filter(|character| !character.is_control())
+            .collect();
+        if filtered.is_empty() {
+            return;
         }
+        let byte = byte_index(&self.text, self.cursor);
+        self.text.insert_str(byte, &filtered);
+        self.cursor += filtered.chars().count();
     }
 
     /// Remove the character before the cursor.
@@ -666,5 +674,49 @@ mod tests {
         form.selector = Selector::Weekly;
         form.weekly_days.set_text("8");
         assert!(form.create_request().unwrap_err().contains("1-7"));
+    }
+
+    #[test]
+    fn a_large_paste_is_one_batch_insert() {
+        let mut field = TextField::new();
+        let payload = "x".repeat(200_000);
+        field.insert_str(&payload);
+        assert_eq!(field.text().len(), 200_000);
+        field.insert_str("\nignored");
+        assert_eq!(field.text().len(), 200_007);
+        assert!(!field.text().contains('\n'));
+    }
+
+    #[test]
+    fn every_create_selector_builds_its_official_shape() {
+        let cases = [
+            (Selector::After, "after_seconds"),
+            (Selector::At, "at"),
+            (Selector::Every, "every_seconds"),
+            (Selector::Daily, "daily"),
+            (Selector::Weekly, "weekly"),
+            (Selector::Cron, "cron"),
+        ];
+        for (selector, key) in cases {
+            let mut form = ScheduleForm::new_create();
+            form.selector = selector;
+            let request = form.create_request().unwrap();
+            assert!(request.get(key).is_some(), "missing {key} for {selector:?}");
+            for (other, _) in cases.iter().filter(|(other, _)| *other != selector) {
+                let other_key = match other {
+                    Selector::After => "after_seconds",
+                    Selector::At => "at",
+                    Selector::Every => "every_seconds",
+                    Selector::Daily => "daily",
+                    Selector::Weekly => "weekly",
+                    Selector::Cron => "cron",
+                    Selector::Keep => continue,
+                };
+                assert!(
+                    request.get(other_key).is_none(),
+                    "{selector:?} also carried {other_key}"
+                );
+            }
+        }
     }
 }

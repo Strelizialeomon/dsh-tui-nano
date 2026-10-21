@@ -10,6 +10,7 @@
 // host refuses instead of guessing.
 import fs from 'node:fs'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 
 /** File name of the lease inside the root session's runtime-data directory. */
 export const SCHEDULE_LOCK_NAME = 'schedule.lock'
@@ -69,7 +70,7 @@ export function acquireScheduleLease({ dataRoot, rootSessionId, pid = process.pi
           `调度锁状态未知（${file} 不可解析且写入不足 ${Math.ceil(SCHEDULE_LOCK_STALE_MS / 1000)} 秒）`,
         )
       }
-      unlink(file)
+      reclaimStale(file, rootSessionId, pid, now)
       continue
     }
     if (inspected.content.hostPid === pid) {
@@ -80,11 +81,75 @@ export function acquireScheduleLease({ dataRoot, rootSessionId, pid = process.pi
         holderPid: inspected.content.hostPid,
       })
     }
-    unlink(file)
+    reclaimStale(file, rootSessionId, pid, now)
   }
 
   throw new ScheduleLeaseError('unknown', `调度锁在两次尝试后仍无法获取：${file}`)
 }
+
+/**
+ * Remove a stale lock under a one-writer reclaim guard.
+ *
+ * The guard is what stops two hosts that both read the same dead owner from
+ * deleting each other's freshly created lock: only the guard holder unlinks,
+ * and it re-reads the target after taking the guard. Without this, B could
+ * unlink the live lock C created between B's read and B's unlink, and both
+ * would drive one table.
+ * @param {string} file - lease file path.
+ * @param {string} sessionId - root session.
+ * @param {number} pid - this process.
+ * @param {() => Date} now - clock for the guard content.
+ */
+function reclaimStale(file, sessionId, pid, now) {
+  const guard = `${file}.reclaim`
+  acquireReclaimGuard(guard, sessionId, pid, now)
+  try {
+    const inspected = inspectLease(file, sessionId)
+    if (inspected.kind === 'absent') return
+    if (inspected.kind === 'valid') {
+      if (inspected.content.hostPid === pid) return
+      if (isPidAlive(inspected.content.hostPid)) {
+        throw new ScheduleLeaseError('held', `调度由 pid ${inspected.content.hostPid} 持有`, {
+          holderPid: inspected.content.hostPid,
+        })
+      }
+      unlink(file)
+      return
+    }
+    const age = ageOf(file)
+    if (age !== undefined && age < SCHEDULE_LOCK_STALE_MS) {
+      throw new ScheduleLeaseError('unknown', `调度锁状态未知（${file} 仍是新写入且不可解析）`)
+    }
+    unlink(file)
+  } finally {
+    unlink(guard)
+  }
+}
+
+function acquireReclaimGuard(guard, sessionId, pid, now) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      createLease(guard, { version: LOCK_VERSION, sessionId, hostPid: pid, acquiredAt: now().toISOString() })
+      return
+    } catch (error) {
+      if (error?.code !== 'EEXIST') {
+        throw new ScheduleLeaseError('unknown', `无法创建调度锁回收保护 ${guard}：${describe(error)}`, { cause: error })
+      }
+    }
+    const inspected = inspectLease(guard, sessionId)
+    if (inspected.kind === 'absent') continue
+    const age = ageOf(guard)
+    if (inspected.kind === 'valid' && isPidAlive(inspected.content.hostPid)) {
+      throw new ScheduleLeaseError('unknown', '另一个宿主正在回收调度锁；请稍后重试')
+    }
+    if (inspected.kind === 'corrupt' && age !== undefined && age < SCHEDULE_LOCK_STALE_MS) {
+      throw new ScheduleLeaseError('unknown', '调度锁回收保护状态未知')
+    }
+    unlink(guard)
+  }
+  throw new ScheduleLeaseError('unknown', `无法取得调度锁回收保护：${guard}`)
+}
+
 
 /**
  * Release a lease only when it still belongs to this process and session.
@@ -117,12 +182,25 @@ export function isPidAlive(pid) {
 }
 
 function createLease(file, content) {
-  const fd = fs.openSync(file, 'wx', 0o600)
+  // Write the complete document to a private temp file, then publish it with
+  // link(), which fails with EEXIST if a contender got there first. A reader
+  // therefore never sees a freshly created but half-written lock.
+  const temp = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${randomUUID()}.tmp`)
   try {
-    fs.writeFileSync(fd, `${JSON.stringify(content)}\n`, 'utf8')
-    fs.fsyncSync(fd)
+    const fd = fs.openSync(temp, 'wx', 0o600)
+    try {
+      fs.writeFileSync(fd, `${JSON.stringify(content)}\n`, 'utf8')
+      fs.fsyncSync(fd)
+    } finally {
+      fs.closeSync(fd)
+    }
+    fs.linkSync(temp, file)
   } finally {
-    fs.closeSync(fd)
+    try {
+      fs.unlinkSync(temp)
+    } catch {
+      // The temp file is private to this call and may already be gone.
+    }
   }
   fs.chmodSync(file, 0o600)
 }

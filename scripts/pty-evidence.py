@@ -199,6 +199,20 @@ def main():
         now = screen.text()
         checks.append(("task created", "巡检提醒" in now))
         checks.append(("official confirmation", "任务已由官方确认创建" in now))
+        # Exercise a non-default selector through the real form: cycle
+        # After -> At -> Every -> Daily, keep the displayed local zone, submit.
+        send("n")
+        pump(0.5)
+        send("每日巡检")
+        send("\t")
+        send("每日检查")
+        send("\t")
+        send("\x1b[C\x1b[C\x1b[C")
+        send("\t\t")
+        send("\r")
+        pump(3)
+        now = screen.text()
+        checks.append(("daily selector created", "每日巡检" in now and "每日" in now))
         snapshot = now
         send("\x1b")
         pump(0.5)

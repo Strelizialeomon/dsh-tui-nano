@@ -707,12 +707,13 @@ impl App {
             Pending::ScheduleCatalog => match result {
                 Ok(value) => {
                     if let Err(message) = self.schedule.apply_catalog(&value) {
-                        self.schedule.fail(format!("任务列表无效：{message}"));
+                        self.schedule
+                            .fail_catalog(format!("任务列表无效：{message}"));
                     }
                 }
                 Err(error) => self
                     .schedule
-                    .fail(format!("读取任务列表失败：{}", error.message)),
+                    .fail_catalog(format!("读取任务列表失败：{}", error.message)),
             },
             Pending::ScheduleCreate => match result {
                 Ok(value) => {
@@ -720,7 +721,7 @@ impl App {
                         self.schedule.fail(format!("创建回执无效：{message}"));
                     }
                 }
-                Err(error) => self.schedule.fail(format!("创建失败：{}", error.message)),
+                Err(error) => self.report_schedule_failure("创建", error),
             },
             Pending::ScheduleUpdate => match result {
                 Ok(value) => {
@@ -729,7 +730,7 @@ impl App {
                         self.schedule.fail(format!("修改回执无效：{message}"));
                     }
                 }
-                Err(error) => self.schedule.fail(format!("修改失败：{}", error.message)),
+                Err(error) => self.report_schedule_failure("修改", error),
             },
             Pending::ScheduleDelete => match result {
                 Ok(value) => {
@@ -738,7 +739,7 @@ impl App {
                         self.schedule.fail(format!("删除回执无效：{message}"));
                     }
                 }
-                Err(error) => self.schedule.fail(format!("删除失败：{}", error.message)),
+                Err(error) => self.report_schedule_failure("删除", error),
             },
             Pending::ScheduleHistory { before, .. } => match result {
                 Ok(value) => {
@@ -806,6 +807,21 @@ impl App {
             Err(message) => {
                 self.schedule.fail(format!("请求未能发出：{message}"));
             }
+        }
+    }
+
+    fn report_schedule_failure(&mut self, action: &str, error: RequestError) {
+        // A timeout or lost response may still have committed the official
+        // write. Never claim failure for that case; refresh and let the catalog
+        // decide.
+        if matches!(error.kind, RequestErrorKind::Unknown) {
+            self.schedule.fail(format!(
+                "{action}结果未知（可能已提交）：{}；按 r 刷新确认，不要盲目重试",
+                error.message
+            ));
+        } else {
+            self.schedule
+                .fail(format!("{action}失败：{}", error.message));
         }
     }
 

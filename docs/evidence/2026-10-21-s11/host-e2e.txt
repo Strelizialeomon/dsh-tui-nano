@@ -1,5 +1,5 @@
-✔ malformed frame is reported, subscription replays, shutdown is clean (1216.535208ms)
-✔ conversation surface submits, dedupes, and keeps official identity (2014.539167ms)
+✔ malformed frame is reported, subscription replays, shutdown is clean (1158.135458ms)
+✔ conversation surface submits, dedupes, and keeps official identity (1862.641708ms)
 ℹ tests 2
 ℹ suites 0
 ℹ pass 2
@@ -7,4 +7,4 @@
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 3263.632375
+ℹ duration_ms 3060.002333

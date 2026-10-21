@@ -643,8 +643,19 @@ impl ScheduleModel {
     /// Report a request failure.
     pub fn fail(&mut self, message: impl Into<String>) {
         self.busy = None;
+        if let Some(history) = self.history.as_mut() {
+            history.loading_older = false;
+        }
         self.error = Some(message.into());
         self.wants_refresh = true;
+    }
+
+    /// Report a catalog read failure without immediately requesting another
+    /// catalog; a persistent host error must not become a request loop.
+    pub fn fail_catalog(&mut self, message: impl Into<String>) {
+        self.busy = None;
+        self.error = Some(message.into());
+        self.wants_refresh = false;
     }
 
     /// Apply a create result: the record is official, but the list still comes
@@ -689,6 +700,10 @@ impl ScheduleModel {
         ));
         rows.push(Row::new(
             "官方不保证严格一次：会话回执写入后若任务写入失败或宿主崩溃，同一条提醒可能再次投递。",
+            RowKind::Dim,
+        ));
+        rows.push(Row::new(
+            "关闭会话归档时，有活跃任务会被官方拒绝；选择停止会删除全部活跃任务，取消归档不会恢复。",
             RowKind::Dim,
         ));
         self.push_status(rows);
@@ -1058,6 +1073,56 @@ mod tests {
         assert!(text
             .iter()
             .any(|line| line.contains("earlierRecordsPruned")));
+    }
+
+    #[test]
+    fn a_post_flush_write_failure_is_never_shown_as_success() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../bridge/test/fixtures/schedule-post-flush-write-failure.json"
+        ))
+        .unwrap();
+        let mut model = ScheduleModel::new();
+        model.open_view(None);
+        model.apply_catalog(&fixture["catalog"]).unwrap();
+        let rows: Vec<String> = model.rows().into_iter().map(|row| row.text).collect();
+        assert!(rows.iter().any(|row| row.contains("可能再次投递")));
+        assert!(rows.iter().any(|row| row.contains("最近回执：暂无")));
+        assert!(!rows.iter().any(|row| row.contains("已创建")));
+        model.selected = 0;
+        model.begin_history();
+        model.apply_history(&fixture["history"], false).unwrap();
+        let rows: Vec<String> = model.rows().into_iter().map(|row| row.text).collect();
+        assert!(rows.iter().any(|row| row.contains("还没有投递记录")));
+        assert!(rows.iter().any(|row| row.contains("不代表任务完成")));
+    }
+
+    #[test]
+    fn a_catalog_failure_does_not_retry_itself() {
+        let mut model = ScheduleModel::new();
+        model.open_view(None);
+        model.fail_catalog("nano/closed");
+        assert!(!model.take_refresh());
+        assert!(model.error.as_deref().unwrap().contains("nano/closed"));
+    }
+
+    #[test]
+    fn any_failure_clears_a_stuck_history_loading() {
+        let mut model = ScheduleModel::new();
+        model.open_view(None);
+        model.apply_catalog(&catalog()).unwrap();
+        model.begin_history();
+        model.history.as_mut().unwrap().loading_older = true;
+        model.fail("host closed");
+        assert!(!model.history.as_ref().unwrap().loading_older);
+    }
+
+    #[test]
+    fn the_list_states_the_archive_consequence() {
+        let mut model = ScheduleModel::new();
+        model.open_view(None);
+        model.apply_catalog(&catalog()).unwrap();
+        let rows: Vec<String> = model.rows().into_iter().map(|row| row.text).collect();
+        assert!(rows.iter().any(|row| row.contains("归档")));
     }
 
     #[test]
