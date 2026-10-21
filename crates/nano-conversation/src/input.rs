@@ -140,6 +140,30 @@ impl InputBuffer {
         self.cursor = 0;
     }
 
+    /// Place the cursor at a byte offset on a character boundary.
+    pub fn set_cursor(&mut self, cursor: usize) -> bool {
+        if cursor > self.text.len() || !self.text.is_char_boundary(cursor) {
+            return false;
+        }
+        let changed = self.cursor != cursor;
+        self.cursor = cursor;
+        changed
+    }
+
+    /// Replace a byte range and leave the cursor after the replacement.
+    pub fn replace_range(&mut self, start: usize, end: usize, value: &str) -> bool {
+        if start > end
+            || end > self.text.len()
+            || !self.text.is_char_boundary(start)
+            || !self.text.is_char_boundary(end)
+        {
+            return false;
+        }
+        self.text.replace_range(start..end, value);
+        self.cursor = start + value.len();
+        true
+    }
+
     /// Insert literal text at the cursor.
     pub fn insert_str(&mut self, value: &str) {
         if value.is_empty() {

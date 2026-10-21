@@ -4,6 +4,7 @@
 //! the input, queue, and status surfaces S02 owns, so the conversation host can
 //! be exercised in a real terminal before the reading layer exists.
 
+use nano_attachments::{AttachmentState, CandidateKind};
 use nano_conversation::{ConversationItem, MessageKind, PreviewView, ToolPreview, ToolStatus};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -22,14 +23,29 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         (app.model.inbox().len().min(4) as u16) + 1
     };
-    let input_rows = wrapped_input_rows(app, area.width.saturating_sub(4).max(1));
-    let input_height = input_rows.min(8) as u16 + 2;
+    let completion_height = if app.completion.visible() && app.picker.is_none() {
+        (app.completion.candidates().len().min(6) as u16) + 1
+    } else {
+        0
+    };
+    let attachment_rows = if app.picker.is_some() {
+        0
+    } else {
+        attachment_lines(app).len() as u16
+    };
+    let input_rows = if app.picker.is_some() {
+        1
+    } else {
+        wrapped_input_rows(app, area.width.saturating_sub(4).max(1))
+    };
+    let input_height = (attachment_rows + input_rows.min(8) as u16) + 2;
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
             Constraint::Min(3),
             Constraint::Length(queue_height),
+            Constraint::Length(completion_height),
             Constraint::Length(input_height),
             Constraint::Length(1),
         ])
@@ -40,8 +56,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if queue_height > 0 {
         draw_queue(frame, app, layout[2]);
     }
-    draw_input(frame, app, layout[3]);
-    draw_status(frame, app, layout[4], area.width);
+    if completion_height > 0 {
+        draw_completion(frame, app, layout[3]);
+    }
+    draw_input(frame, app, layout[4]);
+    draw_status(frame, app, layout[5], area.width);
 }
 
 fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
@@ -256,29 +275,47 @@ fn draw_queue(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
-    let title = match app.editing_queue() {
-        Some(message_id) => format!(" 编辑队列项 {message_id} · Enter 应用，Esc 取消 "),
-        None => " 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） "
-            .to_string(),
+    let title = if app.picker.is_some() {
+        " 附加文件 · 输入路径，Enter 确认，Esc 取消 ".to_string()
+    } else if let Some(message_id) = app.editing_queue() {
+        format!(" 编辑队列项 {message_id} · Enter 应用，Esc 取消 ")
+    } else {
+        " 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+Backspace 移除附件 "
+            .to_string()
     };
     let block = Block::default().borders(Borders::ALL).title(title);
     let inner = block.inner(area);
-    let width = inner.width.max(1);
-    let lines = input_lines(app, width as usize);
-    let total_rows = lines.len();
-    let (cursor_row, cursor_column) = input_cursor(app, width as usize);
+    let width = inner.width.max(1) as usize;
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut cursor_row = 0usize;
+    let cursor_column;
+    if let Some(picker) = &app.picker {
+        let prefix = "路径：";
+        lines.push(Line::from(vec![
+            Span::styled(prefix, Style::default().fg(Color::DarkGray)),
+            Span::raw(picker.path.clone()),
+        ]));
+        cursor_column = prefix.chars().map(display_width).sum::<usize>()
+            + picker.path.chars().map(display_width).sum::<usize>();
+    } else {
+        for (text, color) in attachment_lines(app) {
+            lines.push(Line::from(Span::styled(text, Style::default().fg(color))));
+        }
+        cursor_row = lines.len();
+        let (row, column) = input_cursor(app, width);
+        cursor_row += row;
+        cursor_column = column;
+        for text in input_lines(app, width) {
+            lines.push(Line::from(text));
+        }
+    }
     let viewport = inner.height as usize;
     let offset = if viewport == 0 {
         0
     } else {
         cursor_row.saturating_sub(viewport.saturating_sub(1))
     };
-    let visible: Vec<Line<'static>> = lines
-        .into_iter()
-        .skip(offset)
-        .take(viewport)
-        .map(Line::from)
-        .collect();
+    let visible: Vec<Line<'static>> = lines.into_iter().skip(offset).take(viewport).collect();
     frame.render_widget(block, area);
     frame.render_widget(Paragraph::new(Text::from(visible)), inner);
     if app.scene.focus().input_focused() && viewport > 0 {
@@ -291,7 +328,64 @@ fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
             inner.y + row.min(u16::MAX as usize) as u16,
         ));
     }
-    let _ = total_rows;
+}
+
+/// Attachment card lines shown above the input text.
+fn attachment_lines(app: &App) -> Vec<(String, Color)> {
+    let cards = app.attachments.current().ordered_cards();
+    let mut lines = Vec::new();
+    for card in cards.iter().take(3) {
+        let color = match &card.state {
+            AttachmentState::Ready => Color::Green,
+            AttachmentState::Uploading { .. } => Color::Yellow,
+            AttachmentState::Failed(_) | AttachmentState::Unknown(_) => Color::Red,
+        };
+        lines.push((format!("  {}", card.label()), color));
+    }
+    if cards.len() > 3 {
+        lines.push((
+            format!("  … 还有 {} 个附件", cards.len() - 3),
+            Color::DarkGray,
+        ));
+    }
+    lines
+}
+
+/// `@file` completion candidates above the input.
+fn draw_completion(frame: &mut Frame, app: &App, area: Rect) {
+    let title = format!(
+        " 文件补全（{} 项）· ↑↓ 选择 · Enter/Tab 插入 · Esc 关闭 ",
+        app.completion.candidates().len()
+    );
+    let block = Block::default().borders(Borders::TOP).title(title);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let mut lines = Vec::new();
+    for (index, candidate) in app.completion.candidates().iter().take(6).enumerate() {
+        let selected = index == app.completion.selected();
+        let marker = if selected { "▶" } else { " " };
+        let suffix = match candidate.kind {
+            CandidateKind::Directory => "/",
+            CandidateKind::File => "",
+        };
+        let style = if selected {
+            Style::default().fg(Color::Black).bg(Color::Cyan)
+        } else {
+            Style::default()
+        };
+        // A filesystem path may contain control characters; never let them
+        // reach the terminal as escape sequences.
+        let display: String = candidate
+            .path
+            .chars()
+            .map(|character| if character.is_control() { '?' } else { character })
+            .collect();
+        lines.push(Line::from(Span::styled(
+            format!("{marker} {display}{suffix}"),
+            style,
+        )));
+    }
+    frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
 
 fn draw_status(frame: &mut Frame, app: &App, area: Rect, width: u16) {

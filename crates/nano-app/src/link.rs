@@ -60,12 +60,21 @@ pub enum LinkEvent {
     Fatal(String),
 }
 
+/// One locally tracked request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestHandle {
+    /// Local id used in `RequestDone`.
+    pub id: u64,
+    /// Protocol request id, usable with `nano.cancelRequest`.
+    pub protocol_id: String,
+}
+
 /// Shared handle to the host worker threads.
 pub struct HostLink {
     /// Incoming link events.
     pub events: Receiver<LinkEvent>,
-    /// Outgoing request channel.
-    commands: Sender<(u64, String, Value)>,
+    /// Sender cloned by per-request waiter threads.
+    event_tx: Sender<LinkEvent>,
     /// The owning host handle, used for the final ordered shutdown.
     host: Host,
     /// Stops the event loop thread.
@@ -83,7 +92,6 @@ impl HostLink {
         let host = Host::spawn(new_runtime_id(), 1, root_session_id, mode, options)
             .map_err(|error| format!("could not spawn the host: {error}"))?;
         let (event_tx, event_rx) = channel();
-        let (command_tx, command_rx) = channel::<(u64, String, Value)>();
         let stop = Arc::new(AtomicBool::new(false));
 
         let startup_host = host.clone();
@@ -145,25 +153,9 @@ impl HostLink {
             }
         });
 
-        let command_host = host.clone();
-        let command_events = event_tx;
-        std::thread::spawn(move || {
-            while let Ok((id, method, params)) = command_rx.recv() {
-                let result = command_host
-                    .request(&method, params)
-                    .map_err(classify_request_error);
-                if command_events
-                    .send(LinkEvent::RequestDone { id, result })
-                    .is_err()
-                {
-                    return;
-                }
-            }
-        });
-
         Ok(Self {
             events: event_rx,
-            commands: command_tx,
+            event_tx,
             host,
             stop,
             counter: AtomicU64::new(1),
@@ -172,11 +164,32 @@ impl HostLink {
 
     /// Send one request; returns the local id used in `RequestDone`.
     pub fn request(&self, method: &str, params: Value) -> Result<u64, String> {
+        self.request_handle(method, params).map(|handle| handle.id)
+    }
+
+    /// Send one request and keep its protocol id for cancellation.
+    pub fn request_handle(&self, method: &str, params: Value) -> Result<RequestHandle, String> {
         let id = self.counter.fetch_add(1, Ordering::SeqCst);
-        self.commands
-            .send((id, method.to_string(), params))
-            .map_err(|_| "the host request worker is gone".to_string())?;
-        Ok(id)
+        let pending = self
+            .host
+            .start_request(method, params)
+            .map_err(|error| format!("{error}"))?;
+        let protocol_id = pending.id().to_string();
+        let timeout = self.host.request_timeout();
+        let events = self.event_tx.clone();
+        std::thread::spawn(move || {
+            let result = pending.wait(timeout).map_err(classify_request_error);
+            let _ = events.send(LinkEvent::RequestDone { id, result });
+        });
+        Ok(RequestHandle { id, protocol_id })
+    }
+
+    /// Ask the host to cancel one in-flight request by protocol id.
+    pub fn cancel_request(&self, protocol_id: &str) -> Result<u64, String> {
+        self.request(
+            "nano.cancelRequest",
+            serde_json::json!({ "id": protocol_id }),
+        )
     }
 
     /// Run the one ordered shutdown after the terminal is restored.

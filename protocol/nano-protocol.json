@@ -1,9 +1,9 @@
 {
   "contract": "dsh-tui-nano/nano-protocol",
-  "contractVersion": "1.0.0",
+  "contractVersion": "1.1.0",
   "protocol": {
     "major": 1,
-    "minor": 0
+    "minor": 1
   },
   "namespace": "nano.*",
   "sourceOfTruth": "This file is the single machine-checkable definition of the Nano host protocol. Both the TypeScript bridge and the Rust runtime load it in tests; method tables, limits, error codes, lifecycle edges, event kinds and fixtures are compared against each implementation so neither side can drift silently.",
@@ -209,6 +209,42 @@
     {
       "code": 1018,
       "name": "nano/conversation/too-large"
+    },
+    {
+      "code": 1019,
+      "name": "nano/attachments/receipt-unknown"
+    },
+    {
+      "code": 1020,
+      "name": "nano/attachments/receipt-committed"
+    },
+    {
+      "code": 1021,
+      "name": "nano/attachments/receipt-incomplete"
+    },
+    {
+      "code": 1022,
+      "name": "nano/attachments/chunk-sequence"
+    },
+    {
+      "code": 1023,
+      "name": "nano/attachments/image-invalid"
+    },
+    {
+      "code": 1024,
+      "name": "nano/attachments/model-no-images"
+    },
+    {
+      "code": 1025,
+      "name": "nano/attachments/limit"
+    },
+    {
+      "code": 1026,
+      "name": "nano/attachments/file-failed"
+    },
+    {
+      "code": 1027,
+      "name": "nano/file-references/failed"
     }
   ],
   "shapes": {
@@ -255,7 +291,29 @@
       "rootSessionId": "string",
       "session": "sessionFacts",
       "capabilities": "capabilityMap",
-      "limits": "limits"
+      "limits": "limits",
+      "attachmentLimits": "attachmentLimits?"
+    },
+    "attachmentLimits": {
+      "maxImageBytes": "integer",
+      "maxImagesPerMessage": "integer",
+      "maxMessageImageBytes": "integer",
+      "maxImagePixels": "integer",
+      "maxImageDimension": "integer",
+      "mediaTypes": "array:string",
+      "maxChunkBytes": "integer",
+      "fileAdmission": "enum:verbatim|unsupported"
+    },
+    "fileReferenceCandidate": {
+      "path": "string",
+      "kind": "enum:file|directory"
+    },
+    "attachmentReceipt": {
+      "receiptId": "string",
+      "kind": "enum:image|file",
+      "ready": "boolean",
+      "file": "object?",
+      "image": "object?"
     },
     "startupError": {
       "code": "enum:occupied|startup-failed|cleanup-failed|unsupported",
@@ -588,11 +646,44 @@
       }
     },
     {
+      "name": "nano.attachment.begin",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S06",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address",
+          "receiptId",
+          "kind"
+        ],
+        "optional": [
+          "name",
+          "mediaType",
+          "bytes"
+        ]
+      },
+      "paramsSemantics": {
+        "kind": "enum:image|file",
+        "mediaType": "enum:image/png|image/jpeg|image/webp|image/gif",
+        "bytes": "declared exact source byte length; checked at finish"
+      },
+      "result": {
+        "shape": "attachmentReceipt",
+        "required": [
+          "receiptId",
+          "kind",
+          "ready"
+        ],
+        "optional": []
+      }
+    },
+    {
       "name": "nano.attachment.chunk",
       "direction": "client-to-host",
       "kind": "request",
       "owner": "S06",
-      "status": "reserved",
+      "status": "implemented",
       "params": {
         "required": [
           "receiptId",
@@ -603,6 +694,80 @@
       },
       "paramsSemantics": {
         "bytes": "base64; maxRawBytes=49152"
+      },
+      "result": {
+        "required": [
+          "receiptId",
+          "received",
+          "nextSequence"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.attachment.finish",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S06",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "receiptId"
+        ],
+        "optional": []
+      },
+      "result": {
+        "shape": "attachmentReceipt",
+        "required": [
+          "receiptId",
+          "kind",
+          "ready"
+        ],
+        "optional": [
+          "file",
+          "image"
+        ]
+      }
+    },
+    {
+      "name": "nano.attachment.discard",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S06",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "receiptId"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "discarded"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.fileReferences.list",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S06",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address",
+          "query"
+        ],
+        "optional": [
+          "limit"
+        ]
+      },
+      "result": {
+        "required": [
+          "candidates"
+        ],
+        "optional": []
       }
     },
     {
@@ -976,6 +1141,7 @@
     "sessionPersistence",
     "sessionQuery",
     "attachments",
+    "fileReferences",
     "userQuestions",
     "approval",
     "jobs",

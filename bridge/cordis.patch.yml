@@ -14,5 +14,13 @@
     - id: tool-ask-user
       name: '@deepseek-ai/dsh-tool-ask-user'
 
+    # S06 `@file` completion. The minimal dsh-base composition does not mount
+    # the file-reference provider, while the web bundle does. Discovery is
+    # path-only; selecting a candidate never reads the file.
+    - id: file-reference-local
+      name: '@deepseek-ai/dsh-file-reference-local'
+      config:
+        maxResults: 20
+
 - id: hmr
   disabled: true

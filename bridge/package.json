@@ -8,6 +8,7 @@
     ".": "./runtime/index.mjs",
     "./runtime": "./runtime/index.mjs",
     "./conversation": "./conversation/service.mjs",
+    "./attachments": "./attachments/service.mjs",
     "./profile/install": "./profile/install.mjs",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
@@ -15,6 +16,7 @@
   "files": [
     "runtime/**/*.mjs",
     "conversation/**/*.mjs",
+    "attachments/**/*.mjs",
     "profile/**/*.mjs",
     "cordis.patch.yml",
     "README.md"

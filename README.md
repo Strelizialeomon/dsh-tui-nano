@@ -11,7 +11,9 @@
 
 S01「宿主与通信」已实施（执行单 [#4](https://github.com/Strelizialeomon/dsh-tui-nano/issues/4)）：Rust 运行时能启动一份真实的 `dsh --profile dsh-tui-nano` 宿主，通过 fd 3/4 交换版本化 NDJSON，完成握手、会话创建/恢复、订阅、关停预算和会话挂载互斥。
 
-S02「对话与输入」实施中（执行单 [#5](https://github.com/Strelizialeomon/dsh-tui-nano/issues/5)）：`nano` 终端应用可编辑多行输入、按地址保存草稿、提交/排队/插话/停止、同步官方 inbox、合并流式预览与持久消息；`bridge/conversation/` 提供 submit、queue 编辑/删除/插话、cancel、snapshot 与三类实时事件。transcript 的阅读层级与样式属 S03，模型选择属 S04；当前可用 `--provider/--model` 传入初始路由。
+S02「对话与输入」已实施（执行单 [#5](https://github.com/Strelizialeomon/dsh-tui-nano/issues/5)）：`nano` 终端应用可编辑多行输入、按地址保存草稿、提交/排队/插话/停止、同步官方 inbox、合并流式预览与持久消息；`bridge/conversation/` 提供 submit、queue 编辑/删除/插话、cancel、snapshot 与三类实时事件。transcript 的阅读层级与样式属 S03，模型选择属 S04；当前可用 `--provider/--model` 传入初始路由。
+
+S06「引用与图片」实施中（执行单 [#9](https://github.com/Strelizialeomon/dsh-tui-nano/issues/9)）：输入框支持 `@file` 补全（只插入路径，不读文件内容）、Alt+A 附加本地图片/通用文件、Alt+Backspace 移除本地卡片；图片在提交时交给官方 `ctx.attachments.admitPromptContent` 校验、规范化并持久化，通用文件经 chunk 上传后得到会话绑定的不透明回执，提交时解析为官方 `FileAttachmentRef`。附件的顺序与文本一致，失败保留草稿和卡片。
 
 ## 结构
 
@@ -20,8 +22,10 @@ S02「对话与输入」实施中（执行单 [#5](https://github.com/Strelizial
 | `protocol/` | `nano-protocol.json` 机器可校验契约；Rust 与 TypeScript 测试都读取它 |
 | `bridge/runtime/` | Cordis 插件、fd 3/4 传输、会话挂载账本、订阅、关停；profile 安装器 |
 | `bridge/conversation/` | 对话宿主：提交、官方 inbox、队列编辑/删除/插话、停止、快照、实时流 |
+| `bridge/attachments/` | 附件宿主：chunk 暂存、会话绑定回执、官方图片准入、通用文件保存、`@file` 发现 |
 | `crates/nano-runtime/` | Rust 侧：preflight、启动、握手、请求/事件、生命周期、关停四事实 |
 | `crates/nano-conversation/` | 输入缓冲、按地址草稿、提交状态机、队列投影、流式预览、消息历史、场景/焦点 |
+| `crates/nano-attachments/` | `@file` 语法、图片本地检查、有序附件卡片、补全取消与陈旧响应防护 |
 | `crates/nano-app/` | `nano` 终端应用：键位、渲染、宿主连接与退出 |
 | `docs/specs/2026-10-20-nano-v1/` | 已合并的规格 |
 
@@ -48,6 +52,12 @@ NANO_E2E=1 node --test bridge/test/integration/host.test.mjs
 
 # 真实 PTY 证据（输入、粘贴、提交、失败可见、干净退出）
 python3 scripts/pty-evidence.py
+
+# S06 真实 PTY 证据（@ 补全、附件选择、图片上传、顺序回显、干净退出）
+python3 scripts/pty-evidence-attachments.py
+
+# S06 真实宿主测试（官方附件服务、文件保存、顺序准入、恢复重放）
+NANO_E2E=1 node --test bridge/test/integration/attachments.test.mjs
 ```
 
 前提：本机 `node`、`dsh`（精确 `0.2.1-rc.2`）与 Rust `stable` 可用。集成测试使用临时 `DSH_HOME` 和临时数据根，不读写用户的 `~/.dsh` 会话。
@@ -63,3 +73,7 @@ python3 scripts/pty-evidence.py
 - 诊断只保留版本、方法、状态、计数、延迟和错误分类；宿主 stderr 只保留有界尾部用于启动失败定位，不写入日志文件，不主动记录用户正文/参数/环境值。
 - 凭据只在官方 provider 内解析；Nano 不复制凭据，不改 `$DSH_HOME` 的凭据、全局指令或 `storages/`。官方 profile 支持的凭据读取/迁移行为沿用官方实现，首次使用时应按官方说明核对。
 - 强杀、断电和主动逃逸的后代进程不作清理保证；S01 只对本窗口拥有的进程组负责，不扫描进程名。
+- S06 的 `@file` 补全来自官方 `dsh-file-reference-local`，只返回路径候选，选中后仍需模型调用文件工具才能读取内容；编辑器不把「已引用」显示成「已附上」。
+- 图片格式/字节/像素/边长/每消息数量与总量以宿主的 `hello.attachmentLimits` 为准；本地先做魔数、类型、尺寸检查，官方准入仍是最终判定。当前模型明确不支持图片时，整条消息在发送前被拒绝，草稿保留。
+- 通用文件按原字节保存，模型侧收到的是官方生成的文件名/字节数/摘要前缀句柄；执行文件系统能映射时才有只读路径。Nano 不自行计算摘要，也不把本地路径写进会话事件。
+- 子代理入口属 S12；本份在协议校验层规定子代理只收图片、通用文件被拒绝，但当前窗口没有子代理输入入口。

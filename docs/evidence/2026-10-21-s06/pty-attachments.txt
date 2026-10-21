@@ -1,0 +1,169 @@
+{
+  "ok": true,
+  "checks": [
+    [
+      "connected",
+      true
+    ],
+    [
+      "completion visible",
+      true
+    ],
+    [
+      "candidate path",
+      true
+    ],
+    [
+      "mention inserted",
+      true
+    ],
+    [
+      "completion closed",
+      true
+    ],
+    [
+      "picker visible",
+      true
+    ],
+    [
+      "image card ready",
+      true
+    ],
+    [
+      "ordered echo",
+      true
+    ],
+    [
+      "turn failure surfaced",
+      true
+    ],
+    [
+      "clean exit",
+      true
+    ]
+  ],
+  "exit": 0
+}
+--- SCREEN completion ---
+ nano  work · 已连接 · 空闲 · seq 3 · 队列 0
+输入消息后按 Enter 发送。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 文件补全（1 项）· ↑↓ 选择 · Enter/Tab 插入 · Esc 关闭 ─────────────────────────────────────────────────────────────────
+▶ src/main.rs
+┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+Backspace 移除附件 ───────────────────────────────────┐
+│@mai                                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+Enter 发送 · Alt+Enter 插话 · @ 引用文件 · Alt+A 附加 · Alt+Backspace 移除附件 · Ctrl+J 换行 · Esc 停止 · Ctrl+C 退出
+--- SCREEN attachment ---
+ nano  work · 已连接 · 空闲 · seq 3 · 队列 0
+输入消息后按 Enter 发送。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+Backspace 移除附件 ───────────────────────────────────┐
+│  [图片] pixel.png · 70 B · 1×1 · 已就绪                                                                              │
+│@src/main.rs                                                                                                          │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+附件「pixel.png」已就绪
+--- SCREEN submitted ---
+ nano  work · 已连接 · 空闲 · seq 8 · 队列 0
+回合 （失败）
+agent "session-f5976e4c-3f67-4254-84d6-c4c0ce4220db" has no provider/model: set AgentOptions.provider and AgentOptions.m
+odel or supply both via the agent/request waterfall
+你（未确认）
+@src/main.rs[图片 pixel.png] look
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+Backspace 移除附件 ───────────────────────────────────┐
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+有消息在回合结束前未落盘，已标为未确认

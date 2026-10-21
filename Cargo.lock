@@ -278,11 +278,21 @@ name = "nano-app"
 version = "0.1.0"
 dependencies = [
  "crossterm",
+ "nano-attachments",
  "nano-conversation",
  "nano-runtime",
  "ratatui",
  "serde_json",
  "unicode-width 0.2.0",
+]
+
+[[package]]
+name = "nano-attachments"
+version = "0.1.0"
+dependencies = [
+ "nano-conversation",
+ "nano-runtime",
+ "serde_json",
 ]
 
 [[package]]

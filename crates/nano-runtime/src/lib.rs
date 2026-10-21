@@ -12,7 +12,7 @@ pub mod paths;
 pub mod protocol;
 pub mod protocol_error;
 
-pub use host::{Host, HostEvent, HostOptions, SessionMode, ShutdownOutcome};
+pub use host::{Host, HostEvent, HostOptions, PendingRequest, SessionMode, ShutdownOutcome};
 pub use lifecycle::{Lifecycle, LifecycleState};
 pub use paths::{Preflight, RuntimePaths};
 pub use protocol::{Capability, CapabilityStatus, Hello, ProtocolVersion, RpcError};
@@ -22,7 +22,7 @@ pub use protocol_error::{HostError, ProtocolError};
 pub const PROTOCOL_MAJOR: u32 = 1;
 
 /// Wire protocol minor version implemented by this crate.
-pub const PROTOCOL_MINOR: u32 = 0;
+pub const PROTOCOL_MINOR: u32 = 1;
 
 /// Hard frame limit shared with the bridge.
 pub const MAX_FRAME_BYTES: usize = 33_554_432;
@@ -81,7 +81,7 @@ pub const LIFECYCLE_TRANSITIONS: [(&str, &str); 15] = [
 ];
 
 /// Error code names shared with the bridge contract.
-pub const ERROR_CODE_NAMES: [(&str, i64); 23] = [
+pub const ERROR_CODE_NAMES: [(&str, i64); 32] = [
     ("jsonrpc/parse-error", -32700),
     ("jsonrpc/invalid-request", -32600),
     ("jsonrpc/method-not-found", -32601),
@@ -105,10 +105,19 @@ pub const ERROR_CODE_NAMES: [(&str, i64); 23] = [
     ("nano/conversation/steer-unavailable", 1016),
     ("nano/conversation/rejected", 1017),
     ("nano/conversation/too-large", 1018),
+    ("nano/attachments/receipt-unknown", 1019),
+    ("nano/attachments/receipt-committed", 1020),
+    ("nano/attachments/receipt-incomplete", 1021),
+    ("nano/attachments/chunk-sequence", 1022),
+    ("nano/attachments/image-invalid", 1023),
+    ("nano/attachments/model-no-images", 1024),
+    ("nano/attachments/limit", 1025),
+    ("nano/attachments/file-failed", 1026),
+    ("nano/file-references/failed", 1027),
 ];
 
 /// Method names implemented by this generation.
-pub const IMPLEMENTED_METHODS: [&str; 14] = [
+pub const IMPLEMENTED_METHODS: [&str; 19] = [
     "nano.hello",
     "nano.startupError",
     "nano.shutdown",
@@ -117,6 +126,11 @@ pub const IMPLEMENTED_METHODS: [&str; 14] = [
     "nano.cancelRequest",
     "nano.event",
     "nano.streamEnded",
+    "nano.attachment.begin",
+    "nano.attachment.chunk",
+    "nano.attachment.finish",
+    "nano.attachment.discard",
+    "nano.fileReferences.list",
     "nano.conversation.submit",
     "nano.conversation.editQueued",
     "nano.conversation.deleteQueued",

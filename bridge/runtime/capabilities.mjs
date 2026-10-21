@@ -10,6 +10,7 @@ const SERVICE_CAPABILITIES = Object.freeze({
   sessionPersistence: 'sessionPersistence',
   sessionQuery: 'sessionQuery',
   attachments: 'attachments',
+  fileReferences: 'fileReferences',
   userQuestions: 'userQuestions',
   approval: 'approval',
   jobs: 'jobs',
@@ -42,6 +43,19 @@ export function buildCapabilities(ctx, config) {
   capabilities.userQuestions = {
     status: 'unavailable',
     detail: 'the question answerer belongs to S03',
+  }
+  if (capabilities.attachments?.status === 'supported') {
+    capabilities.attachments = {
+      status: 'supported',
+      mode: 'images+files',
+      detail: 'images are admitted at submit time; generic files use session-bound receipts',
+    }
+  }
+  if (capabilities.fileReferences?.status === 'supported') {
+    capabilities.fileReferences = {
+      status: 'supported',
+      detail: 'path-only @file candidates from the official provider',
+    }
   }
   capabilities['tool-ask-user'] = {
     status: ctx.get('userQuestions') === undefined ? 'unsupported' : 'unavailable',
