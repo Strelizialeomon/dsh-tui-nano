@@ -81,7 +81,7 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         Span::raw(format!(
             " · seq {} · 队列 {}",
             app.model.seq(),
-            app.model.inbox().len()
+            app.model.inbox().total_count()
         )),
     ];
     if app.replay_truncated {
@@ -212,15 +212,17 @@ fn push_preview_tool(lines: &mut Vec<Line<'static>>, tool: &ToolPreview) {
 
 fn draw_queue(frame: &mut Frame, app: &App, area: Rect) {
     let focused = !app.scene.focus().input_focused();
+    let total = app.model.inbox().total_count();
+    let preview = if app.model.inbox().truncated {
+        format!(" · 预览 {}/{}", app.model.inbox().len(), total)
+    } else {
+        String::new()
+    };
     let title = format!(
         " 队列{}{} · 官方 inbox · {} 项（Alt+↑↓ 选择，Alt+E 编辑，Alt+D 删除，Alt+S 插话，Alt+X 清空并停止） ",
         if focused { "（焦点）" } else { "" },
-        if app.model.inbox().truncated {
-            " · 预览截断"
-        } else {
-            ""
-        },
-        app.model.inbox().len()
+        preview,
+        total
     );
     let block = Block::default().borders(Borders::TOP).title(title);
     let inner = block.inner(area);

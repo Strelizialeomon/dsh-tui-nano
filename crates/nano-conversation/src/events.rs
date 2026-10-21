@@ -197,6 +197,8 @@ pub fn parse_conversation_event(
                         .get("truncated")
                         .and_then(Value::as_bool)
                         .unwrap_or(false),
+                    payload.get("total").and_then(Value::as_u64).unwrap_or(0) as usize,
+                    payload.get("omitted").and_then(Value::as_u64).unwrap_or(0) as usize,
                 ),
             })
         }

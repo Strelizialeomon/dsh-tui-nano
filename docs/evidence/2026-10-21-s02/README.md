@@ -2,13 +2,14 @@
 
 ## 已执行
 
-- `cargo test`：nano-conversation 49 项 + 契约 5 项、nano-app 24 项、nano-runtime 单元/契约全绿。
+- `cargo test`：nano-conversation 51 项 + 契约 5 项、nano-app 25 项、nano-runtime 单元/契约全绿。
 - `node --test bridge/test/*.test.mjs`：65 项通过，含对话服务 18 项与契约夹具。
 - `cargo test -p nano-runtime --test integration -- --ignored --test-threads=1 --skip shutdown_budget_is_bounded_when_cleanup_hangs`：14 项真实宿主回归通过。
 - `NANO_E2E=1 node --test bridge/test/integration/host.test.mjs`：2 项通过；真实宿主验证 submit、requestId 去重、inbox 投影、resume 后从官方日志重放。
 - `python3 scripts/pty-evidence.py`：真实 PTY（120×40）启动真实 dsh profile；空提交被拒、括号粘贴多行、提交回显、输入清空、回合失败可见、Ctrl+C 干净退出。快照见 `pty-default.txt`。
-- 真实模型会话 1（用户授权，deepseek-official / deepseek-chat）：文本发送、流式接收、一次真实 bash 工具调用与结果、正式 `user/message` + `assistant/message`、turn completed。官方日志摘录见 `real-session.txt`。
+- 真实模型会话 1（用户授权，deepseek-official / deepseek-chat）：文本发送、应用内实时渲染（未做流式帧级抓包）、一次真实 bash 工具调用与结果、正式 `user/message` + `assistant/message`、turn completed。官方日志摘录见 `real-session.txt`。
 - 真实模型会话 2（用户授权，同一路由）：运行中 queue、Alt+S 插话（next-turn → next-step）、Alt+D 删除、Esc 停止保留队列、Alt+X 逐项清空。屏幕统计与官方 inbox splice 摘录见 `real-queue-session.txt`。
+- 刷新/重连后的重建：桥接真实宿主 E2E 覆盖 resume 后从官方日志重放；窗口级「退出再 `--resume`」未单独录屏。
 
 两次真实会话使用用户真实 `~/.dsh` 凭据（未复制），并把 profile 安装到 `~/.dsh/profiles/dsh-tui-nano`；会话数据根与 cwd 都是临时目录。摘录剔除了系统指令、运行时上下文和其他注入消息。
 

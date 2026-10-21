@@ -293,18 +293,21 @@ test('a discarded inbox item clears its accepted request id', () => {
   assert.equal(second.duplicate, false)
 })
 
-test('a huge inbox projection is bounded and flagged truncated', () => {
-  const huge = {
-    id: 'm-big',
+test('a huge CJK inbox projection is byte-bounded and reports omissions', () => {
+  const items = Array.from({ length: 64 }, (_, index) => ({
+    id: `m-${index}`,
     role: 'user',
-    content: [{ type: 'text', text: 'x'.repeat(300_000) }],
-    source: { kind: 'user', rpcId: 'r-big' },
-  }
-  const { service } = serviceFor({ nextTurn: [huge] })
+    content: [{ type: 'text', text: '汉'.repeat(1024) }],
+    source: { kind: 'user', rpcId: `r-${index}` },
+  }))
+  const { service } = serviceFor({ nextTurn: items, nextStep: items })
   const payload = service.inboxPayload()
   assert.equal(payload.truncated, true)
+  assert.equal(payload.total, 128)
+  assert.ok(payload.omitted > 0)
   assert.ok(Buffer.byteLength(JSON.stringify(payload), 'utf8') <= 262_144)
-  assert.equal(payload.inbox.nextTurn[0].id, 'm-big')
+  const parsed = JSON.parse(JSON.stringify(payload))
+  assert.ok(parsed.inbox.nextTurn.every((message) => message.content[0].text.length > 0))
 })
 
 test('live Agent events publish absolute conversation projections', () => {

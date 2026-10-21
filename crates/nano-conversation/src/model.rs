@@ -76,6 +76,8 @@ pub struct ConversationModel {
     address: SessionAddress,
     status: ConversationStatus,
     seq: u64,
+    baseline: u64,
+    last_applied_seq: Option<u64>,
     inbox: InboxView,
     history: ConversationHistory,
     previews: PreviewAccumulator,
@@ -92,6 +94,8 @@ impl ConversationModel {
             address,
             status: ConversationStatus::Idle,
             seq: 0,
+            baseline: 0,
+            last_applied_seq: None,
             inbox: InboxView::default(),
             history: ConversationHistory::default(),
             previews: PreviewAccumulator::default(),
@@ -166,23 +170,29 @@ impl ConversationModel {
         }
         match parse_conversation_event(kind, payload) {
             Ok(ConversationEvent::Status { address, status }) if address.matches(&self.address) => {
-                let changed = self.status != status;
+                let mut changed = self.status != status;
                 self.status = status;
-                if status == ConversationStatus::Idle
-                    && self.submissions.retire_missing(&self.inbox, &self.history) > 0
-                {
-                    self.last_notice = Some("有消息在回合结束前未落盘，已标为未确认".to_string());
+                if status == ConversationStatus::Idle {
+                    let retired = self.submissions.retire_missing(&self.inbox, &self.history);
+                    if retired > 0 {
+                        self.last_notice =
+                            Some("有消息在回合结束前未落盘，已标为未确认".to_string());
+                        changed = true;
+                    }
                 }
                 changed
             }
             Ok(ConversationEvent::Inbox { address, inbox }) if address.matches(&self.address) => {
-                let changed = self.inbox != inbox;
+                let mut changed = self.inbox != inbox;
                 self.inbox = inbox;
                 self.submissions.reconcile(&self.inbox, &self.history);
-                if self.status == ConversationStatus::Idle
-                    && self.submissions.retire_missing(&self.inbox, &self.history) > 0
-                {
-                    self.last_notice = Some("有消息在回合结束前未落盘，已标为未确认".to_string());
+                if self.status == ConversationStatus::Idle {
+                    let retired = self.submissions.retire_missing(&self.inbox, &self.history);
+                    if retired > 0 {
+                        self.last_notice =
+                            Some("有消息在回合结束前未落盘，已标为未确认".to_string());
+                        changed = true;
+                    }
                 }
                 changed
             }
@@ -210,6 +220,11 @@ impl ConversationModel {
             return false;
         }
         self.seq = self.seq.max(event.seq);
+        self.baseline = self.baseline.max(event.seq.saturating_add(1));
+        self.last_applied_seq = Some(
+            self.last_applied_seq
+                .map_or(event.seq, |seq| seq.max(event.seq)),
+        );
         let effect = self.history.apply(&event);
         if let Some(fact) = effect.user_message {
             if let Some(rpc_id) = fact.rpc_id {
@@ -256,6 +271,7 @@ impl ConversationModel {
             .ok_or_else(|| "snapshot.inbox is missing".to_string())?;
         self.status = status;
         self.seq = self.seq.max(seq);
+        self.baseline = self.baseline.max(seq);
         self.inbox = inbox;
         self.submissions.reconcile(&self.inbox, &self.history);
         if status == ConversationStatus::Idle
@@ -269,7 +285,30 @@ impl ConversationModel {
     /// Record how much of the durable log the replay covered.
     pub fn apply_replay_baseline(&mut self, seq: u64, truncated: bool) {
         self.seq = self.seq.max(seq);
+        self.baseline = self.baseline.max(seq);
         self.replay_truncated = truncated;
+    }
+
+    /// Last durable event actually applied, independent of the hello/snapshot
+    /// baseline (which is the *next* sequence number).
+    pub fn last_applied_seq(&self) -> Option<u64> {
+        self.last_applied_seq
+    }
+
+    /// Build a rebuild request that never asks for a seq past the current
+    /// baseline. Returns whether the replay window was truncated.
+    pub fn resubscribe_params(&self, kinds: &[&str]) -> (Value, bool) {
+        let start = self.last_applied_seq.map_or(0, |seq| seq.saturating_add(1));
+        let floor = self.baseline.saturating_sub(crate::MAX_REPLAY_EVENTS);
+        let from = start.max(floor).min(self.baseline);
+        (
+            json!({
+                "address": self.address.wire_value(),
+                "kinds": kinds,
+                "fromSeq": from,
+            }),
+            from > start,
+        )
     }
 
     /// Prepare one submission and insert its local echo.
@@ -379,6 +418,11 @@ impl ConversationModel {
         for request_id in ids {
             self.submissions.unknown(&request_id, "连接断开");
         }
+    }
+
+    /// Retire the echo for a queue item the user durably deleted.
+    pub fn cancel_submission(&mut self, message_id: &str) {
+        self.submissions.cancelled(message_id);
     }
 
     /// Recheck unknown submissions against the latest official facts.
@@ -583,6 +627,50 @@ mod tests {
             model.begin_submit("x", Delivery::Queue),
             Err(SubmitError::ChildAddress)
         );
+    }
+
+    #[test]
+    fn resubscribe_never_asks_past_the_baseline() {
+        let mut model = model();
+        model.apply_replay_baseline(5, false);
+        let (params, truncated) = model.resubscribe_params(&["session.event"]);
+        assert_eq!(params["fromSeq"], 0);
+        assert!(!truncated);
+        durable(
+            &mut model,
+            4,
+            "user/message",
+            json!({
+                "id": "u-1",
+                "role": "user",
+                "content": [{"type": "text", "text": "x"}],
+                "source": {"kind": "user"}
+            }),
+        );
+        let (params, _) = model.resubscribe_params(&["session.event"]);
+        assert_eq!(params["fromSeq"], 5);
+        durable(
+            &mut model,
+            7,
+            "user/message",
+            json!({
+                "id": "u-2",
+                "role": "user",
+                "content": [{"type": "text", "text": "y"}],
+                "source": {"kind": "user"}
+            }),
+        );
+        let (params, _) = model.resubscribe_params(&["session.event"]);
+        assert_eq!(params["fromSeq"], 8);
+    }
+
+    #[test]
+    fn resubscribe_marks_a_truncated_replay_window() {
+        let mut model = model();
+        model.apply_replay_baseline(30_000, false);
+        let (params, truncated) = model.resubscribe_params(&["session.event"]);
+        assert_eq!(params["fromSeq"], 20_000);
+        assert!(truncated);
     }
 
     #[test]

@@ -17,6 +17,10 @@ fn submission_limit_matches_the_contract() {
         contract["limits"]["maxSubmitTextBytes"].as_u64(),
         Some(nano_conversation::MAX_SUBMIT_TEXT_BYTES as u64)
     );
+    assert_eq!(
+        contract["limits"]["maxReplayEvents"].as_u64(),
+        Some(nano_conversation::MAX_REPLAY_EVENTS)
+    );
 }
 
 #[test]

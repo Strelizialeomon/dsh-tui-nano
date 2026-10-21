@@ -10,7 +10,7 @@ use nano_conversation::{
     SceneState, SessionAddress, SubmitError,
 };
 use nano_runtime::Hello;
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::cli::Cli;
 use crate::link::{HostLink, LinkEvent, RequestError, RequestErrorKind};
@@ -72,7 +72,12 @@ pub enum Pending {
     /// Rebuild the observable subscription after `streamEnded failed`.
     Resubscribe,
     /// One item of a clear-and-stop batch.
-    ClearStopDelete,
+    ClearStopDelete {
+        /// Batch generation; stale responses are ignored.
+        generation: u64,
+        /// Official message id being deleted.
+        message_id: String,
+    },
 }
 
 /// One frame of application state.
@@ -123,10 +128,18 @@ pub struct App {
     pub resubscribe_at: Option<Instant>,
     /// A resubscribe request is in flight.
     pub resubscribing: bool,
+    /// Consecutive rebuild attempts without a durable event.
+    pub resubscribe_attempts: usize,
     /// Number of queued deletes still pending in a clear-and-stop batch.
     pub clear_stop_remaining: usize,
     /// Whether the clear-and-stop batch cancels the active turn after deleting.
     pub clear_stop_cancel: bool,
+    /// Batch generation for clear-and-stop responses.
+    pub clear_stop_generation: u64,
+    /// A delete in the current batch failed.
+    pub clear_stop_failed: bool,
+    /// After a truncated snapshot, run clear-and-stop on the full inbox.
+    pub clear_after_snapshot: bool,
     /// After a truncated queue projection, reopen this item's editor once a
     /// full snapshot arrives.
     pub edit_after_snapshot: Option<String>,
@@ -166,8 +179,12 @@ impl App {
             stop_pending: false,
             resubscribe_at: None,
             resubscribing: false,
+            resubscribe_attempts: 0,
             clear_stop_remaining: 0,
             clear_stop_cancel: false,
+            clear_stop_generation: 0,
+            clear_stop_failed: false,
+            clear_after_snapshot: false,
             edit_after_snapshot: None,
         }
     }
@@ -371,6 +388,9 @@ impl App {
         use nano_runtime::HostEvent;
         match event {
             HostEvent::Event(params) => {
+                if params.kind == "session.event" {
+                    self.resubscribe_attempts = 0;
+                }
                 let changed = self.model.apply_event(&params.kind, &params.payload);
                 if self.stop_pending
                     && params.kind == "conversation.status"
@@ -389,7 +409,7 @@ impl App {
             }
             HostEvent::StreamEnded(params) => {
                 if params.outcome == nano_runtime::protocol::StreamOutcome::Failed {
-                    if self.ready {
+                    if self.ready && self.resubscribe_attempts < 2 {
                         // The host is alive; only the observable subscription
                         // was closed. Rebuild it from the last applied seq.
                         self.notice = Some(format!(
@@ -399,8 +419,12 @@ impl App {
                         self.resubscribe_at = Some(Instant::now() + Duration::from_millis(500));
                         self.model.drop_previews();
                     } else {
+                        let root = &self.model.address().root_session_id;
+                        self.ready = false;
                         self.connection = Connection::Disconnected;
-                        self.error = Some("订阅已关闭".to_string());
+                        self.error = Some(format!(
+                            "订阅反复被关闭（可能含超过 S01 事件帧上限的持久事件）；会话 {root}，重启时用 --resume {root}"
+                        ));
                         self.model.mark_disconnected();
                     }
                 }
@@ -441,6 +465,19 @@ impl App {
         let Some(pending) = self.pending.remove(&id) else {
             return;
         };
+        if !self.ready
+            && matches!(
+                pending,
+                Pending::Resubscribe
+                    | Pending::ClearStopDelete { .. }
+                    | Pending::Snapshot
+                    | Pending::Cancel
+            )
+        {
+            self.resubscribing = false;
+            self.clear_stop_remaining = 0;
+            return;
+        }
         match pending {
             Pending::Submit { request_id, text } => match result {
                 Ok(value) => {
@@ -500,6 +537,7 @@ impl App {
             },
             Pending::Delete { message_id } => match result {
                 Ok(_) => {
+                    self.model.cancel_submission(&message_id);
                     self.notice = Some(format!("队列项 {message_id} 已删除（持久取消）"));
                 }
                 Err(error) => {
@@ -536,12 +574,20 @@ impl App {
                         if self.edit_after_snapshot.take().is_some() {
                             self.begin_queue_edit();
                         }
+                        if self.clear_after_snapshot {
+                            self.clear_after_snapshot = false;
+                            self.clear_and_stop();
+                        }
                     }
                     Err(message) => {
+                        self.edit_after_snapshot = None;
+                        self.clear_after_snapshot = false;
                         self.error = Some(format!("快照无效：{message}"));
                     }
                 },
                 Err(error) => {
+                    self.edit_after_snapshot = None;
+                    self.clear_after_snapshot = false;
                     self.error = Some(format!("读取会话状态失败：{}", error.message));
                 }
             },
@@ -553,17 +599,31 @@ impl App {
                         self.refresh_snapshot();
                     }
                     Err(error) => {
+                        let root = self.model.address().root_session_id.clone();
                         self.ready = false;
                         self.connection = Connection::Disconnected;
-                        self.error = Some(format!("订阅重建失败：{}", error.message));
+                        self.error = Some(format!(
+                            "订阅重建失败：{}；会话 {root}，重启时用 --resume {root}",
+                            error.message
+                        ));
                         self.model.mark_disconnected();
                     }
                 }
             }
-            Pending::ClearStopDelete => {
-                if let Err(error) = &result {
-                    if error.message.contains("queue-item-not-found") {
-                        self.refresh_snapshot();
+            Pending::ClearStopDelete {
+                generation,
+                message_id,
+            } => {
+                if generation != self.clear_stop_generation {
+                    return;
+                }
+                match result {
+                    Ok(_) => self.model.cancel_submission(&message_id),
+                    Err(error) => {
+                        self.clear_stop_failed = true;
+                        if error.message.contains("queue-item-not-found") {
+                            self.refresh_snapshot();
+                        }
                     }
                 }
                 self.clear_stop_remaining = self.clear_stop_remaining.saturating_sub(1);
@@ -580,11 +640,21 @@ impl App {
         if matches!(self.connection, Connection::Ready | Connection::Starting) {
             self.error = None;
             self.notice = None;
+            self.model.clear_notice();
         }
     }
 
     fn restore_draft(&mut self, request_id: &str, text: &str) {
         if self.submit_backups.remove(request_id).is_none() {
+            return;
+        }
+        if self.edit_target.is_some() {
+            // Do not merge a failed prompt into a queue edit; the queue text is
+            // the draft the user is actively editing. Report the failed text
+            // instead of silently writing it back.
+            self.error = Some(format!(
+                "发送失败，原稿未自动合并（正在编辑队列项）：{text}"
+            ));
             return;
         }
         let current = self.drafts.current().text().to_string();
@@ -887,6 +957,11 @@ impl App {
     }
 
     fn handle_queue_key(&mut self, key: KeyEvent) -> bool {
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            || key.modifiers.contains(KeyModifiers::ALT)
+        {
+            return false;
+        }
         if self.model.inbox().is_empty() {
             self.scene.focus_mut().pop();
             return true;
@@ -934,15 +1009,21 @@ impl App {
         if self.stop_pending {
             return "停止中：等待官方 idle 事实（草稿保留）".to_string();
         }
-        if !self.scene.focus().input_focused() {
-            return "队列焦点：↑↓ 选择 · Enter 编辑 · d 删除 · s 插话 · x 清空并停止 · Tab 返回"
-                .to_string();
-        }
         if let Some(error) = &self.error {
             return error.clone();
         }
         if let Some(notice) = &self.notice {
             return notice.clone();
+        }
+        if let Some(error) = self.model.last_error() {
+            return error.to_string();
+        }
+        if let Some(notice) = self.model.last_notice() {
+            return notice.to_string();
+        }
+        if !self.scene.focus().input_focused() {
+            return "队列焦点：↑↓ 选择 · Enter 编辑 · d 删除 · s 插话 · x 清空并停止 · Tab 返回"
+                .to_string();
         }
         if let Some(message_id) = &self.edit_target {
             return format!("编辑队列项 {message_id}：Enter 应用，Esc 取消");
@@ -955,6 +1036,9 @@ impl App {
 impl App {
     /// Time-based work: rebuild a closed observable subscription.
     pub fn tick(&mut self) -> bool {
+        if self.resubscribing {
+            return false;
+        }
         let Some(at) = self.resubscribe_at else {
             return false;
         };
@@ -962,6 +1046,17 @@ impl App {
             return false;
         }
         self.resubscribe_at = None;
+        if self.resubscribe_attempts >= 2 {
+            let root = self.model.address().root_session_id.clone();
+            self.ready = false;
+            self.connection = Connection::Disconnected;
+            self.error = Some(format!(
+                "订阅反复被关闭（可能含超过 S01 事件帧上限的持久事件）；会话 {root}，重启时用 --resume {root}"
+            ));
+            self.model.mark_disconnected();
+            return true;
+        }
+        self.resubscribe_attempts += 1;
         self.send_resubscribe();
         true
     }
@@ -973,16 +1068,15 @@ impl App {
         let Some(link) = &self.link else {
             return;
         };
-        let params = json!({
-            "address": self.model.address().wire_value(),
-            "kinds": [
-                "session.event",
-                "conversation.status",
-                "conversation.inbox",
-                "conversation.stream"
-            ],
-            "fromSeq": self.model.seq().saturating_add(1),
-        });
+        let (params, replay_truncated) = self.model.resubscribe_params(&[
+            "session.event",
+            "conversation.status",
+            "conversation.inbox",
+            "conversation.stream",
+        ]);
+        if replay_truncated {
+            self.notice = Some("重连回放窗口超过上限；从较新的 seq 开始重建".to_string());
+        }
         match link.request("nano.subscribe", params) {
             Ok(id) => {
                 self.resubscribing = true;
@@ -1005,6 +1099,16 @@ impl App {
             self.error = Some("宿主未就绪".to_string());
             return;
         }
+        if self.clear_stop_remaining > 0 {
+            self.notice = Some("清空批次进行中；等待官方删除回执".to_string());
+            return;
+        }
+        if self.model.inbox().truncated {
+            self.clear_after_snapshot = true;
+            self.notice = Some("队列投影被截断；正在读取完整快照后再清空".to_string());
+            self.refresh_snapshot();
+            return;
+        }
         let ids: Vec<String> = self
             .model
             .inbox()
@@ -1023,6 +1127,9 @@ impl App {
         let Some(link) = &self.link else {
             return;
         };
+        self.clear_stop_generation = self.clear_stop_generation.wrapping_add(1);
+        let generation = self.clear_stop_generation;
+        self.clear_stop_failed = false;
         self.clear_stop_remaining = 0;
         self.clear_stop_cancel = cancel_after;
         self.notice = Some(format!(
@@ -1035,9 +1142,16 @@ impl App {
             match link.request("nano.conversation.deleteQueued", params) {
                 Ok(id) => {
                     self.clear_stop_remaining += 1;
-                    self.pending.insert(id, Pending::ClearStopDelete);
+                    self.pending.insert(
+                        id,
+                        Pending::ClearStopDelete {
+                            generation,
+                            message_id: message_id.clone(),
+                        },
+                    );
                 }
                 Err(message) => {
+                    self.clear_stop_failed = true;
                     self.error = Some(format!("删除请求未能发出：{message}"));
                 }
             }
@@ -1049,11 +1163,16 @@ impl App {
 
     fn finish_clear_stop(&mut self) {
         let cancel = self.clear_stop_cancel;
+        let failed = self.clear_stop_failed;
         self.clear_stop_cancel = false;
+        self.clear_stop_failed = false;
+        self.refresh_snapshot();
         if cancel && self.model.status() == nano_conversation::ConversationStatus::Running {
             self.stop_turn();
+        } else if failed {
+            self.notice = Some("部分队列项未删除；已刷新官方 inbox 并显示剩余项".to_string());
         } else {
-            self.notice = Some("队列已逐项清空（持久取消；已 claim 的步骤不保证回滚）".to_string());
+            self.notice = Some("清空请求已逐项发出；以官方 inbox 为准".to_string());
         }
     }
 }
@@ -1329,6 +1448,25 @@ mod tests {
         )));
         assert_eq!(app.connection, Connection::Ready);
         assert!(app.resubscribe_at.is_some());
+    }
+
+    #[test]
+    fn repeated_stream_failures_stop_retrying() {
+        let mut app = app();
+        app.ready = true;
+        app.connection = Connection::Ready;
+        app.resubscribe_attempts = 2;
+        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::StreamEnded(
+            nano_runtime::protocol::StreamEndedParams {
+                runtime_id: "rt".into(),
+                generation: 1,
+                subscription_id: "sub-1".into(),
+                outcome: nano_runtime::protocol::StreamOutcome::Failed,
+                reason: Some("too large".into()),
+            },
+        )));
+        assert_eq!(app.connection, Connection::Disconnected);
+        assert!(app.error.as_deref().unwrap().contains("S01"));
     }
 
     #[test]

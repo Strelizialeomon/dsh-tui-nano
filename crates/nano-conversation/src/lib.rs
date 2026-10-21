@@ -50,6 +50,9 @@ pub const MAX_TOTAL_PREVIEW_BYTES: usize = 1024 * 1024;
 /// remains the full history.
 pub const MAX_HISTORY_ITEMS: usize = 2_000;
 
+/// Maximum durable events replayed by one subscription; matches the S01 contract.
+pub const MAX_REPLAY_EVENTS: u64 = 10_000;
+
 /// Maximum UTF-8 bytes in one submission. Kept below the bridge's per-event
 /// frame budget (262144 bytes) so one prompt cannot close the subscription via
 /// its own inbox projection; the bridge rejects the same limit.

@@ -161,3 +161,17 @@ S02 提供唯一的场景接口（scene）和焦点接口（focus），供 S03-S
 | 对抗-8/9/10/11/12/14/15/16 | minor | 队列焦点吞键/快捷键泄漏/重复 Alt+E/多行回显/队列窗口/预览 revision/bash 误判/raw mode 残留 | 均已修：焦点先判、队列空自动回输入、重复 Alt+E 忽略、回显按行包裹、队列窗口跟随选中、revision 重建预览、bash 启发式只信非 user source、终端初始化失败显式恢复 raw mode。 |
 
 用户批准的范围例外：S02 接受启动时的初始 provider/model/effort 路由（`--provider/--model/--effort`），只用于把真实官方 Agent 引导到一条已注册路由；模型选择 UI、切换、默认值仍归 S04。该例外仅存在于启动配置，不新增用户可见的模型管理界面。
+
+2026-10-21 修订后复核（同档重审，2 个只读 agent，只审 `dca278b..e55d461` delta；原文见 PR #19 评论）。处置：
+
+| # | 严重度 | 发现 | 处置 |
+| --- | --- | --- | --- |
+| 复核-1 | blocker | 重订阅 `fromSeq = model.seq()+1` 越过宿主 baseline | 新增 `last_applied_seq`（只记真正应用的 durable 事件）与 `resubscribe_params`：`from = clamp(last_applied+1, baseline-maxReplay, baseline)`；bridge 对 `start > baseline` 钳到 baseline。测试覆盖 baseline 5 无事件、已应用 seq 4、seq 7、超窗口。 |
+| 复核-2 | major | inbox 有界预览按码元/条数裁，CJK 仍可超 256 KiB | 改为全局字节预算（`maxEventFrameBytes - 4096`），逐条累加并按码点切片（`Array.from`），最终复核序列化字节；payload 增加 `total`/`omitted`，UI 显示「预览 M/N」。CJK 测试 128×1024 字。 |
+| 复核-3 | major | replay 期间订阅被关仍回 Ok，客户端无限重连 | `subscribe` 在返回前检查 `subscription.closed` 并抛 `nano/unsupported`；客户端最多连续 2 次重建，之后显式 Disconnected + `--resume` 提示；`tick` 在请求在飞时保留定时器；durable 事件到达后重置计数。 |
+| 复核-4 | major | Alt+X 只看截断预览、只删可见项却称已清空 | `truncated` 时先 snapshot 再清空；批次带 generation，部分失败显示「部分队列项未删除」并刷新官方 inbox；不再无条件宣称已清空。 |
+| 复核-5 | major | 连按 Alt+X 打乱计数/提前 cancel | 批次在飞时忽略再次 Alt+X；`Pending::ClearStopDelete { generation, messageId }` 忽略旧批次响应。 |
+| 复核-6 | major | 删除队列项后回显复活 | 删除/清空成功时 `cancel_submission(messageId)` 退休回显；idle 的 `retire_missing` 不再把已取消消息标成未确认。 |
+| 复核-minor | minor | block-end 字节泄漏、队列焦点修饰键、status 提示顺序、edit_after_snapshot 泄漏、编辑中失败稿合并、终端 kitty 标志残留/2s 探测、宿主死亡错误被覆盖、协议 address shape 缺 parent/mode、UI 队列总数 | 均已修：账本只在成功替换时移动字节、队列焦点只接受无修饰键、错误/通知优先于焦点提示并消费 model notice、Snapshot 失败清 pending 编辑、编辑中不合并失败稿、kitty 无条件 push/失败 pop 且不再探测、未就绪后忽略重连/清空响应、协议 address shape 补可选字段、UI 用 total/omitted。 |
+| 残余 | — | 单条 durable `session.event` 超过 S01 的 256 KiB 事件帧上限仍无法传输 | 属 S01 协议边界；S02 不再无限重连，显式失败并给 `--resume` 提示。彻底解决需 S01 分片/提高事件帧上限，不在本份静默改。 |
+| 残余 | — | S06 已就绪附件仍不能提交 | S02 已提供 `OrderedContent` 与提交边界；bridge 目前只接受 text，等 S06 接入附件回执后扩展。 |

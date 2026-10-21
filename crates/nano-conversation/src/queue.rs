@@ -80,6 +80,10 @@ pub struct InboxView {
     /// The live event carried bounded previews; a snapshot is required before
     /// editing. The snapshot response is not truncated.
     pub truncated: bool,
+    /// Total items before preview truncation; 0 means unknown/use `len`.
+    pub total: usize,
+    /// Items omitted from the preview.
+    pub omitted: usize,
 }
 
 impl InboxView {
@@ -89,13 +93,17 @@ impl InboxView {
             next_turn: parse_list(value.get("nextTurn"), QueueTarget::NextTurn),
             next_step: parse_list(value.get("nextStep"), QueueTarget::NextStep),
             truncated: false,
+            total: 0,
+            omitted: 0,
         }
     }
 
-    /// Parse a live event projection and its `truncated` flag.
-    pub fn from_event(inbox: &Value, truncated: bool) -> Self {
+    /// Parse a live event projection and its truncation facts.
+    pub fn from_event(inbox: &Value, truncated: bool, total: usize, omitted: usize) -> Self {
         let mut view = Self::from_value(inbox);
         view.truncated = truncated;
+        view.total = total;
+        view.omitted = omitted;
         view
     }
 
@@ -104,9 +112,18 @@ impl InboxView {
         self.next_turn.is_empty() && self.next_step.is_empty()
     }
 
-    /// Total number of pending items.
+    /// Number of items present in this projection.
     pub fn len(&self) -> usize {
         self.next_turn.len() + self.next_step.len()
+    }
+
+    /// Total items the official inbox holds, including omitted previews.
+    pub fn total_count(&self) -> usize {
+        if self.total > 0 {
+            self.total
+        } else {
+            self.len()
+        }
     }
 
     /// All items in official order: next turn, then next step.

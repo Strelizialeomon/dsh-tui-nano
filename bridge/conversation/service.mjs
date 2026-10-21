@@ -258,22 +258,50 @@ export class ConversationService {
     this.hub.publish('conversation.inbox', this.inboxPayload())
   }
 
-  /** Full projection when it fits; otherwise bounded previews with a flag. */
+  /** Full projection when it fits; otherwise a byte-bounded preview. */
   inboxPayload() {
     const full = { address: this.address, inbox: this.inboxSnapshot() }
-    if (Buffer.byteLength(JSON.stringify(full), 'utf8') <= LIMITS.maxEventFrameBytes - 2048) return full
-    const preview = (items) => items.slice(0, 64).map((message) => ({
-      ...message,
-      content: [{ type: 'text', text: textOf(message.content).slice(0, 1024) }],
-    }))
-    return {
+    const limit = LIMITS.maxEventFrameBytes - 2048
+    if (Buffer.byteLength(JSON.stringify(full), 'utf8') <= limit) return full
+
+    const budget = LIMITS.maxEventFrameBytes - 4096
+    const total = full.inbox.nextTurn.length + full.inbox.nextStep.length
+    const payload = {
       address: this.address,
-      inbox: {
-        nextTurn: preview(full.inbox.nextTurn),
-        nextStep: preview(full.inbox.nextStep),
-      },
+      inbox: { nextTurn: [], nextStep: [] },
       truncated: true,
+      total,
+      omitted: 0,
     }
+    let used = Buffer.byteLength(JSON.stringify(payload), 'utf8')
+    const add = (items, target) => {
+      for (const message of items) {
+        const preview = {
+          ...message,
+          content: [{ type: 'text', text: codePointSlice(textOf(message.content), 1024) }],
+        }
+        const size = Buffer.byteLength(JSON.stringify(preview), 'utf8') + 1
+        if (used + size > budget) {
+          payload.omitted += 1
+          continue
+        }
+        target.push(preview)
+        used += size
+      }
+    }
+    add(full.inbox.nextTurn, payload.inbox.nextTurn)
+    add(full.inbox.nextStep, payload.inbox.nextStep)
+    // The size estimate includes commas and brackets approximately; verify and
+    // drop the tail until the serialized frame is safely inside the limit.
+    while (
+      Buffer.byteLength(JSON.stringify(payload), 'utf8') > limit &&
+      (payload.inbox.nextStep.length > 0 || payload.inbox.nextTurn.length > 0)
+    ) {
+      if (payload.inbox.nextStep.length > 0) payload.inbox.nextStep.pop()
+      else payload.inbox.nextTurn.pop()
+      payload.omitted += 1
+    }
+    return payload
   }
 
   /** Drop the accepted cache entry for a message that was durably cancelled. */
@@ -367,6 +395,11 @@ export function validateContent(content) {
     )
   }
   return blocks
+}
+
+/** Slice by code point so a surrogate pair is never split. */
+function codePointSlice(text, count) {
+  return Array.from(text).slice(0, count).join('')
 }
 
 /** Concatenate text blocks for a bounded preview. */

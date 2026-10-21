@@ -108,24 +108,27 @@ impl TerminalGuard {
         enable_raw_mode()?;
         // Any failure after raw mode must restore it; the guard is not
         // constructed yet, so its Drop cannot run.
+        let mut enhanced_keyboard = false;
         let result = (|| -> io::Result<Self> {
             let mut stdout = io::stdout();
             execute!(stdout, EnableBracketedPaste)?;
             if alt_screen {
                 execute!(stdout, EnterAlternateScreen)?;
             }
-            // Disambiguate Shift+Enter from Enter where the terminal supports
-            // the kitty keyboard protocol. Ctrl+J remains the fallback.
-            let enhanced_keyboard =
-                crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
-            if enhanced_keyboard {
-                execute!(
-                    stdout,
-                    PushKeyboardEnhancementFlags(
-                        KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                            | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
-                    )
-                )?;
+            // Ask for disambiguated keys where supported. Unsupported terminals
+            // ignore the sequence; Ctrl+J remains the reliable newline key. Do
+            // not probe with supports_keyboard_enhancement(), which blocks up
+            // to two seconds when the terminal does not answer.
+            if execute!(
+                stdout,
+                PushKeyboardEnhancementFlags(
+                    KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                        | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                )
+            )
+            .is_ok()
+            {
+                enhanced_keyboard = true;
             }
             let backend = CrosstermBackend::new(io::stdout());
             let terminal = Terminal::new(backend)?;
@@ -138,8 +141,11 @@ impl TerminalGuard {
         match result {
             Ok(guard) => Ok(guard),
             Err(error) => {
-                let _ = disable_raw_mode();
                 let mut stdout = io::stdout();
+                if enhanced_keyboard {
+                    let _ = execute!(stdout, PopKeyboardEnhancementFlags);
+                }
+                let _ = disable_raw_mode();
                 let _ = execute!(stdout, DisableBracketedPaste);
                 if alt_screen {
                     let _ = execute!(stdout, LeaveAlternateScreen);

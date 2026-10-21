@@ -55,13 +55,13 @@ export class SubscriptionHub {
     if (!Number.isInteger(start) || start < 0) {
       throw new RpcError('jsonrpc/invalid-params', 'fromSeq must be a non-negative integer')
     }
-    if (start > baseline) {
-      throw new RpcError('jsonrpc/invalid-params', `fromSeq ${String(start)} is past the current seq ${String(baseline)}`)
-    }
-    if (baseline - start > LIMITS.maxReplayEvents) {
+    // A client that tracks the next durable seq can legitimately send
+    // baseline + 1. Clamp instead of failing the rebuild.
+    const clamped = start > baseline ? baseline : start
+    if (baseline - clamped > LIMITS.maxReplayEvents) {
       throw new RpcError(
         'jsonrpc/invalid-params',
-        `replay window ${String(baseline - start)} exceeds maxReplayEvents ${String(LIMITS.maxReplayEvents)}; request a later fromSeq`,
+        `replay window ${String(baseline - clamped)} exceeds maxReplayEvents ${String(LIMITS.maxReplayEvents)}; request a later fromSeq`,
       )
     }
 
@@ -76,16 +76,25 @@ export class SubscriptionHub {
     }
     this.subscriptions.set(subscription.id, subscription)
     try {
-      if (start < baseline && subscription.kinds.includes('session.event')) {
-        await this.replay(subscription, start, baseline, signal)
+      if (clamped < baseline && subscription.kinds.includes('session.event')) {
+        await this.replay(subscription, clamped, baseline, signal)
       }
       const delivered = subscription.delivered ?? new Set()
       for (const payload of subscription.buffer) {
-        if (payload.seq >= start && !delivered.has(payload.seq)) this.deliver(subscription, payload)
+        if (payload.seq >= clamped && !delivered.has(payload.seq)) this.deliver(subscription, payload)
       }
       subscription.buffer = []
       subscription.delivered = undefined
       subscription.paused = false
+      if (subscription.closed) {
+        // The writer closed the subscription because a replayed or live event
+        // exceeded its per-event byte bound. Do not pretend the subscription
+        // is usable; the client needs an explicit failure to stop retrying.
+        throw new RpcError(
+          'nano/unsupported',
+          'subscription closed during replay because an event exceeded the per-event frame limit',
+        )
+      }
     } catch (error) {
       this.subscriptions.delete(subscription.id)
       this.writer.dropSubscription(subscription.id)

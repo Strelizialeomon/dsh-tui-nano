@@ -242,7 +242,9 @@
     },
     "address": {
       "rootSessionId": "string",
-      "childSessionId": "string?"
+      "childSessionId": "string?",
+      "parentSessionId": "string?",
+      "mode": "string?"
     },
     "hello": {
       "protocol": "protocolVersion",
@@ -761,7 +763,9 @@
       "payload": {
         "address": "address",
         "inbox": "conversationInbox",
-        "truncated": "boolean?"
+        "truncated": "boolean?",
+        "total": "integer?",
+        "omitted": "integer?"
       }
     },
     {

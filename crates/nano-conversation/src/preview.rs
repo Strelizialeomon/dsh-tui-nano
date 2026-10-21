@@ -399,20 +399,23 @@ impl PreviewAccumulator {
                         .get(&index)
                         .map(|entry| entry.arguments.len())
                         .unwrap_or(0);
-                    preview.bytes = preview.bytes.saturating_sub(old);
-                    *total_bytes = total_bytes.saturating_sub(old);
-                    let reserved = arguments
-                        .as_ref()
-                        .map(|value| {
-                            reserve_bytes(
-                                preview,
-                                value.len(),
-                                max_bytes,
-                                max_total_bytes,
-                                total_bytes,
-                            )
-                        })
-                        .unwrap_or(true);
+                    let new_len = arguments.as_ref().map_or(old, String::len);
+                    let mut accepted = true;
+                    if new_len > old {
+                        // Keep the old arguments accounted while reserving the
+                        // delta; a failed reserve leaves the old value intact.
+                        accepted = reserve_bytes(
+                            preview,
+                            new_len - old,
+                            max_bytes,
+                            max_total_bytes,
+                            total_bytes,
+                        );
+                    } else if new_len < old {
+                        let shrink = old - new_len;
+                        preview.bytes = preview.bytes.saturating_sub(shrink);
+                        *total_bytes = total_bytes.saturating_sub(shrink);
+                    }
                     let mut truncated = false;
                     {
                         let entry = preview.tools.entry(index).or_insert_with(|| ToolPreview {
@@ -426,7 +429,7 @@ impl PreviewAccumulator {
                             entry.name = Some(name);
                         }
                         if let Some(arguments) = arguments {
-                            if reserved {
+                            if accepted {
                                 entry.arguments = arguments;
                             } else {
                                 truncated = true;

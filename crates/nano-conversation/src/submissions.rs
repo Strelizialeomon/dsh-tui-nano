@@ -180,6 +180,15 @@ impl SubmissionTracker {
         }
     }
 
+    /// Retire an echo because its queue item was durably deleted.
+    pub fn cancelled(&mut self, message_id: &str) {
+        for submission in self.by_id.values_mut() {
+            if submission.message_id.as_deref() == Some(message_id) {
+                submission.settled = true;
+            }
+        }
+    }
+
     /// Look up one submission.
     pub fn get(&self, request_id: &str) -> Option<&Submission> {
         self.by_id.get(request_id)
