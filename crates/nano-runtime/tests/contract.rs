@@ -140,6 +140,7 @@ fn implemented_methods_match() {
             "implemented" => assert!(
                 method["owner"] == "S01"
                     || method["owner"] == "S02"
+                    || method["owner"] == "S04"
                     || method["owner"] == "S05"
                     || method["owner"] == "S11",
                 "{name} is implemented by an owner this contract test does not know"
