@@ -74,11 +74,23 @@ fn every_event_kind_is_covered_by_the_contract_shape() {
                 "session.event",
                 "conversation.status",
                 "conversation.inbox",
-                "conversation.stream"
+                "conversation.stream",
+                "skills.changed",
+                "instructions.changed"
             ]
             .contains(kind),
             "unexpected event kind {kind}"
         );
     }
-    assert_eq!(kinds.len(), 4);
+    // S02 owns four live/durable kinds; S05 owns the two refresh signals.
+    assert_eq!(kinds.len(), 6);
+    for kind in ["skills.changed", "instructions.changed"] {
+        let event = contract["eventKinds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|event| event["kind"] == kind)
+            .unwrap();
+        assert_eq!(event["owner"], "S05");
+    }
 }

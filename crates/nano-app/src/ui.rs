@@ -36,7 +36,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         .split(area);
 
     draw_header(frame, app, layout[0]);
-    draw_feed(frame, app, layout[1]);
+    if app.skills_panel_open() {
+        draw_skills_panel(frame, app, layout[1]);
+    } else if app.instructions_panel_open() {
+        draw_instructions_panel(frame, app, layout[1]);
+    } else {
+        draw_feed(frame, app, layout[1]);
+    }
     if queue_height > 0 {
         draw_queue(frame, app, layout[2]);
     }
@@ -133,6 +139,292 @@ fn draw_feed(frame: &mut Frame, app: &mut App, area: Rect) {
         Paragraph::new(text).scroll((offset.min(u16::MAX as usize) as u16, 0)),
         area,
     );
+}
+
+/// Skills catalog with an optional read-only instruction preview.
+fn draw_skills_panel(frame: &mut Frame, app: &App, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(Span::styled(" 技能 ", Style::default().fg(Color::Cyan)));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+    let width = inner.width as usize;
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let state = if !app.skills.loaded() {
+        "未加载"
+    } else if app.skills.may_be_incomplete() {
+        "可能不完整"
+    } else {
+        "完整"
+    };
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("共 {} 个用户可调用技能", app.skills.entries().len()),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" · {state} · 来源：官方技能目录"),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]));
+    if let Some(reason) = app.skills.stale_reason() {
+        wrap_block(
+            &mut lines,
+            &format!("刷新失败：{reason}；保留上次可用目录"),
+            width,
+            300,
+            Color::Yellow,
+        );
+    }
+    if app.skills.entries().is_empty() {
+        lines.push(Line::from(Span::styled(
+            "没有用户可调用的技能；/name 仍按普通文本提交。",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    let preview_open = app.skill_preview_target.is_some();
+    let header_rows = lines.len();
+    let preview_rows = if preview_open {
+        (inner.height as usize).saturating_sub(header_rows) / 2
+    } else {
+        0
+    };
+    let list_rows = (inner.height as usize)
+        .saturating_sub(header_rows)
+        .saturating_sub(preview_rows);
+
+    // Render each entry as its own block so the window follows real wrapped
+    // heights instead of assuming one title line plus one detail line.
+    let entries = app.skills.entries();
+    let mut blocks: Vec<Vec<Line<'static>>> = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.iter().enumerate() {
+        let selected = index == app.skill_selection;
+        let marker = if selected { "▸ " } else { "  " };
+        let mut spans = vec![
+            Span::styled(
+                format!("{marker}/{}", entry.name),
+                Style::default()
+                    .fg(if selected { Color::Cyan } else { Color::White })
+                    .add_modifier(if selected {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                truncate(&entry.description, width.saturating_sub(16)),
+                Style::default(),
+            ),
+        ];
+        if entry.user_only() {
+            spans.push(Span::styled(
+                "  [仅用户可调用]",
+                Style::default().fg(Color::Yellow),
+            ));
+        }
+        if entry.shadowed_by_command {
+            spans.push(Span::styled(
+                "  [命令优先]",
+                Style::default().fg(Color::Magenta),
+            ));
+        }
+        let mut block = vec![Line::from(spans)];
+        let mut detail = Vec::new();
+        if let Some(when) = &entry.when_to_use {
+            detail.push(format!("适用：{when}"));
+        }
+        if let Some(path) = &entry.path {
+            detail.push(format!("文件：{path}"));
+        } else {
+            detail.push("无文件路径（不可预览）".to_string());
+        }
+        detail.push(format!("来源：{} / {}", entry.source, entry.provider));
+        wrap_block(
+            &mut block,
+            &format!("    {}", detail.join(" · ")),
+            width,
+            usize::MAX,
+            Color::DarkGray,
+        );
+        blocks.push(block);
+    }
+
+    if list_rows > 0 && !blocks.is_empty() {
+        let selected = app.skill_selection.min(blocks.len() - 1);
+        let heights: Vec<usize> = blocks.iter().map(Vec::len).collect();
+        let start = visible_block_start(&heights, selected, list_rows);
+        let mut drawn = 0;
+        for (index, block) in blocks.iter().enumerate().skip(start) {
+            if drawn + block.len() > list_rows && index != selected {
+                break;
+            }
+            drawn += block.len();
+            lines.extend(block.iter().cloned());
+            if drawn >= list_rows {
+                break;
+            }
+        }
+    }
+
+    if preview_open {
+        while lines.len() < inner.height as usize - preview_rows {
+            lines.push(Line::from(""));
+        }
+        draw_skill_preview(&mut lines, app, width);
+        lines.truncate(inner.height as usize);
+    }
+    frame.render_widget(Paragraph::new(Text::from(lines)), inner);
+}
+
+/// Right-hand preview content appended below the skill list.
+fn draw_skill_preview(lines: &mut Vec<Line<'static>>, app: &App, width: usize) {
+    let name = app.skill_preview_target.clone().unwrap_or_default();
+    let mut title = vec![Span::styled(
+        format!("── 预览 /{name} "),
+        Style::default().fg(Color::Cyan),
+    )];
+    if let Some(preview) = &app.skill_preview {
+        title.push(Span::styled(
+            preview.path.clone(),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+    lines.push(Line::from(title));
+    if let Some(error) = &app.skill_preview_error {
+        wrap_block(lines, error, width, 600, Color::Red);
+        return;
+    }
+    let Some(preview) = &app.skill_preview else {
+        lines.push(Line::from(Span::styled(
+            "正在读取预览…",
+            Style::default().fg(Color::DarkGray),
+        )));
+        return;
+    };
+    if let Some(label) = preview.truncation_label() {
+        wrap_block(lines, &label, width, 200, Color::Yellow);
+    }
+    if preview.empty() {
+        lines.push(Line::from(Span::styled(
+            "（文件为空）",
+            Style::default().fg(Color::DarkGray),
+        )));
+        return;
+    }
+    if preview.text.chars().count() > 4_000 {
+        lines.push(Line::from(Span::styled(
+            "（面板只显示前 4000 字符；完整内容以官方文件为准）",
+            Style::default().fg(Color::Yellow),
+        )));
+    }
+    wrap_block(lines, &preview.text, width, 4_000, Color::Gray);
+}
+
+/// Workspace-instruction sources, load time, and the official budget notice.
+fn draw_instructions_panel(frame: &mut Frame, app: &mut App, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(Span::styled(" 项目规矩 ", Style::default().fg(Color::Cyan)));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+    let width = inner.width as usize;
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if app.instructions.available {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as u64)
+            .unwrap_or(0);
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("来源 {} 份", app.instructions.sources.len()),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(
+                    " · 最近一次加载 {} · {}",
+                    app.instructions.age_label(now),
+                    if app.instructions.baseline {
+                        "基线"
+                    } else {
+                        "增量"
+                    }
+                ),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+    } else {
+        wrap_block(
+            &mut lines,
+            "本次会话尚未加载项目规矩（官方 agent-instructions 未产生消息）。",
+            width,
+            300,
+            Color::Yellow,
+        );
+    }
+    if let Some(notice) = &app.instructions.budget_notice {
+        // The bridge already bounds this at 8192 code points and sets
+        // `truncated`; rendering the whole bound value avoids a second silent
+        // cut without a marker.
+        wrap_block(&mut lines, notice, width, 8_192, Color::Yellow);
+    }
+    if app.instructions.truncated {
+        lines.push(Line::from(Span::styled(
+            "来源投影已截断：只显示部分来源与提示。",
+            Style::default().fg(Color::Yellow),
+        )));
+    }
+    let order_hint = if app.instructions.baseline {
+        "基线按官方加载顺序显示；同名内容已合并。"
+    } else {
+        "基线按官方加载顺序；增量来源按官方消息到达顺序追加；同名内容已合并。"
+    };
+    lines.push(Line::from(Span::styled(
+        order_hint,
+        Style::default().fg(Color::DarkGray),
+    )));
+    for source in &app.instructions.sources {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {:<4}", source.action.label()),
+                Style::default().fg(Color::Green),
+            ),
+            Span::raw(" "),
+            Span::raw(source.path.clone()),
+        ]));
+    }
+    let max_scroll = lines.len().saturating_sub(inner.height as usize);
+    app.instructions_max_scroll = max_scroll;
+    let offset = app.instructions_scroll.min(max_scroll);
+    let visible: Vec<Line<'static>> = lines.into_iter().skip(offset).collect();
+    frame.render_widget(Paragraph::new(Text::from(visible)), inner);
+}
+
+/// First block of a window that keeps the selected block visible, using the
+/// real wrapped height of each block.
+fn visible_block_start(heights: &[usize], selected: usize, rows: usize) -> usize {
+    if heights.is_empty() {
+        return 0;
+    }
+    let selected = selected.min(heights.len() - 1);
+    let mut start = selected;
+    let mut used = heights[selected];
+    while start > 0 {
+        let height = heights[start - 1];
+        if used + height > rows {
+            break;
+        }
+        start -= 1;
+        used += height;
+    }
+    start
 }
 
 fn push_item(lines: &mut Vec<Line<'static>>, item: &ConversationItem, width: usize) {
@@ -462,6 +754,15 @@ fn truncate(text: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_window_keeps_the_selected_block_visible() {
+        let heights = [3usize; 12];
+        assert_eq!(visible_block_start(&heights, 0, 9), 0);
+        assert_eq!(visible_block_start(&heights, 11, 9), 9);
+        assert_eq!(visible_block_start(&heights, 5, 100), 0);
+        assert_eq!(visible_block_start(&[], 0, 9), 0);
+    }
 
     #[test]
     fn wrapping_never_splits_wide_characters() {
