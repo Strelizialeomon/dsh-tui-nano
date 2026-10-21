@@ -9,10 +9,10 @@
 
 | 命令 | 结果 | 记录 |
 | --- | --- | --- |
-| `node --test bridge/test/*.test.mjs` | 120 项通过（含 11 项 S07 单元测试；S04/S05 套件同跑） | `unit-and-contract.txt` |
-| `cargo test --workspace` | 242 项通过（75 app + 27 controls + 2 controls contract + 57 conversation + 5 conversation contract + 21 sessions + 20 skills + 5 skills contract + 18 runtime + 10 runtime contract + 2 preflight；15 项真实宿主测试默认 ignored） | `unit-and-contract.txt` |
+| `node --test bridge/test/*.test.mjs` | 145 项通过（含 11 项 S07 单元测试；S04/S05/S08 套件同跑） | `unit-and-contract.txt` |
+| `cargo test --workspace` | 273 项通过（93 app + 27 controls + 2 controls contract + 57 conversation + 5 conversation contract + 13 jobs + 21 sessions + 20 skills + 5 skills contract + 18 runtime + 10 runtime contract + 2 preflight；15 项真实宿主测试默认 ignored） | `unit-and-contract.txt` |
 | `NANO_E2E=1 node --test bridge/test/integration/sessions.test.mjs` | 通过 | `real-host-sessions.txt` |
-| `NANO_E2E=1 node --test bridge/test/integration/*.test.mjs` | 4 项通过（host/conversation/sessions/skills 同跑） | 本轮终端输出 |
+| `NANO_E2E=1 node --test bridge/test/integration/*.test.mjs` | 5 项通过（host/shell-jobs/conversation/sessions/skills 同跑） | 本轮终端输出 |
 | `cargo test -p nano-runtime --test integration -- --ignored --test-threads=1 --skip shutdown_budget_is_bounded_when_cleanup_hangs` | 14 项通过（S01 真实宿主回归，含 writer-held 映射） | 本轮终端输出 |
 | `python3 scripts/sessions-evidence.py`（真实 PTY） | 20 项检查全部通过 | `pty-sessions.txt` |
 
@@ -22,7 +22,7 @@
 
 - `nano.sessions.list` 返回当前会话行：`current=true`、`agentAvailable=true`、`blank=true`、`formatStatus=current`、`cwd` 为真实工作目录。
 - `nano.sessions.rename` 接受并归一化标题；再次 list 读到新标题；重开第二个 generation 后标题仍在（官方日志持久化）。
-- 冷会话改名返回 `1028 nano/sessions/not-active`，没有 resume、没有拿写锁；恢复后的宿主对共享 `sessions/` 里真实存在的另一个冷会话（`otherId`）再次验证了这一点。
+- 冷会话改名返回 `1030 nano/sessions/not-active`，没有 resume、没有拿写锁；恢复后的宿主对共享 `sessions/` 里真实存在的另一个冷会话（`otherId`）再次验证了这一点。
 - `nano.sessions.context` 返回 `approximate=true` 与官方计费用量；没有 provider 请求时 `projectedTokens`/`contextWindow` 缺省，界面显示「未知」而不是 0。官方投影缺失 `tokenUsage` 时字段整体缺省，Rust 侧显示「未知（官方投影未提供）」，不补零。
 - 合并 S04 后跑其真实 PTY 证据（一次极小的真实请求）：S07 的标题栏显示 `ctx 19.2k/1000k (1%) · 参考`，数值来自同一 `contextPressure` 投影；屏幕原文在 S04 的 `pty-controls-evidence.py` 输出中。
 - `nano.sessions.compact` 走官方 `/compact`：空会话返回 `No compactable history yet.`；带参数返回官方 `Usage: /compact (no arguments)`。

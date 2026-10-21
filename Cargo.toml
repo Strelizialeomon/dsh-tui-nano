@@ -4,6 +4,7 @@ members = [
     "crates/nano-conversation",
     "crates/nano-controls",
     "crates/nano-skills",
+    "crates/nano-jobs",
     "crates/nano-sessions",
     "crates/nano-app",
 ]

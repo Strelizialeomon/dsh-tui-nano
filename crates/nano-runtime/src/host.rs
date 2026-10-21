@@ -19,17 +19,16 @@ use serde_json::{json, Value};
 use crate::frame::FrameReader;
 use crate::lifecycle::{Lifecycle, LifecycleState};
 use crate::paths::{
-    new_nonce, new_root_session_id, new_runtime_id, write_runtime_patch, Preflight, ProfileInstallSummary,
-    RuntimePaths,
+    new_nonce, new_root_session_id, new_runtime_id, write_runtime_patch, Preflight,
+    ProfileInstallSummary, RuntimePaths,
 };
 use crate::protocol::{
-    encode_request, parse_incoming, Address, CancelResult, EventParams, FrameRules, Hello, IncomingFrame,
-    ProtocolVersion, SessionFactMode, ShutdownReport, StartupErrorParams, StreamEndedParams, SubscribeResult,
+    encode_request, parse_incoming, Address, CancelResult, EventParams, FrameRules, Hello,
+    IncomingFrame, ProtocolVersion, SessionFactMode, ShutdownReport, StartupErrorParams,
+    StreamEndedParams, SubscribeResult,
 };
 use crate::protocol_error::{HostError, HostRpcError, ProtocolError};
-use crate::{
-    GRACEFUL_SHUTDOWN_MS, MAX_PENDING_REQUESTS, PROFILE_NAME, TERM_GRACE_MS,
-};
+use crate::{GRACEFUL_SHUTDOWN_MS, MAX_PENDING_REQUESTS, PROFILE_NAME, TERM_GRACE_MS};
 
 /// Whether this launch creates a new root session or resumes an existing one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -221,7 +220,9 @@ impl Host {
         let runtime_id = runtime_id.into();
         let root_session_id = root_session_id.into();
         if runtime_id.is_empty() || root_session_id.is_empty() {
-            return Err(HostError::Spawn("runtimeId and rootSessionId must be non-empty".into()));
+            return Err(HostError::Spawn(
+                "runtimeId and rootSessionId must be non-empty".into(),
+            ));
         }
         if options.provider.is_some() != options.model.is_some() {
             return Err(HostError::Spawn(
@@ -247,8 +248,9 @@ impl Host {
         let spawned = if options.force_fallback {
             spawn_fallback(&preflight.paths, &patch_path, &preflight.official_version)?
         } else {
-            spawn_primary(&preflight.paths, &patch_path, &preflight.official_version)
-                .or_else(|_| spawn_fallback(&preflight.paths, &patch_path, &preflight.official_version))?
+            spawn_primary(&preflight.paths, &patch_path, &preflight.official_version).or_else(
+                |_| spawn_fallback(&preflight.paths, &patch_path, &preflight.official_version),
+            )?
         };
 
         let lifecycle = Lifecycle::new();
@@ -365,7 +367,10 @@ impl Host {
                             expected_mode, hello.session.mode
                         ))));
                     }
-                    self.inner.shared.lifecycle.transition(LifecycleState::Ready)?;
+                    self.inner
+                        .shared
+                        .lifecycle
+                        .transition(LifecycleState::Ready)?;
                     *self.inner.hello.lock().expect("hello mutex poisoned") = Some(hello.clone());
                     return Ok(hello);
                 }
@@ -430,7 +435,10 @@ impl Host {
 
     /// Cancel one subscription.
     pub fn unsubscribe(&self, subscription_id: &str) -> Result<(), HostError> {
-        self.request("nano.unsubscribe", json!({ "subscriptionId": subscription_id }))?;
+        self.request(
+            "nano.unsubscribe",
+            json!({ "subscriptionId": subscription_id }),
+        )?;
         Ok(())
     }
 
@@ -451,9 +459,9 @@ impl Host {
         self.request_internal(method, params, timeout, false)
     }
 
-    /// Send one request with an explicit wait budget. Used by long official
-    /// actions such as manual compaction; a timeout still means the result is
-    /// unknown, not that the action was refused.
+    /// Send one request with a caller-chosen wait bound. Used by long official
+    /// actions such as manual compaction and shell commands; a timeout still
+    /// means the result is unknown, not that the action was refused.
     pub fn request_with_timeout(
         &self,
         method: &str,
@@ -469,7 +477,9 @@ impl Host {
         match timeout {
             Some(timeout) => match receiver.recv_timeout(timeout) {
                 Ok(event) => Ok(event),
-                Err(mpsc::RecvTimeoutError::Timeout) => Err(HostError::Timeout("no host event arrived".into())),
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    Err(HostError::Timeout("no host event arrived".into()))
+                }
                 Err(mpsc::RecvTimeoutError::Disconnected) => Err(HostError::TransportClosed),
             },
             None => receiver.recv().map_err(|_| HostError::TransportClosed),
@@ -497,8 +507,18 @@ impl Host {
 
     /// Run shutdown once and return the four-fact outcome.
     pub fn shutdown(&self) -> ShutdownOutcome {
-        let _guard = self.inner.shutdown_lock.lock().expect("shutdown lock poisoned");
-        if let Some(outcome) = self.inner.shutdown.lock().expect("shutdown mutex poisoned").clone() {
+        let _guard = self
+            .inner
+            .shutdown_lock
+            .lock()
+            .expect("shutdown lock poisoned");
+        if let Some(outcome) = self
+            .inner
+            .shutdown
+            .lock()
+            .expect("shutdown mutex poisoned")
+            .clone()
+        {
             return outcome;
         }
         let state = self.inner.shared.lifecycle.state();
@@ -517,9 +537,8 @@ impl Host {
                 .lifecycle
                 .transition_if_allowed(LifecycleState::Stopping);
             self.close_transport();
-            let forced = self.wait_for_exit_or_terminate(
-                Instant::now() + Duration::from_millis(TERM_GRACE_MS),
-            );
+            let forced = self
+                .wait_for_exit_or_terminate(Instant::now() + Duration::from_millis(TERM_GRACE_MS));
             let process_exited = self.inner.shared.exited.load(Ordering::SeqCst);
             self.inner
                 .shared
@@ -532,7 +551,12 @@ impl Host {
             let outcome = ShutdownOutcome {
                 ack: false,
                 process_exited,
-                exit_code: *self.inner.shared.exit_code.lock().expect("exit code mutex poisoned"),
+                exit_code: *self
+                    .inner
+                    .shared
+                    .exit_code
+                    .lock()
+                    .expect("exit code mutex poisoned"),
                 forced,
                 report: None,
                 scope_cleared: None,
@@ -556,18 +580,16 @@ impl Host {
                     .transition_if_allowed(LifecycleState::Stopping);
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 match self.request_internal("nano.shutdown", json!({}), remaining, true) {
-                    Ok(value) => {
-                        match serde_json::from_value::<ShutdownReport>(value) {
-                            Ok(parsed) => {
-                                ack = true;
-                                report = Some(parsed);
-                            }
-                            Err(error) => {
-                                report = None;
-                                let _ = error;
-                            }
+                    Ok(value) => match serde_json::from_value::<ShutdownReport>(value) {
+                        Ok(parsed) => {
+                            ack = true;
+                            report = Some(parsed);
                         }
-                    }
+                        Err(error) => {
+                            report = None;
+                            let _ = error;
+                        }
+                    },
                     Err(_) => {}
                 }
             }
@@ -605,7 +627,12 @@ impl Host {
         let outcome = ShutdownOutcome {
             ack,
             process_exited,
-            exit_code: *self.inner.shared.exit_code.lock().expect("exit code mutex poisoned"),
+            exit_code: *self
+                .inner
+                .shared
+                .exit_code
+                .lock()
+                .expect("exit code mutex poisoned"),
             forced,
             report,
             scope_cleared,
@@ -668,7 +695,11 @@ impl Host {
 
     /// The accepted handshake, when one has completed.
     pub fn hello(&self) -> Option<Hello> {
-        self.inner.hello.lock().expect("hello mutex poisoned").clone()
+        self.inner
+            .hello
+            .lock()
+            .expect("hello mutex poisoned")
+            .clone()
     }
 
     fn fail_handshake(&self, error: HostError) -> HostError {
@@ -709,7 +740,9 @@ impl Host {
         allow_stopping: bool,
     ) -> Result<Value, HostError> {
         let state = self.inner.shared.lifecycle.state();
-        if !(state == LifecycleState::Ready || (allow_stopping && state == LifecycleState::Stopping)) {
+        if !(state == LifecycleState::Ready
+            || (allow_stopping && state == LifecycleState::Stopping))
+        {
             return Err(match state {
                 LifecycleState::Lost | LifecycleState::Stopped | LifecycleState::CleanupFailed => {
                     HostError::ProcessGone
@@ -726,7 +759,12 @@ impl Host {
         );
         let (sender, receiver) = mpsc::channel();
         {
-            let mut pending = self.inner.shared.pending.lock().expect("pending mutex poisoned");
+            let mut pending = self
+                .inner
+                .shared
+                .pending
+                .lock()
+                .expect("pending mutex poisoned");
             if pending.len() >= MAX_PENDING_REQUESTS {
                 return Err(HostError::PendingLimit);
             }
@@ -781,15 +819,13 @@ impl Host {
     fn write_frame(&self, bytes: &[u8]) -> Result<(), HostError> {
         let mut writer = self.inner.writer.lock().expect("writer mutex poisoned");
         let writer = writer.as_mut().ok_or(HostError::TransportClosed)?;
-        writer
-            .write_all(bytes)
-            .map_err(|error| {
-                if error.kind() == io::ErrorKind::BrokenPipe {
-                    HostError::TransportClosed
-                } else {
-                    HostError::Io(error)
-                }
-            })?;
+        writer.write_all(bytes).map_err(|error| {
+            if error.kind() == io::ErrorKind::BrokenPipe {
+                HostError::TransportClosed
+            } else {
+                HostError::Io(error)
+            }
+        })?;
         writer.flush().map_err(HostError::Io)
     }
 
@@ -877,7 +913,11 @@ fn base_command(paths: &RuntimePaths, patch_path: &Path) -> Command {
 }
 
 #[cfg(unix)]
-fn spawn_primary(paths: &RuntimePaths, patch_path: &Path, _official: &str) -> Result<SpawnedHost, HostError> {
+fn spawn_primary(
+    paths: &RuntimePaths,
+    patch_path: &Path,
+    _official: &str,
+) -> Result<SpawnedHost, HostError> {
     use std::os::unix::io::AsRawFd;
     use std::os::unix::process::CommandExt;
 
@@ -914,8 +954,14 @@ fn spawn_primary(paths: &RuntimePaths, patch_path: &Path, _official: &str) -> Re
         .spawn()
         .map_err(|error| HostError::Spawn(format!("could not spawn dsh with fd 3/4: {error}")))?;
     let pid = child.id();
-    let stdout = child.stdout.take().map(|stdout| Box::new(stdout) as Box<dyn Read + Send>);
-    let stderr = child.stderr.take().map(|stderr| Box::new(stderr) as Box<dyn Read + Send>);
+    let stdout = child
+        .stdout
+        .take()
+        .map(|stdout| Box::new(stdout) as Box<dyn Read + Send>);
+    let stderr = child
+        .stderr
+        .take()
+        .map(|stderr| Box::new(stderr) as Box<dyn Read + Send>);
     // The child-side ends are dropped here; the child keeps its dup2 copies.
     drop(to_child_read);
     drop(from_child_write);
@@ -931,7 +977,11 @@ fn spawn_primary(paths: &RuntimePaths, patch_path: &Path, _official: &str) -> Re
 }
 
 #[cfg(not(unix))]
-fn spawn_primary(_paths: &RuntimePaths, _patch_path: &Path, _official: &str) -> Result<SpawnedHost, HostError> {
+fn spawn_primary(
+    _paths: &RuntimePaths,
+    _patch_path: &Path,
+    _official: &str,
+) -> Result<SpawnedHost, HostError> {
     Err(HostError::Spawn("fd 3/4 transport is Unix-only".into()))
 }
 
@@ -943,13 +993,22 @@ fn spawn_fallback(
     let mut command = base_command(paths, patch_path);
     command.env("NANO_TRANSPORT", "stdio");
     command.stdin(Stdio::piped());
-    let mut child = command
-        .spawn()
-        .map_err(|error| HostError::Spawn(format!("could not spawn dsh with stdio fallback: {error}")))?;
+    let mut child = command.spawn().map_err(|error| {
+        HostError::Spawn(format!("could not spawn dsh with stdio fallback: {error}"))
+    })?;
     let pid = child.id();
-    let stdin = child.stdin.take().ok_or_else(|| HostError::Spawn("missing child stdin".into()))?;
-    let stdout = child.stdout.take().ok_or_else(|| HostError::Spawn("missing child stdout".into()))?;
-    let stderr = child.stderr.take().map(|stderr| Box::new(stderr) as Box<dyn Read + Send>);
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| HostError::Spawn("missing child stdin".into()))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| HostError::Spawn("missing child stdout".into()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .map(|stderr| Box::new(stderr) as Box<dyn Read + Send>);
     Ok(SpawnedHost {
         child,
         pid,
@@ -984,7 +1043,11 @@ fn spawn_reader(reader: Box<dyn Read + Send>, shared: Arc<Shared>, inbox: mpsc::
                         // correlated and is already visible in diagnostics.
                         continue;
                     };
-                    let sender = shared.pending.lock().expect("pending mutex poisoned").remove(&id);
+                    let sender = shared
+                        .pending
+                        .lock()
+                        .expect("pending mutex poisoned")
+                        .remove(&id);
                     if let Some(sender) = sender {
                         let outcome = match error {
                             Some(error) => Err(HostRpcError {
@@ -1029,7 +1092,9 @@ fn handle_notification(
                 true
             }
             Err(error) => {
-                let _ = inbox.send(HostEvent::ProtocolFailure(format!("invalid hello: {error}")));
+                let _ = inbox.send(HostEvent::ProtocolFailure(format!(
+                    "invalid hello: {error}"
+                )));
                 false
             }
         },
@@ -1071,7 +1136,9 @@ fn handle_notification(
                 }
             },
             Err(error) => {
-                let _ = inbox.send(HostEvent::ProtocolFailure(format!("invalid event: {error}")));
+                let _ = inbox.send(HostEvent::ProtocolFailure(format!(
+                    "invalid event: {error}"
+                )));
                 false
             }
         },
@@ -1087,7 +1154,9 @@ fn handle_notification(
                 }
             },
             Err(error) => {
-                let _ = inbox.send(HostEvent::ProtocolFailure(format!("invalid streamEnded: {error}")));
+                let _ = inbox.send(HostEvent::ProtocolFailure(format!(
+                    "invalid streamEnded: {error}"
+                )));
                 false
             }
         },
@@ -1116,7 +1185,9 @@ fn finish_transport(shared: &Arc<Shared>, inbox: &mpsc::Sender<HostEvent>) {
             });
         }
         LifecycleState::Handshaking | LifecycleState::Starting => {
-            shared.lifecycle.transition_if_allowed(LifecycleState::Failed);
+            shared
+                .lifecycle
+                .transition_if_allowed(LifecycleState::Failed);
         }
         _ => {}
     }
@@ -1141,9 +1212,7 @@ fn spawn_waiter(shared: Arc<Shared>, child: Arc<ChildState>) {
                     *shared.exit_code.lock().expect("exit code mutex poisoned") = status.code();
                     shared.exited.store(true, Ordering::SeqCst);
                     if shared.lifecycle.state() == LifecycleState::Disconnected {
-                        shared
-                            .lifecycle
-                            .transition_if_allowed(LifecycleState::Lost);
+                        shared.lifecycle.transition_if_allowed(LifecycleState::Lost);
                     }
                     break;
                 }
@@ -1167,8 +1236,12 @@ fn spawn_diagnostics(stream: Box<dyn Read + Send>, diagnostics: Arc<Mutex<Diagno
                     pending.extend_from_slice(&buffer[..count]);
                     while let Some(index) = pending.iter().position(|byte| *byte == b'\n') {
                         let line: Vec<u8> = pending.drain(..=index).collect();
-                        let text = String::from_utf8_lossy(&line[..line.len().saturating_sub(1)]).to_string();
-                        diagnostics.lock().expect("diagnostics mutex poisoned").push_line(text);
+                        let text = String::from_utf8_lossy(&line[..line.len().saturating_sub(1)])
+                            .to_string();
+                        diagnostics
+                            .lock()
+                            .expect("diagnostics mutex poisoned")
+                            .push_line(text);
                     }
                     if pending.len() > 64 * 1024 {
                         pending.clear();
@@ -1179,7 +1252,10 @@ fn spawn_diagnostics(stream: Box<dyn Read + Send>, diagnostics: Arc<Mutex<Diagno
         }
         if !pending.is_empty() {
             let text = String::from_utf8_lossy(&pending).to_string();
-            diagnostics.lock().expect("diagnostics mutex poisoned").push_line(text);
+            diagnostics
+                .lock()
+                .expect("diagnostics mutex poisoned")
+                .push_line(text);
         }
     });
 }

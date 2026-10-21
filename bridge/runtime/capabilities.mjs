@@ -13,6 +13,7 @@ const SERVICE_CAPABILITIES = Object.freeze({
   userQuestions: 'userQuestions',
   approval: 'approval',
   jobs: 'jobs',
+  shell: 'shell',
   subagents: 'subagents',
   terminal: 'terminalController',
   permissionPresets: 'permissionPresets',
@@ -32,6 +33,15 @@ export function buildCapabilities(ctx, config) {
     capabilities[name] = present
       ? { status: 'supported' }
       : { status: 'unsupported', detail: `${serviceKey} is not composed in this profile` }
+  }
+
+  // `!` also needs the per-call policy service; without it the executor cannot
+  // be asked for the user-permission policy and the command must not run.
+  if (ctx.get('shell') !== undefined && ctx.get('sandboxPolicy') === undefined) {
+    capabilities.shell = {
+      status: 'unsupported',
+      detail: 'sandboxPolicy is not composed; the user-permission policy cannot be resolved',
+    }
   }
 
   // Model selection is served either by the Web session controller or by the

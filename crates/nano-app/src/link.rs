@@ -11,7 +11,8 @@ use std::time::Duration;
 use nano_runtime::paths::new_runtime_id;
 use nano_runtime::protocol::Address;
 use nano_runtime::{
-    Hello, Host, HostError, HostEvent, HostOptions, SessionMode, MAX_REPLAY_EVENTS,
+    CapabilityStatus, Hello, Host, HostError, HostEvent, HostOptions, SessionMode,
+    MAX_REPLAY_EVENTS,
 };
 use serde_json::Value;
 
@@ -100,14 +101,25 @@ pub enum LinkEvent {
     },
 }
 
+/// One queued request. A per-request wait bound lets a manual shell command
+/// outlive the ordinary 30s request timeout without blocking other requests.
+struct Command {
+    id: u64,
+    method: String,
+    params: Value,
+    timeout: Option<Duration>,
+}
+
+/// Wait bound for `nano.shell.exec`: the executor deadline (60s) plus room for
+/// preparation and termination.
+pub const SHELL_REQUEST_TIMEOUT: Duration = Duration::from_secs(75);
+
 /// Shared handle to the host worker threads.
 pub struct HostLink {
     /// Incoming link events.
     pub events: Receiver<LinkEvent>,
     /// Outgoing request channel.
-    commands: Sender<(u64, String, Value)>,
-    /// Outgoing long-request channel (manual compaction).
-    long_commands: Sender<(u64, String, Value, u64)>,
+    commands: Sender<Command>,
     /// The owning host handle, used for the final ordered shutdown.
     host: Host,
     /// Stops the event loop thread.
@@ -125,8 +137,7 @@ impl HostLink {
         let host = Host::spawn(new_runtime_id(), 1, root_session_id, mode, options)
             .map_err(|error| format!("could not spawn the host: {error}"))?;
         let (event_tx, event_rx) = channel();
-        let (command_tx, command_rx) = channel::<(u64, String, Value)>();
-        let (long_tx, long_rx) = channel::<(u64, String, Value, u64)>();
+        let (command_tx, command_rx) = channel::<Command>();
         let stop = Arc::new(AtomicBool::new(false));
 
         let startup_host = host.clone();
@@ -151,9 +162,9 @@ impl HostLink {
                 root_session_id: hello.root_session_id.clone(),
                 child_session_id: None,
             };
-            let kinds = SUBSCRIPTION_KINDS
-                .iter()
-                .map(|kind| kind.to_string())
+            let kinds = subscription_kinds(&hello)
+                .into_iter()
+                .map(str::to_string)
                 .collect();
             let _subscription = match startup_host.subscribe(address, Some(kinds), Some(from_seq)) {
                 Ok(subscription) => subscription,
@@ -189,30 +200,32 @@ impl HostLink {
         let command_host = host.clone();
         let command_events = event_tx.clone();
         std::thread::spawn(move || {
-            while let Ok((id, method, params)) = command_rx.recv() {
+            while let Ok(command) = command_rx.recv() {
+                if let Some(timeout) = command.timeout {
+                    // A manual shell command waits on the executor deadline.
+                    // Only this lane is concurrent; every ordinary request
+                    // still writes and completes in enqueue order.
+                    let host = command_host.clone();
+                    let events = command_events.clone();
+                    std::thread::spawn(move || {
+                        let result = host
+                            .request_with_timeout(&command.method, command.params, timeout)
+                            .map_err(classify_request_error);
+                        let _ = events.send(LinkEvent::RequestDone {
+                            id: command.id,
+                            result,
+                        });
+                    });
+                    continue;
+                }
                 let result = command_host
-                    .request(&method, params)
+                    .request(&command.method, command.params)
                     .map_err(classify_request_error);
                 if command_events
-                    .send(LinkEvent::RequestDone { id, result })
-                    .is_err()
-                {
-                    return;
-                }
-            }
-        });
-
-        // A long action such as manual compaction must not block the ordinary
-        // request worker: prompts submitted while it runs still need to reach
-        // the official inbox.
-        let long_host = host.clone();
-        std::thread::spawn(move || {
-            while let Ok((id, method, params, timeout_ms)) = long_rx.recv() {
-                let result = long_host
-                    .request_with_timeout(&method, params, Duration::from_millis(timeout_ms))
-                    .map_err(classify_request_error);
-                if event_tx
-                    .send(LinkEvent::RequestDone { id, result })
+                    .send(LinkEvent::RequestDone {
+                        id: command.id,
+                        result,
+                    })
                     .is_err()
                 {
                     return;
@@ -223,7 +236,6 @@ impl HostLink {
         Ok(Self {
             events: event_rx,
             commands: command_tx,
-            long_commands: long_tx,
             host,
             stop,
             counter: AtomicU64::new(1),
@@ -232,9 +244,33 @@ impl HostLink {
 
     /// Send one request; returns the local id used in `RequestDone`.
     pub fn request(&self, method: &str, params: Value) -> Result<u64, String> {
+        self.enqueue(method, params, None)
+    }
+
+    /// Send one request with a caller-chosen wait bound.
+    pub fn request_with_timeout(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<u64, String> {
+        self.enqueue(method, params, Some(timeout))
+    }
+
+    fn enqueue(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Option<Duration>,
+    ) -> Result<u64, String> {
         let id = self.counter.fetch_add(1, Ordering::SeqCst);
         self.commands
-            .send((id, method.to_string(), params))
+            .send(Command {
+                id,
+                method: method.to_string(),
+                params,
+                timeout,
+            })
             .map_err(|_| "the host request worker is gone".to_string())?;
         Ok(id)
     }
@@ -247,11 +283,9 @@ impl HostLink {
         params: Value,
         timeout: Duration,
     ) -> Result<u64, String> {
-        let id = self.counter.fetch_add(1, Ordering::SeqCst);
-        self.long_commands
-            .send((id, method.to_string(), params, timeout.as_millis() as u64))
-            .map_err(|_| "the host long-request worker is gone".to_string())?;
-        Ok(id)
+        // Timed requests run on their own thread in the command worker, so a
+        // compaction wait cannot block ordinary prompts or shell requests.
+        self.request_with_timeout(method, params, timeout)
     }
 
     /// Run the one ordered shutdown after the terminal is restored.
@@ -287,6 +321,27 @@ fn startup_failure_event(error: &HostError) -> LinkEvent {
         },
         other => LinkEvent::Fatal(describe_host_error(other)),
     }
+}
+
+/// Whether the composed host reports the official job registry as usable.
+pub fn jobs_supported(hello: &Hello) -> bool {
+    hello
+        .capabilities
+        .get("jobs")
+        .is_some_and(|capability| capability.status == CapabilityStatus::Supported)
+}
+
+/// The subscription used at handshake and after a rebuild. The stable kinds
+/// come from the shared list; job events are only requested when the composed
+/// host reports the capability, so an older bridge fails soft instead of
+/// refusing the whole subscription.
+pub fn subscription_kinds(hello: &Hello) -> Vec<&'static str> {
+    let mut kinds = SUBSCRIPTION_KINDS.to_vec();
+    if jobs_supported(hello) {
+        kinds.push("jobs.event");
+        kinds.push("jobs.output");
+    }
+    kinds
 }
 
 /// Classify a request failure without losing the fact that it may have been

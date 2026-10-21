@@ -68,33 +68,33 @@ fn every_event_kind_is_covered_by_the_contract_shape() {
         .iter()
         .map(|entry| entry["kind"].as_str().unwrap())
         .collect();
-    for kind in &kinds {
-        assert!(
-            [
-                "session.event",
-                "conversation.status",
-                "conversation.inbox",
-                "conversation.stream",
-                // S04/S07/S05 additions below; the conversation model ignores
-                // the ones it does not own.
-                "controls.model",
-                "controls.permission",
-                "sessions.context",
-                "skills.changed",
-                "instructions.changed"
-            ]
-            .contains(kind),
-            "unexpected event kind {kind}"
-        );
-    }
-    // S02 owns four live/durable kinds; S04, S05, and S07 add the rest.
-    assert_eq!(kinds.len(), 9);
-    for (kind, owner) in [
-        ("controls.model", "S04"),
-        ("controls.permission", "S04"),
-        ("sessions.context", "S07"),
-        ("skills.changed", "S05"),
-        ("instructions.changed", "S05"),
+    // Exact set/order, not a subset: a future unknown kind must fail this
+    // contract test instead of silently widening what the conversation model
+    // accepts.
+    assert_eq!(
+        kinds,
+        vec![
+            "session.event",
+            "conversation.status",
+            "conversation.inbox",
+            "conversation.stream",
+            "controls.model",
+            "controls.permission",
+            "sessions.context",
+            "skills.changed",
+            "instructions.changed",
+            "jobs.event",
+            "jobs.output"
+        ]
+    );
+    for (owner, kind) in [
+        ("S04", "controls.model"),
+        ("S04", "controls.permission"),
+        ("S07", "sessions.context"),
+        ("S05", "skills.changed"),
+        ("S05", "instructions.changed"),
+        ("S08", "jobs.event"),
+        ("S08", "jobs.output"),
     ] {
         let event = contract["eventKinds"]
             .as_array()
@@ -102,6 +102,6 @@ fn every_event_kind_is_covered_by_the_contract_shape() {
             .iter()
             .find(|event| event["kind"] == kind)
             .unwrap();
-        assert_eq!(event["owner"], owner);
+        assert_eq!(event["owner"], owner, "{kind} owner");
     }
 }
