@@ -1,0 +1,17 @@
+{
+  "name": "@dsh-tui-nano/protocol",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Machine-checkable Nano host protocol v1 (JSON data, no runtime dependencies)",
+  "type": "module",
+  "exports": {
+    ".": "./index.mjs",
+    "./nano-protocol.json": "./nano-protocol.json",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.mjs",
+    "nano-protocol.json",
+    "README.md"
+  ]
+}

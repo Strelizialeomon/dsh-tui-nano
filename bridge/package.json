@@ -1,0 +1,31 @@
+{
+  "name": "@dsh-tui-nano/bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Nano host bridge: dsh profile bundle, session mount ledger, and the versioned nano.* protocol over fd 3/4",
+  "type": "module",
+  "exports": {
+    ".": "./runtime/index.mjs",
+    "./runtime": "./runtime/index.mjs",
+    "./profile/install": "./profile/install.mjs",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "runtime/**/*.mjs",
+    "profile/**/*.mjs",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "dependencies": {
+    "@dsh-tui-nano/protocol": "file:../protocol"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}

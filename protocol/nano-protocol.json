@@ -1,0 +1,499 @@
+{
+  "contract": "dsh-tui-nano/nano-protocol",
+  "contractVersion": "1.0.0",
+  "protocol": { "major": 1, "minor": 0 },
+  "namespace": "nano.*",
+  "sourceOfTruth": "This file is the single machine-checkable definition of the Nano host protocol. Both the TypeScript bridge and the Rust runtime load it in tests; method tables, limits, error codes, lifecycle edges, event kinds and fixtures are compared against each implementation so neither side can drift silently.",
+  "transport": {
+    "encoding": "utf-8",
+    "framing": "ndjson",
+    "primary": { "requestFd": 3, "responseFd": 4, "nonceRequired": false },
+    "fallback": {
+      "requestFd": 0,
+      "responseFd": 1,
+      "nonceRequired": true,
+      "nonceField": "nonce"
+    },
+    "diagnostics": "stdout and stderr carry diagnostics only; they never carry protocol frames. In fallback mode stdin/stdout carry protocol frames and every frame carries the per-generation nonce."
+  },
+  "limits": {
+    "maxFrameBytes": 33554432,
+    "maxPendingRequests": 64,
+    "maxAttachmentChunkBytes": 49152,
+    "maxSubscriptionQueueBytes": 8388608,
+    "maxTotalQueueBytes": 16777216,
+    "maxEventFrameBytes": 262144,
+    "gracefulShutdownMs": 10000,
+    "termGraceMs": 3000,
+    "mountLockStaleMs": 30000
+  },
+  "lifecycle": {
+    "states": [
+      "stopped",
+      "starting",
+      "handshaking",
+      "ready",
+      "disconnected",
+      "stopping",
+      "failed",
+      "lost",
+      "cleanup-failed"
+    ],
+    "transitions": [
+      ["stopped", "starting"],
+      ["starting", "handshaking"],
+      ["handshaking", "ready"],
+      ["starting", "stopping"],
+      ["handshaking", "stopping"],
+      ["starting", "failed"],
+      ["handshaking", "failed"],
+      ["ready", "disconnected"],
+      ["disconnected", "ready"],
+      ["ready", "lost"],
+      ["ready", "stopping"],
+      ["disconnected", "lost"],
+      ["failed", "stopping"],
+      ["lost", "stopping"],
+      ["stopping", "stopped"],
+      ["stopping", "cleanup-failed"]
+    ]
+  },
+  "startupErrorCodes": [
+    "occupied",
+    "startup-failed",
+    "cleanup-failed",
+    "unsupported"
+  ],
+  "errorCodes": [
+    { "code": -32700, "name": "jsonrpc/parse-error" },
+    { "code": -32600, "name": "jsonrpc/invalid-request" },
+    { "code": -32601, "name": "jsonrpc/method-not-found" },
+    { "code": -32602, "name": "jsonrpc/invalid-params" },
+    { "code": -32603, "name": "jsonrpc/internal-error" },
+    { "code": 1001, "name": "nano/not-ready" },
+    { "code": 1002, "name": "nano/subscription-unknown" },
+    { "code": 1003, "name": "nano/frame-too-large" },
+    { "code": 1004, "name": "nano/pending-limit" },
+    { "code": 1005, "name": "nano/generation-mismatch" },
+    { "code": 1006, "name": "nano/cancelled" },
+    { "code": 1007, "name": "nano/cleanup-failed" },
+    { "code": 1008, "name": "nano/unsupported" },
+    { "code": 1009, "name": "nano/protocol" },
+    { "code": 1010, "name": "nano/closed" }
+  ],
+  "shapes": {
+    "protocolVersion": {
+      "major": "integer",
+      "minor": "integer"
+    },
+    "versions": {
+      "official": "string",
+      "bridge": "string",
+      "node": "string"
+    },
+    "sessionFacts": {
+      "mode": "enum:created|resumed",
+      "seq": "integer",
+      "header": "object?"
+    },
+    "capability": {
+      "status": "enum:supported|unavailable|unsupported",
+      "mode": "string?",
+      "detail": "string?"
+    },
+    "capabilityMap": {
+      "*": "capability"
+    },
+    "limits": {
+      "maxFrameBytes": "integer",
+      "maxPendingRequests": "integer",
+      "maxAttachmentChunkBytes": "integer"
+    },
+    "address": {
+      "rootSessionId": "string",
+      "childSessionId": "string?"
+    },
+    "hello": {
+      "protocol": "protocolVersion",
+      "runtimeId": "string",
+      "generation": "integer",
+      "versions": "versions",
+      "cwd": "string",
+      "rootSessionId": "string",
+      "session": "sessionFacts",
+      "capabilities": "capabilityMap",
+      "limits": "limits"
+    },
+    "startupError": {
+      "code": "enum:occupied|startup-failed|cleanup-failed|unsupported",
+      "holderPid": "integer?",
+      "generation": "integer?",
+      "message": "string",
+      "repairPath": "string?"
+    },
+    "event": {
+      "runtimeId": "string",
+      "generation": "integer",
+      "subscriptionId": "string",
+      "sequence": "integer",
+      "kind": "enum:session.event",
+      "payload": "object"
+    },
+    "streamEnded": {
+      "runtimeId": "string",
+      "generation": "integer",
+      "subscriptionId": "string",
+      "outcome": "enum:completed|cancelled|failed",
+      "reason": "string?"
+    },
+    "shutdownReport": {
+      "steps": "array:shutdownStep",
+      "clean": "boolean"
+    },
+    "shutdownStep": {
+      "name": "string",
+      "status": "enum:stopped|failed|unknown",
+      "detail": "string?"
+    }
+  },
+  "methods": [
+    {
+      "name": "nano.hello",
+      "direction": "host-to-client",
+      "kind": "notification",
+      "owner": "S01",
+      "status": "implemented",
+      "params": {
+        "shape": "hello",
+        "required": [
+          "protocol",
+          "runtimeId",
+          "generation",
+          "versions",
+          "cwd",
+          "rootSessionId",
+          "session",
+          "capabilities",
+          "limits"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.startupError",
+      "direction": "host-to-client",
+      "kind": "notification",
+      "owner": "S01",
+      "status": "implemented",
+      "params": {
+        "shape": "startupError",
+        "required": ["code", "message"],
+        "optional": ["holderPid", "generation", "repairPath"]
+      }
+    },
+    {
+      "name": "nano.shutdown",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S01",
+      "status": "implemented",
+      "params": {
+        "required": [],
+        "optional": ["reason"]
+      },
+      "result": {
+        "shape": "shutdownReport",
+        "required": ["steps", "clean"]
+      }
+    },
+    {
+      "name": "nano.subscribe",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S01",
+      "status": "implemented",
+      "params": {
+        "required": ["address"],
+        "optional": ["kinds", "fromSeq"]
+      },
+      "result": {
+        "required": ["subscriptionId", "address", "seq"],
+        "optional": ["header"]
+      }
+    },
+    {
+      "name": "nano.unsubscribe",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S01",
+      "status": "implemented",
+      "params": {
+        "required": ["subscriptionId"],
+        "optional": []
+      },
+      "result": {
+        "required": [],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.cancelRequest",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S01",
+      "status": "implemented",
+      "params": {
+        "required": ["id"],
+        "optional": []
+      },
+      "result": {
+        "required": ["cancelled"],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.event",
+      "direction": "host-to-client",
+      "kind": "notification",
+      "owner": "S01",
+      "status": "implemented",
+      "params": {
+        "shape": "event",
+        "required": [
+          "runtimeId",
+          "generation",
+          "subscriptionId",
+          "sequence",
+          "kind",
+          "payload"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.streamEnded",
+      "direction": "host-to-client",
+      "kind": "notification",
+      "owner": "S01",
+      "status": "implemented",
+      "params": {
+        "shape": "streamEnded",
+        "required": [
+          "runtimeId",
+          "generation",
+          "subscriptionId",
+          "outcome"
+        ],
+        "optional": ["reason"]
+      }
+    },
+    {
+      "name": "nano.terminal.attach",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S09",
+      "status": "reserved",
+      "params": {
+        "required": ["sessionId"],
+        "optional": ["terminalId"]
+      }
+    },
+    {
+      "name": "nano.terminal.input",
+      "direction": "client-to-host",
+      "kind": "notification",
+      "owner": "S09",
+      "status": "reserved",
+      "params": {
+        "required": ["attachmentId", "sequence", "bytes"],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.terminal.ack",
+      "direction": "host-to-client",
+      "kind": "notification",
+      "owner": "S09",
+      "status": "reserved",
+      "params": {
+        "required": ["attachmentId", "sequence"],
+        "optional": ["refusal"]
+      }
+    },
+    {
+      "name": "nano.terminal.state",
+      "direction": "host-to-client",
+      "kind": "notification",
+      "owner": "S09",
+      "status": "reserved",
+      "params": {
+        "required": ["attachmentId", "writable"],
+        "optional": ["info"]
+      }
+    },
+    {
+      "name": "nano.approval.answer",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S03",
+      "status": "reserved",
+      "params": {
+        "required": ["requestId", "outcome"],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.question.answer",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S03",
+      "status": "reserved",
+      "params": {
+        "required": ["requestId", "answers"],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.attachment.chunk",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S06",
+      "status": "reserved",
+      "params": {
+        "required": ["receiptId", "sequence", "bytes"],
+        "optional": []
+      }
+    }
+  ],
+  "eventKinds": [
+    {
+      "kind": "session.event",
+      "owner": "S01",
+      "status": "implemented",
+      "payload": {
+        "address": "address",
+        "seq": "integer",
+        "type": "string",
+        "data": "object"
+      }
+    }
+  ],
+  "fixtures": {
+    "request": {
+      "jsonrpc": "2.0",
+      "id": "req-1",
+      "method": "nano.subscribe",
+      "params": {
+        "address": { "rootSessionId": "session-fixture" },
+        "fromSeq": 0
+      }
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": "req-1",
+      "result": {
+        "subscriptionId": "sub-1",
+        "address": { "rootSessionId": "session-fixture" },
+        "seq": 3,
+        "header": { "id": "session-fixture", "cwd": "/work" }
+      }
+    },
+    "errorResponse": {
+      "jsonrpc": "2.0",
+      "id": "req-2",
+      "error": {
+        "code": 1001,
+        "message": "not ready",
+        "data": { "state": "starting" }
+      }
+    },
+    "hello": {
+      "jsonrpc": "2.0",
+      "method": "nano.hello",
+      "params": {
+        "protocol": { "major": 1, "minor": 0 },
+        "runtimeId": "rt-fixture",
+        "generation": 1,
+        "versions": {
+          "official": "0.2.1-rc.2",
+          "bridge": "0.1.0",
+          "node": "v24.18.0"
+        },
+        "cwd": "/work",
+        "rootSessionId": "session-fixture",
+        "session": {
+          "mode": "created",
+          "seq": 3,
+          "header": { "id": "session-fixture", "cwd": "/work" }
+        },
+        "capabilities": {
+          "agent": { "status": "supported" },
+          "schedule": {
+            "status": "unsupported",
+            "detail": "S11 mounts the schedule backend"
+          },
+          "tool-ask-user": { "status": "supported", "mode": "blocking" }
+        },
+        "limits": {
+          "maxFrameBytes": 33554432,
+          "maxPendingRequests": 64,
+          "maxAttachmentChunkBytes": 49152
+        }
+      }
+    },
+    "startupError": {
+      "jsonrpc": "2.0",
+      "method": "nano.startupError",
+      "params": {
+        "code": "occupied",
+        "holderPid": 4242,
+        "generation": 1,
+        "message": "root session is owned by pid 4242",
+        "repairPath": "/home/user/.dsh-tui-nano/session-mounts.json"
+      }
+    },
+    "event": {
+      "jsonrpc": "2.0",
+      "method": "nano.event",
+      "params": {
+        "runtimeId": "rt-fixture",
+        "generation": 1,
+        "subscriptionId": "sub-1",
+        "sequence": 0,
+        "kind": "session.event",
+        "payload": {
+          "address": { "rootSessionId": "session-fixture" },
+          "seq": 0,
+          "type": "permission/preset",
+          "data": {}
+        }
+      }
+    },
+    "streamEnded": {
+      "jsonrpc": "2.0",
+      "method": "nano.streamEnded",
+      "params": {
+        "runtimeId": "rt-fixture",
+        "generation": 1,
+        "subscriptionId": "sub-1",
+        "outcome": "cancelled",
+        "reason": "client unsubscribed"
+      }
+    },
+    "shutdownResult": {
+      "jsonrpc": "2.0",
+      "id": "req-3",
+      "result": {
+        "steps": [
+          { "name": "accepting", "status": "stopped" },
+          { "name": "subscriptions", "status": "stopped" },
+          { "name": "agents", "status": "stopped" },
+          { "name": "persistence", "status": "stopped" },
+          { "name": "dispose", "status": "stopped" },
+          { "name": "ledger", "status": "stopped" }
+        ],
+        "clean": true
+      }
+    }
+  }
+}
