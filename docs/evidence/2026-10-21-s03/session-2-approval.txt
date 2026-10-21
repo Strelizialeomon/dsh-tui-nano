@@ -1,0 +1,50 @@
+ nano iwork-4i·g已连接s·-运行中n· seqf21 · 队列 0launch or --install)
+- `minimalist-ui`: Clean editorial-style interfaces.fWarm/monochromenpalette,ltypographic contrast, flat bento grids, mu
+ted pastels. No gradients, no heavy shadows.
+- `open-design-handoff`: Use when a project needs to take a design from open-design into code: create or resume the open
+-design project, sync the brief, pull the handoff package, extract tokens, and verify. Triggers: open-design, 设计对接,
+设计稿落地, handoff.
+- `pi-driving`: Use when 用户要从 Claude Code / kimi 等 harness 指挥 pi 干活，[7需要改 pi 的模型配置（provider、默认模型
+、默认 effort、Ctrl+P 列表），或排查「pi 配了但没生效」类问题。含 pi 配置三层骨架、effort 生效优先级、non-interactive 三
+种调用姿势、@文件 附件语法，以及 2026-10-13 的全部实测结论与本机踩坑。
+- `progress-init`: 给一个项目建"进度图"骨架[10;目标项目落起手 progress.yaml，并注册进 progress-map 的查看器。新项目起手
+或给老项目补进度图时用。先定项目 id/展示名/数据来源(私有走 relay、公开走 raw)，可选探测 spike/ADR 约定。核心右尺寸：不预
+建还没有的东西、已有的不覆盖。
+- `progress-update`: 刷新一个项目的进度图——在目标项目目录里跑 gather 抓客观信号(commit/PR/issue)，由在场 agent 按 SYNC
+规则判断哪条路走通/走死/在进行，翻译成 docs/progress.yaml 增改，人审 diff 后提交。业务方说"同步进度/刷新进度图"或刚推进
+了某条岔路时用。
+- `redesign-existing-projects`: Upgrades existing websites and apps to premium quality. Audits current design, identifie
+s generic AI patterns, and applies high-end design standards without breaking functionality. Works with any CSS framewor
+k or vanilla CSS.                       [
+- `spec-flow`: 复杂活的两段流程：需求确认、spec、PR 过闸、合并后开 issue；认领 issue、实施、过闸合并回填。要设计、动多个
+端或值得留依据的需求，开工前调用；「请你做 #N」从实施期进，每份交付物合并前均由用户选审核档位，agent 不自派。也处理「把
+spec-flow 应用到本项目」「更新本项目的 spec-flow 接入」及语义变体，可附带 ADR 等采用意图；未知描述问清。
+- `stitch-design-taste`: Semantic Design System Skill for Google Stitch. Generates agent-friendly DESIGN.md files that e
+nforce premium, anti-generic UI standards — strict typography, calibrated color, asymmetric layouts, perpetual micro-mot
+ion, and hardware-accelerated performance.
+</available_skills>
+                               [26;33H
+If the user names a skill, or the task clearly matches a skill's description, call the `skill` tool with the exact skill
+ name before taking task actions. Load all applicable skills, then follow their full instructions. This catalog contains
+ summaries only; do not infer or follow a skill's instructions until it has been loaded.
+A user may also invoke a skill directly; its <skill_content> block then appears in this conversation. Follow it, and do
+not call the `skill` tool again for that skill.
+</system-reminder>                                                      [         e
+
+思考 879ms · 收起
+助手
+[tool-call]
+
+文件 /tmp/nano-s03-evidence/outside.txt  +1
+  待应用                                 [       k
+     + hello
+  审批 结果未知 · 允许本次操作使用 danger-full-access 权限：S03 approval evidence
+
+┌ 审批 · write ────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│是否允许本次 write 操作？                                                                                             │
+│允许本次操作使用 danger-full-access 权限：S03 approval evidence                                                       │
+│官方请求没有可关联的命令；不猜测命令                                                                                  │
+│  1. [ ] 允许一次  仅本次；不更改后续权[4 ;                                                                           │
+│> 2. [ ] 拒绝  不执行本次操作                                                                                         │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+已接收

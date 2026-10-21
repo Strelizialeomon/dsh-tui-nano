@@ -55,17 +55,6 @@ export function buildCapabilities(ctx, config, facts = {}) {
     ? { status: 'supported' }
     : { status: 'unsupported', detail: 'the official model registry is not composed' }
 
-  // The seams are composed, but S01 registers no answerer. Reporting them as
-  // supported would claim an interaction path that cannot answer; S03 owns the
-  // single answerer for each seam.
-  capabilities.approval = {
-    status: 'unavailable',
-    detail: 'the approval answerer belongs to S03',
-  }
-  capabilities.userQuestions = {
-    status: 'unavailable',
-    detail: 'the question answerer belongs to S03',
-  }
   if (capabilities.attachments?.status === 'supported') {
     capabilities.attachments = {
       status: 'supported',
@@ -80,9 +69,12 @@ export function buildCapabilities(ctx, config, facts = {}) {
     }
   }
   capabilities['tool-ask-user'] = {
-    status: ctx.get('userQuestions') === undefined ? 'unsupported' : 'unavailable',
+    status: ctx.get('userQuestions') === undefined ? 'unsupported' : 'supported',
     mode: typeof config.askUserMode === 'string' ? config.askUserMode : 'blocking',
-    detail: 'the tool is mounted, but no answerer is registered until S03',
+    detail:
+      ctx.get('userQuestions') === undefined
+        ? 'the tool is not mounted because userQuestions is absent'
+        : 'S03 registers the answerer at host startup',
   }
 
   // S11 mounts the official scheduler only after its storage route and lease

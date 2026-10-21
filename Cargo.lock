@@ -281,11 +281,13 @@ dependencies = [
  "nano-attachments",
  "nano-controls",
  "nano-conversation",
+ "nano-decisions",
  "nano-jobs",
  "nano-runtime",
  "nano-schedule",
  "nano-sessions",
  "nano-skills",
+ "nano-transcript",
  "ratatui",
  "serde_json",
  "unicode-width 0.2.0",
@@ -312,6 +314,16 @@ dependencies = [
 name = "nano-conversation"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
+ "unicode-width 0.2.0",
+]
+
+[[package]]
+name = "nano-decisions"
+version = "0.1.0"
+dependencies = [
+ "nano-conversation",
  "serde",
  "serde_json",
  "unicode-width 0.2.0",
@@ -360,6 +372,17 @@ dependencies = [
  "nano-conversation",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "nano-transcript"
+version = "0.1.0"
+dependencies = [
+ "nano-conversation",
+ "nano-decisions",
+ "ratatui",
+ "serde_json",
+ "unicode-width 0.2.0",
 ]
 
 [[package]]

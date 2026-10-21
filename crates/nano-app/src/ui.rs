@@ -4,9 +4,14 @@
 //! the input, queue, and status surfaces S02 owns, so the conversation host can
 //! be exercised in a real terminal before the reading layer exists.
 
+use std::time::Instant;
+
 use nano_attachments::{AttachmentState, CandidateKind};
 use nano_controls::{PanelMode, PanelRow};
-use nano_conversation::{ConversationItem, MessageKind, PreviewView, ToolPreview, ToolStatus};
+use nano_decisions::{
+    ApprovalCardState, ApprovalFocus, DecisionClick, DecisionTop, PlanFocus, QuestionCard,
+    QuestionCardState,
+};
 use nano_jobs::{BashRecord, BashState, JobStatus};
 use nano_schedule::RowKind;
 use nano_sessions::{format_clock, Occupancy};
@@ -31,22 +36,28 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         (app.model.inbox().len().min(4) as u16) + 1
     };
-    let completion_height = if app.completion.visible() && app.picker.is_none() {
+    let decision = app.decision_owns_seat();
+    let completion_height = if !decision && app.completion.visible() && app.picker.is_none() {
         (app.completion.candidates().len().min(6) as u16) + 1
     } else {
         0
     };
-    let attachment_rows = if app.picker.is_some() {
+    let attachment_rows = if decision || app.picker.is_some() {
         0
     } else {
         attachment_lines(app).len() as u16
     };
-    let input_rows = if app.picker.is_some() {
+    let input_rows = if app.picker.is_some() || decision {
         1
     } else {
         wrapped_input_rows(app, area.width.saturating_sub(4).max(1))
     };
     let input_height = (attachment_rows + input_rows.min(8) as u16) + 2;
+    let bottom_height = if decision {
+        decision_height(app, area.width, area.height)
+    } else {
+        input_height
+    };
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -54,7 +65,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             Constraint::Min(3),
             Constraint::Length(queue_height),
             Constraint::Length(completion_height),
-            Constraint::Length(input_height),
+            Constraint::Length(bottom_height),
             Constraint::Length(1),
         ])
         .split(area);
@@ -77,13 +88,18 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if completion_height > 0 {
         draw_completion(frame, app, layout[3]);
     }
-    draw_input(frame, app, layout[4]);
+    if decision {
+        draw_decision(frame, app, layout[4]);
+    } else {
+        app.decision_area = Rect::default();
+        app.decision_hits.clear();
+        draw_input(frame, app, layout[4]);
+    }
     draw_status(frame, app, layout[5], area.width);
     if app.panel.is_open() {
         draw_panel(frame, app, area);
     }
 }
-
 fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     let status_color = match app.connection {
         Connection::Ready => match app.model.status() {
@@ -433,50 +449,46 @@ fn short_clock(epoch_ms: u64) -> String {
 }
 
 fn draw_feed(frame: &mut Frame, app: &mut App, area: Rect) {
-    let width = area.width.max(1) as usize;
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    if app.model.history().truncated() {
-        lines.push(Line::from(Span::styled(
-            "（显示上限，更早的消息未加载）",
-            Style::default().fg(Color::DarkGray),
-        )));
+    app.feed_area = area;
+    app.feed_height = area.height as usize;
+    if app.transcript_dirty || !app.model.previews().is_empty() {
+        app.view.sync(&app.model, Instant::now());
+        app.transcript_dirty = false;
     }
-    for item in app.model.items() {
-        push_item(&mut lines, item, width);
-    }
-    for preview in app.model.live().previews {
-        push_preview(&mut lines, &preview, width);
-    }
-    for echo in app.model.live().echoes {
-        let text = echo.text.clone();
-        lines.push(Line::from(Span::styled(
-            format!("你（{}）", echo.state.label()),
-            Style::default().fg(Color::Cyan),
-        )));
-        wrap_block(&mut lines, &text, width, 200, Color::Cyan);
-    }
-    for record in &app.bash_records {
-        push_bash_record(&mut lines, record, width);
+    let render = app
+        .view
+        .render(area.width.max(1) as usize, area.height.max(1) as usize);
+    app.feed_hits = render.hits;
+    let mut lines = render.lines;
+    // Local `!` records are S08 display data until the official synthetic
+    // message is durable. Show them only while following the bottom.
+    if app.view.scroll().sticky() && !app.bash_records.is_empty() {
+        let before = lines.len();
+        for record in &app.bash_records {
+            push_bash_record(&mut lines, record, area.width.max(1) as usize);
+        }
+        let added = lines.len().saturating_sub(before);
+        app.feed_hits
+            .extend(std::iter::repeat(None).take(added));
+        let viewport = area.height as usize;
+        if lines.len() > viewport {
+            let extra = lines.len() - viewport;
+            lines.drain(0..extra);
+            app.feed_hits.drain(0..extra.min(app.feed_hits.len()));
+        }
     }
     if lines.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "输入消息后按 Enter 发送。",
-            Style::default().fg(Color::DarkGray),
-        )));
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "输入消息后按 Enter 发送。",
+                Style::default().fg(Color::DarkGray),
+            ))),
+            area,
+        );
+        return;
     }
-    let viewport = area.height as usize;
-    app.feed_height = viewport;
-    let total = lines.len();
-    let offset = total
-        .saturating_sub(viewport)
-        .saturating_sub(app.scroll_back);
-    let text = Text::from(lines);
-    frame.render_widget(
-        Paragraph::new(text).scroll((offset.min(u16::MAX as usize) as u16, 0)),
-        area,
-    );
+    frame.render_widget(Paragraph::new(Text::from(lines)), area);
 }
-
 /// Skills catalog with an optional read-only instruction preview.
 fn draw_skills_panel(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
@@ -763,68 +775,6 @@ fn visible_block_start(heights: &[usize], selected: usize, rows: usize) -> usize
     start
 }
 
-fn push_item(lines: &mut Vec<Line<'static>>, item: &ConversationItem, width: usize) {
-    match item {
-        ConversationItem::Message(message) => {
-            let (label, color) = match message.kind {
-                MessageKind::User => ("你", Color::Cyan),
-                MessageKind::Assistant => ("助手", Color::Green),
-                MessageKind::ToolResult => ("工具结果", Color::Magenta),
-                MessageKind::SyntheticBash => ("bash", Color::Yellow),
-                MessageKind::Injected => ("上下文", Color::DarkGray),
-                MessageKind::Notice => ("回合", Color::Yellow),
-            };
-            let suffix = if message.interrupted {
-                "（中断前的片段）"
-            } else if message.is_error {
-                "（失败）"
-            } else {
-                ""
-            };
-            let prefix = format!("{label} ");
-            lines.push(Line::from(vec![
-                Span::styled(prefix.clone(), Style::default().fg(color)),
-                Span::styled(suffix, Style::default().fg(Color::Yellow)),
-            ]));
-            wrap_block(lines, &message.text, width, 600, color);
-        }
-        ConversationItem::ToolCall(call) => {
-            let status = match call.status {
-                ToolStatus::Pending => "运行中/待结果",
-                ToolStatus::Succeeded => "完成",
-                ToolStatus::Failed => "失败",
-                ToolStatus::Unknown => "结果未知",
-            };
-            lines.push(Line::from(vec![
-                Span::styled("工具 ", Style::default().fg(Color::Magenta)),
-                Span::raw(format!("{} · {}", call.name, status)),
-            ]));
-            wrap_block(lines, &call.arguments, width, 300, Color::DarkGray);
-            if let Some(result) = &call.result {
-                wrap_block(lines, result, width, 300, Color::DarkGray);
-            }
-        }
-    }
-}
-
-fn push_preview(lines: &mut Vec<Line<'static>>, preview: &PreviewView, width: usize) {
-    let mut suffix = String::new();
-    if preview.gap {
-        suffix.push_str("（预览不完整）");
-    }
-    if preview.truncated {
-        suffix.push_str("（预览已截断）");
-    }
-    lines.push(Line::from(vec![
-        Span::styled("助手（流式） ", Style::default().fg(Color::Green)),
-        Span::styled(suffix, Style::default().fg(Color::Yellow)),
-    ]));
-    wrap_block(lines, &preview.text, width, 600, Color::Green);
-    for tool in &preview.tools {
-        push_preview_tool(lines, tool);
-    }
-}
-
 fn push_bash_record(lines: &mut Vec<Line<'static>>, record: &BashRecord, width: usize) {
     let color = match &record.state {
         BashState::Running => Color::Yellow,
@@ -1036,18 +986,631 @@ fn job_color(status: JobStatus) -> Color {
     }
 }
 
-fn push_preview_tool(lines: &mut Vec<Line<'static>>, tool: &ToolPreview) {
-    let name = tool.name.clone().unwrap_or_else(|| "tool".to_string());
-    let state = if tool.complete {
-        "参数完成"
-    } else {
-        "参数流入"
+fn decision_height(app: &App, width: u16, height: u16) -> u16 {
+    let max = height.saturating_sub(8).max(6);
+    let desired = match app.decisions.top() {
+        Some(DecisionTop::Approval(card)) => {
+            let command_rows = card
+                .command()
+                .map(|command| display_rows(command, width.saturating_sub(4) as usize).len())
+                .unwrap_or(0)
+                .min(6);
+            7 + command_rows as u16
+        }
+        Some(DecisionTop::Question(card)) => question_height(card, width),
+        None => 6,
     };
-    lines.push(Line::from(vec![
-        Span::styled("  工具 ", Style::default().fg(Color::Magenta)),
-        Span::raw(format!("{name} · {state}")),
-    ]));
+    desired.clamp(6, max)
 }
+
+fn question_height(card: &QuestionCard, width: u16) -> u16 {
+    if card.state() == QuestionCardState::ReadOnly {
+        return 4 + card.questions().len() as u16 * 3;
+    }
+    if card.plan_review().is_some() {
+        let plan_rows = if card.plan_expanded() {
+            card.questions()[0]
+                .detail
+                .as_deref()
+                .map(|detail| display_rows(detail, width.saturating_sub(4) as usize).len())
+                .unwrap_or(0)
+                .min(10) as u16
+        } else {
+            0
+        };
+        return 8 + plan_rows;
+    }
+    if card.page() == card.questions().len() {
+        return 6 + card.questions().len() as u16 * 2;
+    }
+    let Some(question) = card.questions().get(card.page()) else {
+        return 6;
+    };
+    let mut rows = 4u16;
+    rows += display_rows(&question.question, width.saturating_sub(4) as usize)
+        .len()
+        .min(3) as u16;
+    for (index, option) in question.options.iter().enumerate() {
+        let _ = index;
+        rows += 1;
+        if option.description.is_some() {
+            rows += 1;
+        }
+    }
+    rows += 1; // Other row
+    rows += 1; // Skip / submit
+    if card.error().is_some() {
+        rows += 1;
+    }
+    if card.timed().remaining_ms.is_some() || card.timed().indefinite {
+        rows += 1;
+    }
+    rows.min(24)
+}
+
+fn draw_decision(frame: &mut Frame, app: &mut App, area: Rect) {
+    app.decision_area = area;
+    let (title, lines, hits) = match app.decisions.top() {
+        Some(DecisionTop::Approval(card)) => render_approval(card, area),
+        Some(DecisionTop::Question(card)) => render_question(card, area),
+        None => (String::new(), Vec::new(), Vec::new()),
+    };
+    let block = Block::default().borders(Borders::ALL).title(title);
+    let inner = block.inner(area);
+    let visible: Vec<Line<'static>> = lines.iter().take(inner.height as usize).cloned().collect();
+    app.decision_hits = map_decision_hits(&hits, inner.height, area.height);
+    frame.render_widget(block, area);
+    frame.render_widget(Paragraph::new(Text::from(visible)), inner);
+}
+
+/// Map content-row hits onto the full card area. Row 0 is the top border and
+/// the last row is the bottom border; hits past the inner height are clipped
+/// with the text and must never answer a hidden option.
+fn map_decision_hits(
+    hits: &[Option<DecisionClick>],
+    inner_height: u16,
+    area_height: u16,
+) -> Vec<Option<DecisionClick>> {
+    let mut mapped = Vec::with_capacity(area_height as usize);
+    mapped.push(None);
+    mapped.extend(hits.iter().take(inner_height as usize).cloned());
+    while mapped.len() < area_height as usize {
+        mapped.push(None);
+    }
+    mapped.truncate(area_height as usize);
+    mapped
+}
+fn render_approval(
+    card: &nano_decisions::ApprovalCard,
+    area: Rect,
+) -> (String, Vec<Line<'static>>, Vec<Option<DecisionClick>>) {
+    let width = area.width.saturating_sub(4) as usize;
+    let title = format!(" 审批 · {} ", card.tool_name());
+    let mut lines = Vec::new();
+    let mut hits = Vec::new();
+    lines.push(Line::from(Span::styled(
+        format!("是否允许本次 {} 操作？", card.tool_name()),
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    hits.push(None);
+    let reason = card
+        .display_reason()
+        .or(card.reason())
+        .unwrap_or("官方请求未附原因");
+    for row in display_rows(reason, width) {
+        lines.push(Line::from(Span::styled(
+            row,
+            Style::default().fg(Color::DarkGray),
+        )));
+        hits.push(None);
+    }
+    if let Some(command) = card.command() {
+        lines.push(Line::from(Span::styled(
+            "命令",
+            Style::default().fg(Color::DarkGray),
+        )));
+        hits.push(None);
+        let rows = display_rows(command, width);
+        let start = card.command_offset().min(rows.len());
+        for row in rows.iter().skip(start).take(5) {
+            lines.push(Line::from(Span::styled(
+                format!("  {row}"),
+                Style::default().fg(Color::Yellow),
+            )));
+            hits.push(None);
+        }
+        if rows.len() > start + 5 {
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "  … 还有 {} 行（PageUp/PageDown 滚动）",
+                    rows.len() - start - 5
+                ),
+                Style::default().fg(Color::DarkGray),
+            )));
+            hits.push(None);
+        }
+    } else {
+        lines.push(Line::from(Span::styled(
+            "官方请求没有可关联的命令；不猜测命令",
+            Style::default().fg(Color::DarkGray),
+        )));
+        hits.push(None);
+    }
+    let allow_focused = card.focus() == ApprovalFocus::Allow;
+    let reject_focused = card.focus() == ApprovalFocus::Reject;
+    lines.push(option_line(
+        allow_focused,
+        "1.",
+        "允许一次",
+        "仅本次；不更改后续权限",
+        false,
+    ));
+    hits.push(Some(DecisionClick::ApprovalAllow));
+    lines.push(option_line(
+        reject_focused,
+        "2.",
+        "拒绝",
+        "不执行本次操作",
+        false,
+    ));
+    hits.push(Some(DecisionClick::ApprovalReject));
+    lines.push(Line::from(Span::styled(
+        "↑↓ 切换 · Enter 确认 · 1 选允许 · 2 选拒绝 · Esc 取消（不会允许）",
+        Style::default().fg(Color::DarkGray),
+    )));
+    hits.push(None);
+    if let ApprovalCardState::Settled(outcome) = card.state() {
+        lines.push(Line::from(Span::styled(
+            outcome.label().to_string(),
+            Style::default().fg(Color::DarkGray),
+        )));
+        hits.push(None);
+    } else if let Some(notice) = card.notice() {
+        lines.push(Line::from(Span::styled(
+            notice.to_string(),
+            Style::default().fg(Color::Yellow),
+        )));
+        hits.push(None);
+    }
+    (title, lines, hits)
+}
+
+fn render_question(
+    card: &QuestionCard,
+    area: Rect,
+) -> (String, Vec<Line<'static>>, Vec<Option<DecisionClick>>) {
+    let width = area.width.saturating_sub(4) as usize;
+    if card.state() == QuestionCardState::ReadOnly {
+        return render_read_only(card, area);
+    }
+    if card.plan_review().is_some() {
+        return render_plan_review(card, area);
+    }
+    let title = if card.timed().continued {
+        " 问卷 · 可继续回答 ".to_string()
+    } else if card.timed().remaining_ms.is_some() {
+        " 问卷 · 限时 ".to_string()
+    } else {
+        " 问卷 ".to_string()
+    };
+    let mut lines = Vec::new();
+    let mut hits = Vec::new();
+    if card.questions().len() > 1 {
+        let mut tabs = Vec::new();
+        for (index, question) in card.questions().iter().enumerate() {
+            let current = index == card.page();
+            let answered = card.skipped(index)
+                || card
+                    .draft(index)
+                    .map(|draft| !draft.selected.is_empty() || !draft.custom.trim().is_empty())
+                    .unwrap_or(false);
+            let label = question
+                .header
+                .clone()
+                .unwrap_or_else(|| format!("{}", index + 1));
+            tabs.push(Span::styled(
+                format!("{}{} ", if answered { "[x]" } else { "[ ]" }, label),
+                if current {
+                    Style::default().fg(Color::Black).bg(Color::Cyan)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                },
+            ));
+        }
+        tabs.push(Span::styled(
+            format!(
+                "{}{} ",
+                if card.page() == card.questions().len() {
+                    "[x]"
+                } else {
+                    "[ ]"
+                },
+                "提交"
+            ),
+            if card.page() == card.questions().len() {
+                Style::default().fg(Color::Black).bg(Color::Cyan)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            },
+        ));
+        lines.push(Line::from(tabs));
+        hits.push(Some(DecisionClick::QuestionPrev));
+    }
+    if card.page() == card.questions().len() {
+        lines.push(Line::from(Span::styled(
+            "提交这组答案",
+            Style::default().add_modifier(Modifier::BOLD),
+        )));
+        hits.push(None);
+        for (index, question) in card.questions().iter().enumerate() {
+            let answer = card.review_answers().get(index).cloned();
+            let text = answer
+                .as_ref()
+                .map(answer_text)
+                .unwrap_or_else(|| "尚未回答".to_string());
+            lines.push(Line::from(vec![
+                Span::styled(
+                    if text == "尚未回答" || text == "（跳过）" {
+                        "[ ] "
+                    } else {
+                        "[x] "
+                    },
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(
+                    question
+                        .header
+                        .clone()
+                        .unwrap_or_else(|| question.id.clone()),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(format!("  {text}"), Style::default().fg(Color::DarkGray)),
+            ]));
+            hits.push(Some(DecisionClick::QuestionOption(index)));
+        }
+        lines.push(Line::from(Span::styled(
+            "Enter 提交 · Tab/←→ 回看 · Esc 收起",
+            Style::default().fg(Color::DarkGray),
+        )));
+        hits.push(Some(DecisionClick::QuestionSubmit));
+    } else if let Some(question) = card.questions().get(card.page()) {
+        lines.push(Line::from(Span::styled(
+            question.question.clone(),
+            Style::default().add_modifier(Modifier::BOLD),
+        )));
+        hits.push(None);
+        let draft = card.draft(card.page()).cloned().unwrap_or_default();
+        for (index, option) in question.options.iter().enumerate() {
+            let focused = card.focus() == index;
+            let selected = draft.selected.iter().any(|label| label == &option.label);
+            lines.push(option_line(
+                focused,
+                &format!("{}.", index + 1),
+                &option.label,
+                option.description.as_deref().unwrap_or(""),
+                selected,
+            ));
+            hits.push(Some(DecisionClick::QuestionOption(index)));
+            if let Some(description) = &option.description {
+                for row in display_rows(description, width.saturating_sub(5)) {
+                    lines.push(Line::from(Span::styled(
+                        format!("     {row}"),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                    hits.push(Some(DecisionClick::QuestionOption(index)));
+                }
+            }
+        }
+        let other_focused = card.focus() == question.options.len();
+        let caret = if other_focused { "▏" } else { "" };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{} ", if other_focused { ">" } else { " " }),
+                Style::default().fg(Color::Cyan),
+            ),
+            Span::styled(
+                format!("{}. ", question.options.len() + 1),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::raw("其他："),
+            Span::styled(
+                format!("{}{caret}", draft.custom),
+                Style::default().fg(Color::Yellow),
+            ),
+        ]));
+        hits.push(Some(DecisionClick::QuestionOther));
+        lines.push(Line::from(vec![
+            Span::styled("跳过本题", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "  （Alt+N；提交空结果）",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+        hits.push(Some(DecisionClick::QuestionSkip));
+        let footer = if question.multi_select {
+            "↑↓ 移动 · 空格勾选 · Enter 确认已选项"
+        } else {
+            "↑↓ 移动 · Enter 选择 · 数字直选"
+        };
+        lines.push(Line::from(Span::styled(
+            format!(
+                "{footer}{} · Alt+N 跳过 · Alt+T 停止倒计时 · Esc 收起",
+                if card.questions().len() > 1 {
+                    " · Tab 切题"
+                } else {
+                    ""
+                }
+            ),
+            Style::default().fg(Color::DarkGray),
+        )));
+        hits.push(None);
+    }
+    if let Some(error) = card.error() {
+        lines.push(Line::from(Span::styled(
+            error.to_string(),
+            Style::default().fg(Color::Red),
+        )));
+        hits.push(None);
+    }
+    if let Some(remaining) = card.timed().remaining_at(Instant::now()) {
+        lines.push(Line::from(Span::styled(
+            format!("剩余 {} · Alt+T 停止倒计时", format_duration(remaining)),
+            Style::default().fg(Color::Yellow),
+        )));
+        hits.push(None);
+    } else if card.timed().indefinite {
+        lines.push(Line::from(Span::styled(
+            "倒计时已停止；问题保持可回答",
+            Style::default().fg(Color::DarkGray),
+        )));
+        hits.push(None);
+    }
+    if let Some(notice) = card.notice() {
+        lines.push(Line::from(Span::styled(
+            notice.to_string(),
+            Style::default().fg(Color::DarkGray),
+        )));
+        hits.push(None);
+    }
+    (title, lines, hits)
+}
+
+fn render_plan_review(
+    card: &QuestionCard,
+    area: Rect,
+) -> (String, Vec<Line<'static>>, Vec<Option<DecisionClick>>) {
+    let width = area.width.saturating_sub(4) as usize;
+    let question = &card.questions()[0];
+    let intent = question.plan_review().unwrap();
+    let title = " 计划审阅 ".to_string();
+    let mut lines = Vec::new();
+    let mut hits = Vec::new();
+    let summary = question
+        .detail
+        .as_deref()
+        .unwrap_or("")
+        .split('\n')
+        .filter(|line| !line.trim().is_empty())
+        .take(2)
+        .collect::<Vec<_>>()
+        .join(" ");
+    lines.push(Line::from(Span::styled(
+        format!("计划：{}", elide_plain(&summary, width)),
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    hits.push(Some(DecisionClick::PlanView));
+    lines.push(Line::from(Span::styled(
+        format!("批准选项：{}", intent.approve),
+        Style::default().fg(Color::DarkGray),
+    )));
+    hits.push(None);
+    if card.plan_expanded() {
+        if let Some(detail) = question.detail.as_deref() {
+            let rows = display_rows(detail, width);
+            for row in rows.iter().skip(card.detail_offset()).take(10) {
+                lines.push(Line::from(Span::styled(
+                    row.clone(),
+                    Style::default().fg(Color::DarkGray),
+                )));
+                hits.push(None);
+            }
+        }
+    }
+    let view_focused = card.plan_focus() == PlanFocus::View;
+    let changes_focused = card.plan_focus() == PlanFocus::RequestChanges;
+    let approve_focused = card.plan_focus() == PlanFocus::Approve;
+    lines.push(option_line(
+        view_focused,
+        "1.",
+        if card.plan_expanded() {
+            "收起完整计划"
+        } else {
+            "查看完整计划"
+        },
+        "",
+        false,
+    ));
+    hits.push(Some(DecisionClick::PlanView));
+    lines.push(option_line(
+        changes_focused,
+        "2.",
+        "请求修改",
+        "取消本次等待，回到输入框说明修改（不提交批准）",
+        false,
+    ));
+    hits.push(Some(DecisionClick::PlanRequestChanges));
+    lines.push(option_line(
+        approve_focused,
+        "3.",
+        "批准",
+        "返回官方批准标签",
+        false,
+    ));
+    hits.push(Some(DecisionClick::PlanApprove));
+    lines.push(Line::from(Span::styled(
+        "↑↓ 选择 · Enter 确认 · Esc 取消（不会批准）",
+        Style::default().fg(Color::DarkGray),
+    )));
+    hits.push(None);
+    (title, lines, hits)
+}
+
+fn render_read_only(
+    card: &QuestionCard,
+    area: Rect,
+) -> (String, Vec<Line<'static>>, Vec<Option<DecisionClick>>) {
+    let width = area.width.saturating_sub(4) as usize;
+    let title = " 问卷回看 · 只读 ".to_string();
+    let mut lines = Vec::new();
+    let mut hits = Vec::new();
+    for (index, question) in card.questions().iter().enumerate() {
+        let skipped = card.skipped(index);
+        lines.push(Line::from(Span::styled(
+            question
+                .header
+                .clone()
+                .unwrap_or_else(|| question.question.clone()),
+            Style::default().add_modifier(Modifier::BOLD),
+        )));
+        hits.push(None);
+        if question.header.is_some() {
+            for row in display_rows(&question.question, width) {
+                lines.push(Line::from(Span::styled(
+                    row,
+                    Style::default().fg(Color::DarkGray),
+                )));
+                hits.push(None);
+            }
+        }
+        let answer = card
+            .draft(index)
+            .map(|draft| {
+                answer_text(&nano_decisions::AnswerItem {
+                    id: question.id.clone(),
+                    selected: draft.selected.clone(),
+                    custom: Some(draft.custom.clone()).filter(|text| !text.trim().is_empty()),
+                })
+            })
+            .unwrap_or_else(|| "（未记录）".to_string());
+        let text = if skipped {
+            "（跳过）".to_string()
+        } else {
+            answer
+        };
+        for row in display_rows(&format!("  {text}"), width) {
+            lines.push(Line::from(Span::styled(
+                row,
+                Style::default().fg(Color::DarkGray),
+            )));
+            hits.push(None);
+        }
+    }
+    lines.push(Line::from(Span::styled(
+        "Esc 关闭",
+        Style::default().fg(Color::DarkGray),
+    )));
+    hits.push(Some(DecisionClick::QuestionSubmit));
+    (title, lines, hits)
+}
+
+fn option_line(
+    focused: bool,
+    number: &str,
+    label: &str,
+    detail: &str,
+    selected: bool,
+) -> Line<'static> {
+    let mut spans = vec![
+        Span::styled(
+            format!("{} ", if focused { ">" } else { " " }),
+            Style::default().fg(Color::Cyan),
+        ),
+        Span::styled(format!("{number} "), Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!("{} ", if selected { "[x]" } else { "[ ]" }),
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(
+            label.to_string(),
+            if focused {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            },
+        ),
+    ];
+    if !detail.is_empty() {
+        spans.push(Span::styled(
+            format!("  {detail}"),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+    Line::from(spans)
+}
+
+fn answer_text(answer: &nano_decisions::AnswerItem) -> String {
+    let mut parts = answer.selected.clone();
+    if let Some(custom) = answer
+        .custom
+        .as_deref()
+        .filter(|text| !text.trim().is_empty())
+    {
+        parts.push(custom.to_string());
+    }
+    if parts.is_empty() {
+        "（跳过）".to_string()
+    } else {
+        parts.join("、")
+    }
+}
+
+fn elide_plain(text: &str, width: usize) -> String {
+    let text = text.replace('\n', " ");
+    if text.chars().count() <= width {
+        return text;
+    }
+    let mut value: String = text.chars().take(width.saturating_sub(1)).collect();
+    value.push('…');
+    value
+}
+
+fn display_rows(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut rows = Vec::new();
+    for line in text.split('\n') {
+        let line = line.replace('\r', "");
+        if line.is_empty() {
+            rows.push(String::new());
+            continue;
+        }
+        let mut current = String::new();
+        let mut used = 0usize;
+        for character in line.chars() {
+            let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
+            if used + character_width > width && !current.is_empty() {
+                rows.push(std::mem::take(&mut current));
+                used = 0;
+            }
+            current.push(character);
+            used += character_width;
+        }
+        if !current.is_empty() {
+            rows.push(current);
+        }
+    }
+    if rows.is_empty() {
+        rows.push(String::new());
+    }
+    rows
+}
+
+fn format_duration(duration: std::time::Duration) -> String {
+    let seconds = duration.as_secs();
+    format!("{}:{:02}", seconds / 60, seconds % 60)
+}
+
 
 fn draw_queue(frame: &mut Frame, app: &App, area: Rect) {
     let focused = !app.scene.focus().input_focused();

@@ -10,8 +10,8 @@ use std::io::{self, Stdout};
 use std::time::Duration;
 
 use crossterm::event::{
-    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyboardEnhancementFlags,
-    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    Event, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -58,6 +58,13 @@ fn run() -> Result<(), String> {
             dirty |= app.handle_link(event);
         }
         dirty |= app.tick();
+        // Drain every already-queued terminal event first, then draw once.
+        // A wheel burst therefore causes one layout pass instead of one per
+        // event; the event loop's command-driven scroll stays coalesced.
+        while event::poll(Duration::ZERO).map_err(|error| format!("poll: {error}"))? {
+            let terminal_event = event::read().map_err(|error| format!("read: {error}"))?;
+            dirty |= handle_terminal_event(&mut app, terminal_event);
+        }
         if dirty {
             terminal
                 .terminal
@@ -69,18 +76,8 @@ fn run() -> Result<(), String> {
             break;
         }
         if event::poll(Duration::from_millis(16)).map_err(|error| format!("poll: {error}"))? {
-            match event::read().map_err(|error| format!("read: {error}"))? {
-                Event::Key(key) => {
-                    dirty |= app.handle_key(key);
-                }
-                Event::Paste(text) => {
-                    dirty |= app.handle_paste(text);
-                }
-                Event::Resize(_, _) => {
-                    dirty = true;
-                }
-                _ => {}
-            }
+            let terminal_event = event::read().map_err(|error| format!("read: {error}"))?;
+            dirty |= handle_terminal_event(&mut app, terminal_event);
         }
     }
     drop(terminal);
@@ -95,6 +92,17 @@ fn run() -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Apply one terminal event. Returns whether the screen needs a redraw.
+fn handle_terminal_event(app: &mut App, event: Event) -> bool {
+    match event {
+        Event::Key(key) => app.handle_key(key),
+        Event::Paste(text) => app.handle_paste(text),
+        Event::Mouse(mouse) => app.handle_mouse(mouse),
+        Event::Resize(_, _) => true,
+        _ => false,
+    }
 }
 
 /// Raw mode, bracketed paste, and (optionally) the alternate screen.
@@ -113,6 +121,7 @@ impl TerminalGuard {
         let result = (|| -> io::Result<Self> {
             let mut stdout = io::stdout();
             execute!(stdout, EnableBracketedPaste)?;
+            execute!(stdout, EnableMouseCapture)?;
             if alt_screen {
                 execute!(stdout, EnterAlternateScreen)?;
             }
@@ -147,6 +156,7 @@ impl TerminalGuard {
                     let _ = execute!(stdout, PopKeyboardEnhancementFlags);
                 }
                 let _ = disable_raw_mode();
+                let _ = execute!(stdout, DisableMouseCapture);
                 let _ = execute!(stdout, DisableBracketedPaste);
                 if alt_screen {
                     let _ = execute!(stdout, LeaveAlternateScreen);
@@ -164,6 +174,7 @@ impl Drop for TerminalGuard {
             let _ = execute!(stdout, PopKeyboardEnhancementFlags);
         }
         let _ = disable_raw_mode();
+        let _ = execute!(stdout, DisableMouseCapture);
         let _ = execute!(stdout, DisableBracketedPaste);
         if self.alt_screen {
             let _ = execute!(stdout, LeaveAlternateScreen);

@@ -33,7 +33,7 @@ test('implemented methods match the contract', () => {
   assert.deepEqual([...IMPLEMENTED_METHODS].sort(), [...CONTRACT_IMPLEMENTED.keys()].sort())
   for (const [name, method] of CONTRACT_IMPLEMENTED) {
     assert.ok(
-      ['S01', 'S02', 'S04', 'S05', 'S06', 'S07', 'S08', 'S09', 'S11'].includes(method.owner),
+      ['S01', 'S02', 'S03', 'S04', 'S05', 'S06', 'S07', 'S08', 'S09', 'S11'].includes(method.owner),
       `${name} owner`,
     )
     if (method.kind === 'request') {
@@ -79,6 +79,10 @@ test('limits and error codes match the contract', () => {
   assert.equal(ERROR_CODES.get('nano/sessions/title-invalid'), 1031)
   assert.equal(ERROR_CODES.get('nano/sessions/compact-unavailable'), 1032)
   assert.equal(ERROR_CODES.get('nano/sessions/rejected'), 1033)
+  assert.equal(ERROR_CODES.get('nano/decisions/unknown-request'), 1045)
+  assert.equal(ERROR_CODES.get('nano/decisions/answer-invalid'), 1046)
+  assert.equal(ERROR_CODES.get('nano/decisions/reply-queued'), 1047)
+  assert.equal(ERROR_CODES.get('nano/decisions/answer-failed'), 1048)
 })
 
 test('lifecycle edges are exactly the contract table', () => {
@@ -102,6 +106,9 @@ test('event kinds match', () => {
     'instructions.changed',
     'jobs.event',
     'jobs.output',
+    'decisions.approval',
+    'decisions.question',
+    'decisions.projection',
   ])
 })
 
@@ -231,10 +238,31 @@ test('encodeFrame produces one newline-terminated frame', () => {
 test('capability names match the contract and unanswered seams are unavailable', () => {
   const capabilities = buildCapabilities({ get: () => undefined }, {})
   assert.deepEqual(Object.keys(capabilities).sort(), [...CONTRACT.capabilityNames].sort())
-  assert.equal(capabilities.approval.status, 'unavailable')
-  assert.equal(capabilities.userQuestions.status, 'unavailable')
+  assert.equal(capabilities.approval.status, 'unsupported')
+  assert.equal(capabilities.userQuestions.status, 'unsupported')
   assert.equal(capabilities['tool-ask-user'].status, 'unsupported')
   assert.equal(capabilities.schedule.status, 'unsupported')
+})
+
+test('composed interaction seams report the S03 answerer as supported', () => {
+  const services = new Set(['approval', 'userQuestions'])
+  const capabilities = buildCapabilities(
+    { get: (key) => (services.has(key) ? {} : undefined) },
+    {},
+  )
+  assert.equal(capabilities.approval.status, 'supported')
+  assert.equal(capabilities.userQuestions.status, 'supported')
+  assert.equal(capabilities['tool-ask-user'].status, 'supported')
+  assert.equal(capabilities['tool-ask-user'].mode, 'blocking')
+})
+
+test('decision fixtures validate as events', () => {
+  for (const fixture of ['approvalEvent', 'questionEvent']) {
+    const event = parseFrameLine(JSON.stringify(CONTRACT.fixtures[fixture]))
+    const validated = validateEvent(event.params, { runtimeId: 'rt-fixture', generation: 1 })
+    assert.match(validated.kind, /^decisions\./)
+    assert.equal(validated.payload.address.rootSessionId, 'session-fixture')
+  }
 })
 
 test('shutdown step names match the contract', () => {

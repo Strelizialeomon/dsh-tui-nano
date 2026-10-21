@@ -85,7 +85,10 @@ fn every_event_kind_is_covered_by_the_contract_shape() {
             "skills.changed",
             "instructions.changed",
             "jobs.event",
-            "jobs.output"
+            "jobs.output",
+            "decisions.approval",
+            "decisions.question",
+            "decisions.projection"
         ]
     );
     for (owner, kind) in [
@@ -97,6 +100,9 @@ fn every_event_kind_is_covered_by_the_contract_shape() {
         ("S08", "jobs.event"),
         ("S08", "jobs.output"),
         ("S11", "schedule.changed"),
+        ("S03", "decisions.approval"),
+        ("S03", "decisions.question"),
+        ("S03", "decisions.projection"),
     ] {
         let event = contract["eventKinds"]
             .as_array()
