@@ -201,6 +201,9 @@ pub fn write_runtime_patch(
     nonce: &str,
     official_version: &str,
     test_faults: Option<&Value>,
+    provider: Option<&str>,
+    model: Option<&str>,
+    reasoning_effort: Option<&str>,
 ) -> Result<PathBuf, HostError> {
     let sessions_root = paths.data_root.join("sessions");
     let storage_root = paths
@@ -227,6 +230,15 @@ pub fn write_runtime_patch(
     if let Some(faults) = test_faults {
         bridge_config["allowFaults"] = Value::Bool(true);
         bridge_config["faults"] = faults.clone();
+    }
+    // The initial route is optional; S04 owns changing it later. Both halves
+    // must be present so the host never invents a provider/model pair.
+    if let (Some(provider), Some(model)) = (provider, model) {
+        bridge_config["provider"] = Value::String(provider.to_string());
+        bridge_config["model"] = Value::String(model.to_string());
+        if let Some(effort) = reasoning_effort {
+            bridge_config["reasoningEffort"] = Value::String(effort.to_string());
+        }
     }
 
     let patch = json!([

@@ -33,7 +33,8 @@
     "gracefulShutdownMs": 10000,
     "termGraceMs": 3000,
     "mountLockStaleMs": 30000,
-    "maxReplayEvents": 10000
+    "maxReplayEvents": 10000,
+    "maxSubmitTextBytes": 32768
   },
   "lifecycle": {
     "states": [
@@ -176,6 +177,38 @@
     {
       "code": 1010,
       "name": "nano/closed"
+    },
+    {
+      "code": 1011,
+      "name": "nano/conversation/address"
+    },
+    {
+      "code": 1012,
+      "name": "nano/conversation/empty"
+    },
+    {
+      "code": 1013,
+      "name": "nano/conversation/content"
+    },
+    {
+      "code": 1014,
+      "name": "nano/conversation/queue-item-not-found"
+    },
+    {
+      "code": 1015,
+      "name": "nano/conversation/queued-attachment"
+    },
+    {
+      "code": 1016,
+      "name": "nano/conversation/steer-unavailable"
+    },
+    {
+      "code": 1017,
+      "name": "nano/conversation/rejected"
+    },
+    {
+      "code": 1018,
+      "name": "nano/conversation/too-large"
     }
   ],
   "shapes": {
@@ -209,7 +242,9 @@
     },
     "address": {
       "rootSessionId": "string",
-      "childSessionId": "string?"
+      "childSessionId": "string?",
+      "parentSessionId": "string?",
+      "mode": "string?"
     },
     "hello": {
       "protocol": "protocolVersion",
@@ -234,7 +269,7 @@
       "generation": "integer",
       "subscriptionId": "string",
       "sequence": "integer",
-      "kind": "enum:session.event",
+      "kind": "enum:session.event|conversation.status|conversation.inbox|conversation.stream",
       "payload": "object"
     },
     "streamEnded": {
@@ -252,6 +287,34 @@
       "name": "string",
       "status": "enum:stopped|failed|unknown",
       "detail": "string?"
+    },
+    "conversationMessage": {
+      "id": "string",
+      "role": "string",
+      "content": "array:object",
+      "source": "object",
+      "toolCallId": "string?"
+    },
+    "conversationInbox": {
+      "nextTurn": "array:conversationMessage",
+      "nextStep": "array:conversationMessage"
+    },
+    "conversationStreamFrame": {
+      "type": "enum:start|chunk|end",
+      "attemptId": "string",
+      "revision": "integer",
+      "turn": "integer?",
+      "step": "integer?",
+      "index": "integer?",
+      "time": "integer?",
+      "chunk": "object?",
+      "outcome": "object?"
+    },
+    "conversationSnapshot": {
+      "address": "address",
+      "seq": "integer",
+      "status": "enum:idle|running",
+      "inbox": "conversationInbox"
     }
   },
   "methods": [
@@ -541,6 +604,135 @@
       "paramsSemantics": {
         "bytes": "base64; maxRawBytes=49152"
       }
+    },
+    {
+      "name": "nano.conversation.submit",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S02",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address",
+          "requestId",
+          "delivery",
+          "content"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "accepted",
+          "duplicate",
+          "requestId",
+          "messageId"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.conversation.editQueued",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S02",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address",
+          "messageId",
+          "content"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "accepted",
+          "messageId"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.conversation.deleteQueued",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S02",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address",
+          "messageId"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "removed"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.conversation.steerQueued",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S02",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address",
+          "messageId"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "accepted"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.conversation.cancel",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S02",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "accepted"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.conversation.snapshot",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S02",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address"
+        ],
+        "optional": []
+      },
+      "result": {
+        "shape": "conversationSnapshot",
+        "required": [
+          "address",
+          "seq",
+          "status",
+          "inbox"
+        ],
+        "optional": []
+      }
     }
   ],
   "eventKinds": [
@@ -553,6 +745,36 @@
         "seq": "integer",
         "type": "string",
         "data": "object"
+      }
+    },
+    {
+      "kind": "conversation.status",
+      "owner": "S02",
+      "status": "implemented",
+      "payload": {
+        "address": "address",
+        "status": "enum:idle|running"
+      }
+    },
+    {
+      "kind": "conversation.inbox",
+      "owner": "S02",
+      "status": "implemented",
+      "payload": {
+        "address": "address",
+        "inbox": "conversationInbox",
+        "truncated": "boolean?",
+        "total": "integer?",
+        "omitted": "integer?"
+      }
+    },
+    {
+      "kind": "conversation.stream",
+      "owner": "S02",
+      "status": "implemented",
+      "payload": {
+        "address": "address",
+        "frame": "conversationStreamFrame"
       }
     }
   ],
@@ -711,6 +933,41 @@
           }
         ],
         "clean": true
+      }
+    },
+    "conversationSubmit": {
+      "jsonrpc": "2.0",
+      "id": "req-4",
+      "method": "nano.conversation.submit",
+      "params": {
+        "address": {
+          "rootSessionId": "session-fixture"
+        },
+        "requestId": "request-fixture-1",
+        "delivery": "queue",
+        "content": [
+          {
+            "type": "text",
+            "text": "hello"
+          }
+        ]
+      }
+    },
+    "conversationEvent": {
+      "jsonrpc": "2.0",
+      "method": "nano.event",
+      "params": {
+        "runtimeId": "rt-fixture",
+        "generation": 1,
+        "subscriptionId": "sub-1",
+        "sequence": 0,
+        "kind": "conversation.status",
+        "payload": {
+          "address": {
+            "rootSessionId": "session-fixture"
+          },
+          "status": "running"
+        }
       }
     }
   },

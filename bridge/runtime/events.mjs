@@ -6,7 +6,7 @@
 // are fanned out with a per-subscription envelope sequence; a slow consumer is
 // closed explicitly rather than being dropped silently.
 import { randomBytes } from 'node:crypto'
-import { LIMITS } from '../../protocol/index.mjs'
+import { EVENT_KINDS, LIMITS } from '../../protocol/index.mjs'
 import { encodeFrame } from './frames.mjs'
 import { RpcError } from './errors.mjs'
 
@@ -55,13 +55,13 @@ export class SubscriptionHub {
     if (!Number.isInteger(start) || start < 0) {
       throw new RpcError('jsonrpc/invalid-params', 'fromSeq must be a non-negative integer')
     }
-    if (start > baseline) {
-      throw new RpcError('jsonrpc/invalid-params', `fromSeq ${String(start)} is past the current seq ${String(baseline)}`)
-    }
-    if (baseline - start > LIMITS.maxReplayEvents) {
+    // A client that tracks the next durable seq can legitimately send
+    // baseline + 1. Clamp instead of failing the rebuild.
+    const clamped = start > baseline ? baseline : start
+    if (baseline - clamped > LIMITS.maxReplayEvents) {
       throw new RpcError(
         'jsonrpc/invalid-params',
-        `replay window ${String(baseline - start)} exceeds maxReplayEvents ${String(LIMITS.maxReplayEvents)}; request a later fromSeq`,
+        `replay window ${String(baseline - clamped)} exceeds maxReplayEvents ${String(LIMITS.maxReplayEvents)}; request a later fromSeq`,
       )
     }
 
@@ -76,16 +76,25 @@ export class SubscriptionHub {
     }
     this.subscriptions.set(subscription.id, subscription)
     try {
-      if (start < baseline && subscription.kinds.includes('session.event')) {
-        await this.replay(subscription, start, baseline, signal)
+      if (clamped < baseline && subscription.kinds.includes('session.event')) {
+        await this.replay(subscription, clamped, baseline, signal)
       }
       const delivered = subscription.delivered ?? new Set()
       for (const payload of subscription.buffer) {
-        if (payload.seq >= start && !delivered.has(payload.seq)) this.deliver(subscription, payload)
+        if (payload.seq >= clamped && !delivered.has(payload.seq)) this.deliver(subscription, payload)
       }
       subscription.buffer = []
       subscription.delivered = undefined
       subscription.paused = false
+      if (subscription.closed) {
+        // The writer closed the subscription because a replayed or live event
+        // exceeded its per-event byte bound. Do not pretend the subscription
+        // is usable; the client needs an explicit failure to stop retrying.
+        throw new RpcError(
+          'nano/unsupported',
+          'subscription closed during replay because an event exceeded the per-event frame limit',
+        )
+      }
     } catch (error) {
       this.subscriptions.delete(subscription.id)
       this.writer.dropSubscription(subscription.id)
@@ -183,9 +192,25 @@ export class SubscriptionHub {
     }
   }
 
-  deliver(subscription, payload) {
+  /**
+   * Fan out one live event of any contract kind. Durable session events have
+   * their own listener and replay path; conversation events are live-only and
+   * carry absolute projections, so a client that reconnects reads a snapshot.
+   * @param {string} kind - contract event kind.
+   * @param {object} payload - kind-specific payload.
+   */
+  publish(kind, payload) {
+    if (this.closed) return
+    if (!EVENT_KINDS.has(kind)) throw new Error(`unknown event kind ${kind}`)
+    for (const subscription of this.subscriptions.values()) {
+      if (subscription.closed || !subscription.kinds.includes(kind)) continue
+      this.deliver(subscription, payload, kind)
+    }
+  }
+
+  deliver(subscription, payload, kind = 'session.event') {
     if (subscription.closed) return
-    if (!subscription.kinds.includes('session.event')) return
+    if (!subscription.kinds.includes(kind)) return
     const frame = {
       jsonrpc: '2.0',
       method: 'nano.event',
@@ -194,7 +219,7 @@ export class SubscriptionHub {
         generation: this.generation,
         subscriptionId: subscription.id,
         sequence: subscription.sequence,
-        kind: 'session.event',
+        kind,
         payload,
       },
     }
@@ -250,7 +275,7 @@ function validateKinds(kinds) {
     throw new RpcError('jsonrpc/invalid-params', 'kinds must be an array of strings')
   }
   for (const kind of kinds) {
-    if (kind !== 'session.event') {
+    if (!EVENT_KINDS.has(kind)) {
       throw new RpcError('nano/unsupported', `event kind ${kind} is not served by this generation`)
     }
   }

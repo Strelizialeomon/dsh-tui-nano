@@ -137,7 +137,10 @@ fn implemented_methods_match() {
             "{name} needs a direction"
         );
         match method["status"].as_str().unwrap() {
-            "implemented" => assert_eq!(method["owner"], "S01"),
+            "implemented" => assert!(
+                method["owner"] == "S01" || method["owner"] == "S02",
+                "{name} is implemented by an owner this contract test does not know"
+            ),
             "reserved" => assert_ne!(method["owner"], "S01", "{name} is reserved but owned by S01"),
             other => panic!("unknown method status {other}"),
         }

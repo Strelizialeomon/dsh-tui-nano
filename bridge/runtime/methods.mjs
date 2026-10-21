@@ -8,6 +8,12 @@ export const IMPLEMENTED_REQUEST_METHODS = Object.freeze([
   'nano.subscribe',
   'nano.unsubscribe',
   'nano.cancelRequest',
+  'nano.conversation.submit',
+  'nano.conversation.editQueued',
+  'nano.conversation.deleteQueued',
+  'nano.conversation.steerQueued',
+  'nano.conversation.cancel',
+  'nano.conversation.snapshot',
 ])
 
 /** Notifications this host can emit. */
