@@ -68,40 +68,37 @@ fn every_event_kind_is_covered_by_the_contract_shape() {
         .iter()
         .map(|entry| entry["kind"].as_str().unwrap())
         .collect();
-    for kind in &kinds {
-        assert!(
-            [
-                "session.event",
-                "conversation.status",
-                "conversation.inbox",
-                "conversation.stream",
-                "controls.model",
-                "controls.permission",
-                "skills.changed",
-                "instructions.changed"
-            ]
-            .contains(kind),
-            "unexpected event kind {kind}"
-        );
-    }
-    // S02 owns four live/durable kinds; S04 and S05 each add two.
-    assert_eq!(kinds.len(), 8);
-    for kind in ["skills.changed", "instructions.changed"] {
+    // Exact set, not a subset: a future unknown kind must fail this contract
+    // test instead of silently widening what the conversation model accepts.
+    assert_eq!(
+        kinds,
+        vec![
+            "session.event",
+            "conversation.status",
+            "conversation.inbox",
+            "conversation.stream",
+            "skills.changed",
+            "instructions.changed",
+            "controls.model",
+            "controls.permission",
+            "jobs.event",
+            "jobs.output"
+        ]
+    );
+    for (owner, kind) in [
+        ("S04", "controls.model"),
+        ("S04", "controls.permission"),
+        ("S05", "skills.changed"),
+        ("S05", "instructions.changed"),
+        ("S08", "jobs.event"),
+        ("S08", "jobs.output"),
+    ] {
         let event = contract["eventKinds"]
             .as_array()
             .unwrap()
             .iter()
             .find(|event| event["kind"] == kind)
             .unwrap();
-        assert_eq!(event["owner"], "S05");
-    }
-    for kind in ["controls.model", "controls.permission"] {
-        let event = contract["eventKinds"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|event| event["kind"] == kind)
-            .unwrap();
-        assert_eq!(event["owner"], "S04");
+        assert_eq!(event["owner"], owner, "{kind} owner");
     }
 }
