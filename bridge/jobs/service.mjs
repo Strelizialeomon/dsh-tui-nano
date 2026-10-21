@@ -29,18 +29,10 @@ export class JobsService {
     this.address = { rootSessionId }
     this.registry = ctx.get('jobs')
     this.closed = false
+    this.eventSeq = 0
     this.toolCalls = new Map()
     this.disposers = []
-    this.indexRegisteredJobs()
     this.listen()
-  }
-
-  /** Remember `job/registered` tool-call correlation; JobView does not carry it. */
-  indexRegisteredJobs() {
-    for (const event of collectSessionEvents(this.session)) {
-      if (event.type !== 'job/registered') continue
-      this.rememberJob(event.data)
-    }
   }
 
   /** Subscribe to the official registry and the durable registration log. */
@@ -49,6 +41,10 @@ export class JobsService {
       const disposer = this.ctx.on(event, handler)
       if (typeof disposer === 'function') this.disposers.push(disposer)
     }
+    // The bridge mounts before the host handshake, so every job registration
+    // this generation can see arrives on the live stream. No historical event
+    // read is needed, and the deprecated synchronous session snapshot is not
+    // used.
     on('session/event', (subject, event) => {
       if (this.closed || subject.id !== this.rootSessionId || event.type !== 'job/registered') return
       this.rememberJob(event.data)
@@ -60,11 +56,6 @@ export class JobsService {
         }))
       } catch {
         // An implementation without an event stream still supports snapshots.
-      }
-      try {
-        this.disposers.push(this.registry.attachController('nano-jobs'))
-      } catch {
-        // Another controller already serves this owner; observation still works.
       }
     }
   }
@@ -84,14 +75,17 @@ export class JobsService {
   /** Publish one official job event without inventing state. */
   publish(event) {
     if (this.closed) return
+    this.eventSeq += 1
+    const seq = this.eventSeq
     if (event.type === 'output') {
-      const payload = { address: this.address, jobId: String(event.id), total: event.total }
+      const payload = { address: this.address, seq, jobId: String(event.id), total: event.total }
       if (event.owner !== undefined) payload.owner = event.owner
       this.hub.publish('jobs.output', payload)
       return
     }
     const payload = {
       address: this.address,
+      seq,
       type: event.type,
       job: this.enrich(event.job),
     }
@@ -108,7 +102,10 @@ export class JobsService {
   snapshot(params) {
     this.assertAvailable()
     this.assertAddress(params?.address)
-    return { jobs: this.registry.list(this.rootSessionId).map((job) => this.enrich(job)) }
+    // Capture the sequence before the list. A snapshot that arrives after a
+    // newer live event must not replace it; the client compares this value.
+    const seq = this.eventSeq
+    return { seq, jobs: this.registry.list(this.rootSessionId).map((job) => this.enrich(job)) }
   }
 
   /**
@@ -120,14 +117,14 @@ export class JobsService {
     this.assertAvailable()
     this.assertAddress(params?.address)
     const jobId = validateJobId(params.jobId)
-    if (!Number.isInteger(params.from) || params.from < 0) {
-      throw new RpcError('jsonrpc/invalid-params', 'from must be a non-negative integer')
+    if (!Number.isSafeInteger(params.from) || params.from < 0) {
+      throw new RpcError('jsonrpc/invalid-params', 'from must be a non-negative safe integer')
     }
     try {
       const read = this.registry.readAt(jobId, params.from, this.rootSessionId)
       return { chunks: read.chunks, next: read.next, lossy: read.lossy === true }
     } catch (error) {
-      throw notFound(error)
+      throw mapRegistryError('read job output', error)
     }
   }
 
@@ -146,7 +143,7 @@ export class JobsService {
       const outcome = this.registry.kill(jobId, this.rootSessionId, HUMAN_STOP_REASON)
       return { outcome: outcome === 'already-finished' ? 'already-finished' : 'requested' }
     } catch (error) {
-      throw notFound(error)
+      throw mapRegistryError('stop job', error)
     }
   }
 
@@ -201,16 +198,6 @@ export class JobsService {
   }
 }
 
-/** Read durable events from a session implementation when it exposes a snapshot. */
-function collectSessionEvents(session) {
-  if (typeof session?.snapshotEvents !== 'function') return []
-  try {
-    return session.snapshotEvents()
-  } catch {
-    return []
-  }
-}
-
 function validateJobId(jobId) {
   if (typeof jobId !== 'string' || jobId === '' || Buffer.byteLength(jobId, 'utf8') > 256) {
     throw new RpcError('jsonrpc/invalid-params', 'jobId must be a non-empty string')
@@ -218,9 +205,18 @@ function validateJobId(jobId) {
   return jobId
 }
 
-/** A missing, foreign, or already-removed job is indistinguishable to the caller. */
-function notFound(error) {
-  return new RpcError('nano/jobs/not-found', `job not visible to this session: ${describe(error)}`)
+/**
+ * Only a genuinely missing/foreign/removed job becomes not-found. A producer
+ * cancel throw or another registry failure must stay an explicit internal
+ * error; telling the user the job does not exist while it still runs would be
+ * a false terminal claim.
+ */
+function mapRegistryError(operation, error) {
+  const message = describe(error)
+  if (message.startsWith('unknown job ') || message.includes('belongs to another session')) {
+    return new RpcError('nano/jobs/not-found', `job not visible to this session: ${message}`)
+  }
+  return new RpcError('jsonrpc/internal-error', `${operation} failed: ${message}`)
 }
 
 function describe(error) {

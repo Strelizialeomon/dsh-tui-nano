@@ -11,7 +11,8 @@ use std::time::Duration;
 use nano_runtime::paths::new_runtime_id;
 use nano_runtime::protocol::Address;
 use nano_runtime::{
-    Hello, Host, HostError, HostEvent, HostOptions, SessionMode, MAX_REPLAY_EVENTS,
+    CapabilityStatus, Hello, Host, HostError, HostEvent, HostOptions, SessionMode,
+    MAX_REPLAY_EVENTS,
 };
 use serde_json::Value;
 
@@ -33,6 +34,8 @@ pub enum RequestErrorKind {
 pub struct RequestError {
     /// Classification used by the submission state machine.
     pub kind: RequestErrorKind,
+    /// JSON-RPC error code, when the host answered with one.
+    pub code: Option<i64>,
     /// Sanitized description.
     pub message: String,
 }
@@ -121,14 +124,19 @@ impl HostLink {
                 root_session_id: hello.root_session_id.clone(),
                 child_session_id: None,
             };
-            let kinds = vec![
+            let mut kinds = vec![
                 "session.event".to_string(),
                 "conversation.status".to_string(),
                 "conversation.inbox".to_string(),
                 "conversation.stream".to_string(),
-                "jobs.event".to_string(),
-                "jobs.output".to_string(),
             ];
+            // Only ask for job events when the composed host reports the
+            // capability; an older bridge would reject the unknown kind and
+            // turn a degraded jobs panel into a startup failure.
+            if jobs_supported(&hello) {
+                kinds.push("jobs.event".to_string());
+                kinds.push("jobs.output".to_string());
+            }
             let _subscription = match startup_host.subscribe(address, Some(kinds), Some(from_seq)) {
                 Ok(subscription) => subscription,
                 Err(error) => {
@@ -164,23 +172,35 @@ impl HostLink {
         let command_events = event_tx;
         std::thread::spawn(move || {
             while let Ok(command) = command_rx.recv() {
-                let host = command_host.clone();
-                let events = command_events.clone();
-                // Requests run concurrently: a long manual shell command must
-                // not delay sends, stops, or job observation.
-                std::thread::spawn(move || {
-                    let result = match command.timeout {
-                        Some(timeout) => {
-                            host.request_with_timeout(&command.method, command.params, timeout)
-                        }
-                        None => host.request(&command.method, command.params),
-                    }
+                if let Some(timeout) = command.timeout {
+                    // A manual shell command waits on the executor deadline.
+                    // Only this lane is concurrent; every ordinary request
+                    // still writes and completes in enqueue order.
+                    let host = command_host.clone();
+                    let events = command_events.clone();
+                    std::thread::spawn(move || {
+                        let result = host
+                            .request_with_timeout(&command.method, command.params, timeout)
+                            .map_err(classify_request_error);
+                        let _ = events.send(LinkEvent::RequestDone {
+                            id: command.id,
+                            result,
+                        });
+                    });
+                    continue;
+                }
+                let result = command_host
+                    .request(&command.method, command.params)
                     .map_err(classify_request_error);
-                    let _ = events.send(LinkEvent::RequestDone {
+                if command_events
+                    .send(LinkEvent::RequestDone {
                         id: command.id,
                         result,
-                    });
-                });
+                    })
+                    .is_err()
+                {
+                    return;
+                }
             }
         });
 
@@ -242,9 +262,21 @@ fn describe_host_error(error: &HostError) -> String {
     format!("{error}")
 }
 
+/// Whether the composed host reports the official job registry as usable.
+pub fn jobs_supported(hello: &Hello) -> bool {
+    hello
+        .capabilities
+        .get("jobs")
+        .is_some_and(|capability| capability.status == CapabilityStatus::Supported)
+}
+
 /// Classify a request failure without losing the fact that it may have been
 /// delivered. The app must not restore the draft or claim failure for Unknown.
 fn classify_request_error(error: HostError) -> RequestError {
+    let code = match &error {
+        HostError::Rpc(rpc) => Some(rpc.code),
+        _ => None,
+    };
     let kind = match &error {
         HostError::Rpc(_) => RequestErrorKind::Rpc,
         HostError::PendingLimit
@@ -260,6 +292,7 @@ fn classify_request_error(error: HostError) -> RequestError {
     };
     RequestError {
         kind,
+        code,
         message: describe_host_error(&error),
     }
 }

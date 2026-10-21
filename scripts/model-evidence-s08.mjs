@@ -39,21 +39,21 @@ function log(kind, value) {
   process.stdout.write(`${kind} ${JSON.stringify(value)}\n`)
 }
 
-/** Extract a completion notice from an inbox splice or inbox projection. */
-function noticeText(payload) {
+/** Extract the completion-notice message from an inbox splice or projection. */
+function noticeMessage(payload) {
+  const candidates = []
   const inserted = payload?.data?.inserted
-  const texts = []
-  if (Array.isArray(inserted)) {
-    for (const message of inserted) texts.push(messageText(message))
-  }
+  if (Array.isArray(inserted)) candidates.push(...inserted)
   const inbox = payload?.inbox
   if (inbox !== undefined) {
-    for (const message of [...(inbox.nextTurn ?? []), ...(inbox.nextStep ?? [])]) {
-      texts.push(messageText(message))
-    }
+    candidates.push(...(inbox.nextTurn ?? []), ...(inbox.nextStep ?? []))
   }
-  const notice = texts.find((text) => text.includes('background job'))
-  return notice === undefined ? undefined : notice
+  return candidates.find((message) => messageText(message).includes('background job'))
+}
+
+function noticeText(payload) {
+  const message = noticeMessage(payload)
+  return message === undefined ? undefined : messageText(message)
 }
 
 function messageText(message) {
@@ -277,13 +277,15 @@ async function main() {
             frame.method === 'nano.event' &&
             ['session.event', 'conversation.inbox'].includes(frame.params.kind),
         )
-        .map((frame) => noticeText(frame.params.payload))
-        .filter((text) => text !== undefined)
-      const unique = [...new Set(notices)]
+        .map((frame) => noticeMessage(frame.params.payload))
+        .filter((message) => message !== undefined)
+      const uniqueIds = new Set(notices.map((message) => message.id))
+      const texts = [...new Set(notices.map(messageText))]
       log('MODEL_FACING_STOP', {
-        unique_notice_count: unique.length,
-        carries_human_reason: unique.every((text) => text.includes('cancelled by the user')),
-        notice: unique[0]?.slice(0, 500),
+        delivery_frames: notices.length,
+        unique_notice_count: uniqueIds.size,
+        carries_human_reason: texts.every((text) => text.includes('cancelled by the user')),
+        notice: texts[0]?.slice(0, 500),
       })
     } catch (error) {
       log('MODEL_FACING_STOP', { missing: true, detail: String(error.message).split(';')[0] })

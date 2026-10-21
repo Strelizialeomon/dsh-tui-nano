@@ -318,7 +318,16 @@ test(
     assert.equal(exec.result.timedOut, false)
     assert.equal(exec.result.stdout.text, 'hello\n')
     assert.equal(exec.result.stderr.text, 'oops\n')
+    assert.equal(exec.result.policy.mode, 'danger-full-access')
     assert.equal(typeof exec.result.injectedMessageId, 'string')
+
+    // `!!` has no context-injection path.
+    const noInject = await call('nano.shell.exec', {
+      address,
+      command: 'true',
+      inject: false,
+    })
+    assert.equal(noInject.result.injectedMessageId, undefined)
 
     // Each command is a fresh shell in the session directory; `cd` does not
     // persist to the next command.

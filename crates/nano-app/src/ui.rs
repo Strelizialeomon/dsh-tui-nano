@@ -238,7 +238,9 @@ fn push_bash_record(lines: &mut Vec<Line<'static>>, record: &BashRecord, width: 
     ]));
     let stdout = record.stdout();
     if !stdout.is_empty() {
-        wrap_block(lines, &stdout, width, 2_000, Color::White);
+        // Keep the tail: the official truncation/spill notice is appended at
+        // the end and must not be cut away by the display bound.
+        wrap_tail_block(lines, &stdout, width, 4_000, Color::White);
     }
     let stderr = record.stderr();
     if !stderr.is_empty() {
@@ -246,7 +248,7 @@ fn push_bash_record(lines: &mut Vec<Line<'static>>, record: &BashRecord, width: 
             "[stderr]",
             Style::default().fg(Color::Red),
         )));
-        wrap_block(lines, &stderr, width, 2_000, Color::Red);
+        wrap_tail_block(lines, &stderr, width, 4_000, Color::Red);
     }
     if let Some(error) = &record.inject_error {
         lines.push(Line::from(Span::styled(
@@ -256,7 +258,7 @@ fn push_bash_record(lines: &mut Vec<Line<'static>>, record: &BashRecord, width: 
     }
 }
 
-fn draw_jobs(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_jobs(frame: &mut Frame, app: &mut App, area: Rect) {
     let title = if app.jobs.detail_open() {
         let job = app.jobs.detail_job();
         match job {
@@ -282,8 +284,13 @@ fn draw_jobs(frame: &mut Frame, app: &App, area: Rect) {
     if app.jobs.detail_open() {
         push_job_detail(&mut lines, app, width);
     } else if app.jobs.is_empty() {
+        let message = if app.ready {
+            "（没有可见任务。Agent 的前台命令在运行期间也会出现在这里。）"
+        } else {
+            "（宿主已断开；任务随宿主结束，不显示跨重启的运行状态）"
+        };
         lines.push(Line::from(Span::styled(
-            "（没有可见任务。Agent 的前台命令在运行期间也会出现在这里。）",
+            message,
             Style::default().fg(Color::DarkGray),
         )));
     } else {
@@ -291,9 +298,17 @@ fn draw_jobs(frame: &mut Frame, app: &App, area: Rect) {
     }
     let viewport = inner.height as usize;
     let total = lines.len();
-    let offset = total
-        .saturating_sub(viewport)
-        .saturating_sub(app.jobs_scroll_back);
+    let offset = if app.jobs.detail_open() {
+        app.jobs_detail_lines = total;
+        let max_scroll = total.saturating_sub(viewport);
+        total
+            .saturating_sub(viewport)
+            .saturating_sub(app.jobs_scroll_back.min(max_scroll))
+    } else {
+        // Keep the selected row inside the viewport; the list itself is not a
+        // tail view. Up/Down therefore scroll a long list with the selection.
+        list_offset(app.jobs.selected(), total, viewport)
+    };
     let visible: Vec<Line<'static>> = lines.into_iter().skip(offset).collect();
     frame.render_widget(Paragraph::new(Text::from(visible)), inner);
 }
@@ -391,7 +406,9 @@ fn push_job_detail(lines: &mut Vec<Line<'static>>, app: &App, width: usize) {
                     Style::default().fg(Color::DarkGray),
                 )));
             } else {
-                wrap_block(lines, &buffer.text, width, 200_000, Color::Gray);
+                // The buffer keeps its tail; render the tail as well, never the
+                // head of a tail buffer.
+                wrap_tail_block(lines, &buffer.text, width, 200_000, Color::Gray);
             }
         }
         None => lines.push(Line::from(Span::styled(
@@ -651,6 +668,37 @@ fn wrap_segments(line: &str, width: usize) -> Vec<Segment> {
     segments
 }
 
+/// First visible row that keeps the selected list item on screen.
+fn list_offset(selected: usize, total: usize, viewport: usize) -> usize {
+    let visible = viewport.max(1);
+    selected
+        .saturating_sub(visible.saturating_sub(1))
+        .min(total.saturating_sub(visible))
+}
+
+/// Wrap the tail of a block and mark display-side truncation explicitly.
+/// Output tail semantics matter: the newest bytes and the official
+/// truncation/spill notice live at the end.
+fn wrap_tail_block(
+    lines: &mut Vec<Line<'static>>,
+    text: &str,
+    width: usize,
+    max_chars: usize,
+    color: Color,
+) {
+    let characters = text.chars().count();
+    if characters > max_chars {
+        let tail: String = text.chars().skip(characters - max_chars).collect();
+        lines.push(Line::from(Span::styled(
+            format!("[显示已截断：仅显示最后 {max_chars} 字符；完整输出以官方输出为准]"),
+            Style::default().fg(Color::Yellow),
+        )));
+        wrap_block(lines, &tail, width, max_chars, color);
+    } else {
+        wrap_block(lines, text, width, max_chars, color);
+    }
+}
+
 fn wrap_block(
     lines: &mut Vec<Line<'static>>,
     text: &str,
@@ -711,5 +759,26 @@ mod tests {
         let segments = wrap_segments("", 10);
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].width, 0);
+    }
+
+    #[test]
+    fn the_tail_renderer_keeps_the_newest_text_and_marks_truncation() {
+        let mut lines = Vec::new();
+        wrap_tail_block(&mut lines, "abcdef", 10, 3, Color::White);
+        let joined: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect();
+        assert!(joined.contains("显示已截断"));
+        assert!(joined.contains("def"));
+        assert!(!joined.contains("abc"));
+    }
+
+    #[test]
+    fn the_list_offset_keeps_the_selection_visible() {
+        assert_eq!(list_offset(0, 40, 10), 0);
+        assert_eq!(list_offset(20, 40, 10), 11);
+        assert_eq!(list_offset(39, 40, 10), 30);
+        assert_eq!(list_offset(0, 3, 10), 0);
     }
 }

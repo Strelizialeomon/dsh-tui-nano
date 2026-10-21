@@ -277,7 +277,7 @@
       "generation": "integer",
       "subscriptionId": "string",
       "sequence": "integer",
-      "kind": "enum:session.event|conversation.status|conversation.inbox|conversation.stream",
+      "kind": "enum:session.event|conversation.status|conversation.inbox|conversation.stream|jobs.event|jobs.output",
       "payload": "object"
     },
     "streamEnded": {
@@ -337,6 +337,7 @@
       "stdout": "collectedOutput",
       "stderr": "collectedOutput",
       "sandbox": "object?",
+      "policy": "object?",
       "injectedMessageId": "string?",
       "injectError": "string?"
     },
@@ -370,6 +371,7 @@
     },
     "jobsEvent": {
       "address": "address",
+      "seq": "integer",
       "type": "enum:registered|progress|stopping|settled|removed",
       "job": "jobView",
       "cause": "enum:producer|kill|teardown?",
@@ -377,6 +379,7 @@
     },
     "jobsOutput": {
       "address": "address",
+      "seq": "integer",
       "jobId": "string",
       "owner": "string?",
       "total": "integer"
@@ -810,7 +813,12 @@
           "address",
           "command"
         ],
-        "optional": []
+        "optional": [
+          "inject"
+        ]
+      },
+      "paramsSemantics": {
+        "inject": "boolean; false for `!!` (no context injection)"
       },
       "result": {
         "shape": "shellResult",
@@ -824,6 +832,7 @@
         ],
         "optional": [
           "sandbox",
+          "policy",
           "injectedMessageId",
           "injectError"
         ]
@@ -843,6 +852,7 @@
       },
       "result": {
         "required": [
+          "seq",
           "jobs"
         ],
         "optional": []
@@ -942,6 +952,7 @@
         "shape": "jobsEvent",
         "required": [
           "address",
+          "seq",
           "type",
           "job"
         ],
@@ -959,10 +970,13 @@
         "shape": "jobsOutput",
         "required": [
           "address",
+          "seq",
           "jobId",
           "total"
         ],
-        "optional": []
+        "optional": [
+          "owner"
+        ]
       }
     }
   ],
@@ -1182,6 +1196,7 @@
           "address": {
             "rootSessionId": "session-fixture"
           },
+          "seq": 1,
           "type": "settled",
           "cause": "producer",
           "awaited": false,

@@ -15,7 +15,13 @@ function service({ result, policyCall, injectCall, shell = true, policy = true }
         return shell
           ? {
               resolve(request) {
-                return { ...request, timeoutMs: 60_000, onExpiry: 'kill', stdoutMaxBytes: 65536 }
+                calls.request = request
+                return {
+                  ...request,
+                  timeoutMs: request.timeoutMs ?? 60_000,
+                  onExpiry: 'kill',
+                  stdoutMaxBytes: 65536,
+                }
               },
               async execute(spec) {
                 calls.spec = spec
@@ -83,7 +89,7 @@ test('exec uses a per-call danger-full-access policy and injects bash context', 
   assert.equal(result.injectedMessageId, injected.id)
 })
 
-test('the policy request carries the session but not a profile mutation', async () => {
+test('the policy request is exactly the per-call mode override with an explicit deadline', async () => {
   let request
   const { shell, calls } = service({
     result: success,
@@ -91,10 +97,29 @@ test('the policy request carries the session but not a profile mutation', async 
       request = value
     },
   })
-  await shell.exec({ address: { rootSessionId: ROOT }, command: 'true' })
-  assert.equal(request.mode, 'danger-full-access')
-  assert.equal(request.session.id, ROOT)
+  const result = await shell.exec({ address: { rootSessionId: ROOT }, command: 'true' })
+  assert.deepEqual(request, { mode: 'danger-full-access' })
+  assert.equal(calls.request.timeoutMs, 60_000)
   assert.equal(calls.spec.onExpiry, 'kill')
+  assert.equal(result.policy.mode, 'danger-full-access')
+})
+
+test('inject false runs the command but adds no synthetic context', async () => {
+  let injected
+  const { shell } = service({
+    result: success,
+    injectCall: (message) => {
+      injected = message
+    },
+  })
+  const result = await shell.exec({
+    address: { rootSessionId: ROOT },
+    command: '!echo hi',
+    inject: false,
+  })
+  assert.equal(injected, undefined)
+  assert.equal(result.injectedMessageId, undefined)
+  assert.equal(result.exitCode, 0)
 })
 
 test('a nonzero exit is a result, not an RPC error', async () => {

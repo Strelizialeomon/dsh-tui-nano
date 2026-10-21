@@ -42,6 +42,7 @@ pub struct JobsModel {
     buffers: HashMap<String, OutputBuffer>,
     last_notice: Option<String>,
     last_error: Option<String>,
+    last_event_seq: u64,
     max_jobs: usize,
     max_output_bytes: usize,
 }
@@ -57,6 +58,7 @@ impl JobsModel {
             buffers: HashMap::new(),
             last_notice: None,
             last_error: None,
+            last_event_seq: 0,
             max_jobs: MAX_JOBS,
             max_output_bytes: MAX_OUTPUT_BYTES,
         }
@@ -176,18 +178,39 @@ impl JobsModel {
 
     /// Apply one `nano.jobs.snapshot` result. Invalid payloads leave the
     /// current projection untouched.
-    pub fn apply_snapshot(&mut self, value: &Value) -> Result<(), String> {
+    ///
+    /// A snapshot carries the bridge's event sequence at capture time. A
+    /// snapshot captured before the last applied live event is stale and is
+    /// ignored, so an in-flight refresh cannot roll a terminal job back to
+    /// running or remove a newly registered one. The per-job merge also
+    /// refuses a terminal-to-active regression when an old bridge sends no
+    /// sequence.
+    pub fn apply_snapshot(&mut self, value: &Value) -> Result<bool, String> {
         let list = value
             .get("jobs")
             .and_then(Value::as_array)
             .ok_or_else(|| "snapshot is missing the jobs array".to_string())?;
+        let seq = value.get("seq").and_then(Value::as_u64).unwrap_or(0);
+        if seq < self.last_event_seq {
+            return Ok(false);
+        }
         let mut jobs = Vec::with_capacity(list.len());
         for item in list {
-            let job: JobView = serde_json::from_value(item.clone())
+            let mut job: JobView = serde_json::from_value(item.clone())
                 .map_err(|error| format!("invalid job projection: {error}"))?;
+            if let Some(existing) = self.job(&job.id) {
+                if job.tool_call.is_none() {
+                    job.tool_call = existing.tool_call.clone();
+                }
+                if existing.status().is_terminal() && job.is_active() {
+                    jobs.push(existing.clone());
+                    continue;
+                }
+            }
             jobs.push(job);
         }
         self.jobs = jobs;
+        self.last_event_seq = self.last_event_seq.max(seq);
         self.trim_jobs();
         self.selected = self.selected.min(self.jobs.len().saturating_sub(1));
         if let Some(detail) = self.detail.clone() {
@@ -197,22 +220,61 @@ impl JobsModel {
         }
         let visible: Vec<&String> = self.jobs.iter().map(|job| &job.id).collect();
         self.buffers.retain(|id, _| visible.contains(&id));
-        Ok(())
+        Ok(true)
     }
 
     /// Apply one `jobs.event` or `jobs.output` payload.
     ///
     /// `jobs.output` only announces an advancement; the caller schedules the
-    /// non-consuming follow. It never changes projection or cursor state.
+    /// non-consuming follow. The projection's byte total is refreshed so the
+    /// UI and the terminal drain can compare it with the read cursor.
     pub fn apply_event(&mut self, kind: &str, payload: &Value) -> bool {
         if !self.address_matches(payload) {
             return false;
         }
+        let seq = payload.get("seq").and_then(Value::as_u64).unwrap_or(0);
+        if seq > self.last_event_seq {
+            self.last_event_seq = seq;
+        }
         match kind {
             "jobs.event" => self.apply_job_event(payload),
-            "jobs.output" => false,
+            "jobs.output" => {
+                let Some(job_id) = payload.get("jobId").and_then(Value::as_str) else {
+                    return false;
+                };
+                let Some(total) = payload.get("total").and_then(Value::as_u64) else {
+                    return false;
+                };
+                self.update_output_total(job_id, total)
+            }
             _ => false,
         }
+    }
+
+    /// The bridge event sequence applied last, for tests and diagnostics.
+    pub fn last_event_seq(&self) -> u64 {
+        self.last_event_seq
+    }
+
+    /// Drop every projection and display cache because the host is gone.
+    pub fn clear(&mut self) {
+        self.jobs.clear();
+        self.selected = 0;
+        self.detail = None;
+        self.buffers.clear();
+        self.last_notice = None;
+        self.last_error = None;
+    }
+
+    fn update_output_total(&mut self, job_id: &str, total: u64) -> bool {
+        let Some(job) = self.jobs.iter_mut().find(|job| job.id == job_id) else {
+            return false;
+        };
+        if total > job.output.total {
+            job.output.total = total;
+            return true;
+        }
+        false
     }
 
     /// The job id carried by a `jobs.output` event, when it belongs here.
@@ -335,7 +397,10 @@ impl JobsModel {
             });
         if read.lossy && !buffer.lossy {
             buffer.lossy = true;
-            push_marker(buffer, "[输出缺口（已裁剪）：请求位置早于官方 ring 保留范围]");
+            push_marker(
+                buffer,
+                "[输出缺口（已裁剪）：请求位置早于官方 ring 保留范围]",
+            );
             changed = true;
         }
         for chunk in &read.chunks {
@@ -366,6 +431,10 @@ impl JobsModel {
         if buffer.text.len() > max_bytes {
             buffer.text = tail_on_char_boundary(&buffer.text, max_bytes);
             buffer.head_truncated = true;
+            changed = true;
+        }
+        let next = buffer.next;
+        if next > 0 && self.update_output_total(job_id, next) {
             changed = true;
         }
         Ok(changed)

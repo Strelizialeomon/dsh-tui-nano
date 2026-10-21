@@ -89,6 +89,157 @@ fn events_upsert_in_official_order_and_removal_drops_the_record() {
 }
 
 #[test]
+fn a_stale_snapshot_cannot_roll_back_a_terminal_job() {
+    let mut model = JobsModel::new(ROOT);
+    model.apply_event(
+        "jobs.event",
+        &json!({
+            "address": {"rootSessionId": ROOT},
+            "seq": 5,
+            "type": "settled",
+            "cause": "producer",
+            "awaited": false,
+            "job": {
+                "id": "bash-a",
+                "kind": "bash",
+                "label": "true",
+                "status": "completed",
+                "detail": "exit code: 0",
+                "startedAt": 1,
+                "finishedAt": 2,
+                "output": {"total": 10, "earliest": 0}
+            }
+        }),
+    );
+    assert_eq!(model.last_event_seq(), 5);
+    let applied = model
+        .apply_snapshot(&json!({
+            "seq": 4,
+            "jobs": [{
+                "id": "bash-a",
+                "kind": "bash",
+                "label": "true",
+                "status": "running",
+                "startedAt": 1,
+                "output": {"total": 0, "earliest": 0}
+            }]
+        }))
+        .unwrap();
+    assert!(!applied);
+    assert_eq!(model.jobs()[0].status(), JobStatus::Completed);
+}
+
+#[test]
+fn a_snapshot_never_regresses_terminal_to_active_even_without_seq() {
+    let mut model = JobsModel::new(ROOT);
+    model.apply_event(
+        "jobs.event",
+        &json!({
+            "address": {"rootSessionId": ROOT},
+            "type": "settled",
+            "job": {
+                "id": "bash-a",
+                "kind": "bash",
+                "label": "true",
+                "status": "killed",
+                "startedAt": 1,
+                "finishedAt": 2,
+                "output": {"total": 0, "earliest": 0}
+            }
+        }),
+    );
+    model
+        .apply_snapshot(&json!({
+            "jobs": [{
+                "id": "bash-a",
+                "kind": "bash",
+                "label": "true",
+                "status": "running",
+                "startedAt": 1,
+                "output": {"total": 0, "earliest": 0}
+            }]
+        }))
+        .unwrap();
+    assert_eq!(model.jobs()[0].status(), JobStatus::Killed);
+}
+
+#[test]
+fn an_output_event_advances_the_projection_total() {
+    let mut model = JobsModel::new(ROOT);
+    model.apply_event(
+        "jobs.event",
+        &json!({
+            "address": {"rootSessionId": ROOT},
+            "type": "registered",
+            "job": running("bash-a")
+        }),
+    );
+    assert_eq!(model.jobs()[0].output.total, 0);
+    model.apply_event(
+        "jobs.output",
+        &json!({
+            "address": {"rootSessionId": ROOT},
+            "seq": 2,
+            "jobId": "bash-a",
+            "total": 42
+        }),
+    );
+    assert_eq!(model.jobs()[0].output.total, 42);
+}
+
+#[test]
+fn progress_and_spill_paths_are_kept_for_the_ui() {
+    let mut model = JobsModel::new(ROOT);
+    model
+        .apply_snapshot(&json!({
+            "seq": 1,
+            "jobs": [{
+                "id": "bash-a",
+                "kind": "bash",
+                "label": "build",
+                "status": "running",
+                "progress": "3/10",
+                "startedAt": 1,
+                "output": {"total": 10, "earliest": 2, "spillPaths": ["/tmp/full.log"]}
+            }]
+        }))
+        .unwrap();
+    let job = &model.jobs()[0];
+    assert_eq!(job.progress.as_deref(), Some("3/10"));
+    assert_eq!(job.output.spill_paths, vec!["/tmp/full.log"]);
+    assert!(job.status_line().contains("3/10"));
+}
+
+#[test]
+fn the_job_list_bound_drops_the_oldest_settled_projection() {
+    let mut model = JobsModel::new(ROOT).with_bounds(2, 4096);
+    for (id, status) in [
+        ("bash-a", "completed"),
+        ("bash-b", "running"),
+        ("bash-c", "running"),
+    ] {
+        model.apply_event(
+            "jobs.event",
+            &json!({
+                "address": {"rootSessionId": ROOT},
+                "type": "registered",
+                "job": {
+                    "id": id,
+                    "kind": "bash",
+                    "label": id,
+                    "status": status,
+                    "startedAt": 1,
+                    "output": {"total": 0, "earliest": 0}
+                }
+            }),
+        );
+    }
+    assert_eq!(model.len(), 2);
+    assert_eq!(model.jobs()[0].id, "bash-b");
+    assert_eq!(model.jobs()[1].id, "bash-c");
+}
+
+#[test]
 fn another_root_session_is_never_mixed_in() {
     let mut model = JobsModel::new(ROOT);
     assert!(!model.apply_event(

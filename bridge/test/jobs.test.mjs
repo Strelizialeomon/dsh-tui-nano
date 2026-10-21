@@ -19,9 +19,10 @@ function view(id = 'bash-0123456789abcdef') {
   }
 }
 
-function setup({ registry, sessionEvents = [] } = {}) {
+function setup({ registry } = {}) {
   const published = []
   const subscriptions = []
+  const handlers = {}
   const registryValue = registry ?? {
     events: {
       subscribe(filter, listener) {
@@ -44,7 +45,8 @@ function setup({ registry, sessionEvents = [] } = {}) {
     get(name) {
       return name === 'jobs' ? registryValue : undefined
     },
-    on() {
+    on(event, handler) {
+      handlers[event] = handler
       return () => {}
     },
   }
@@ -53,31 +55,39 @@ function setup({ registry, sessionEvents = [] } = {}) {
       published.push({ kind, payload })
     },
   }
-  const session = { snapshotEvents: () => sessionEvents }
   return {
     published,
     subscriptions,
-    service: new JobsService({ ctx, hub, session, rootSessionId: ROOT }),
+    handlers,
+    service: new JobsService({ ctx, hub, session: {}, rootSessionId: ROOT }),
   }
 }
 
-test('snapshot returns the official list with the durable tool-call link', () => {
-  const { service } = setup({
-    sessionEvents: [
-      {
-        type: 'job/registered',
-        data: {
-          jobId: 'bash-0123456789abcdef',
-          owner: ROOT,
-          toolCall: { callId: 'c-1', rootCallId: 'r-1' },
-        },
+test('a live registration links its durable tool call into the snapshot', () => {
+  const { service, handlers } = setup()
+  handlers['session/event'](
+    { id: ROOT },
+    {
+      type: 'job/registered',
+      data: {
+        jobId: 'bash-0123456789abcdef',
+        owner: ROOT,
+        toolCall: { callId: 'c-1', rootCallId: 'r-1' },
       },
-    ],
-  })
+    },
+  )
   const snapshot = service.snapshot({ address: { rootSessionId: ROOT } })
+  assert.equal(snapshot.seq, 0)
   assert.equal(snapshot.jobs.length, 1)
   assert.deepEqual(snapshot.jobs[0].toolCall, { callId: 'c-1', rootCallId: 'r-1' })
   assert.equal(snapshot.jobs[0].status, 'running')
+})
+
+test('the snapshot sequence advances with live events', () => {
+  const { service, subscriptions } = setup()
+  assert.equal(service.snapshot({ address: { rootSessionId: ROOT } }).seq, 0)
+  subscriptions[0].listener({ type: 'registered', job: view() })
+  assert.equal(service.snapshot({ address: { rootSessionId: ROOT } }).seq, 1)
 })
 
 test('follow is a non-consuming readAt at the requested offset', () => {
@@ -146,10 +156,10 @@ test('unknown and foreign jobs are reported as not-found, not already-finished',
       attachController: () => () => {},
       list: () => [],
       readAt() {
-        throw new Error('unknown job')
+        throw new Error('unknown job bash-a')
       },
       kill() {
-        throw new Error('foreign job')
+        throw new Error('job bash-a belongs to another session')
       },
     },
   })
@@ -160,6 +170,25 @@ test('unknown and foreign jobs are reported as not-found, not already-finished',
   assert.throws(
     () => service.kill({ address: { rootSessionId: ROOT }, jobId: 'bash-a' }),
     (error) => error.rpcName === 'nano/jobs/not-found',
+  )
+})
+
+test('a producer cancel throw stays an internal error, not not-found', () => {
+  const { service } = setup({
+    registry: {
+      events: { subscribe: () => () => {} },
+      list: () => [],
+      readAt: () => ({ chunks: [], next: 0, lossy: false }),
+      kill() {
+        throw new Error('producer cancel failed')
+      },
+    },
+  })
+  assert.throws(
+    () => service.kill({ address: { rootSessionId: ROOT }, jobId: 'bash-a' }),
+    (error) =>
+      error.rpcName === 'jsonrpc/internal-error' &&
+      /producer cancel failed/.test(error.message),
   )
 })
 
@@ -206,10 +235,12 @@ test('a foreign address is refused', () => {
   )
 })
 
-test('a negative offset is an invalid parameter, not a read', () => {
+test('an invalid offset is an invalid parameter, not a not-found read', () => {
   const { service } = setup()
-  assert.throws(
-    () => service.follow({ address: { rootSessionId: ROOT }, jobId: 'bash-a', from: -1 }),
-    (error) => error.rpcName === 'jsonrpc/invalid-params',
-  )
+  for (const from of [-1, Number.MAX_SAFE_INTEGER + 1, 1.5]) {
+    assert.throws(
+      () => service.follow({ address: { rootSessionId: ROOT }, jobId: 'bash-a', from }),
+      (error) => error.rpcName === 'jsonrpc/invalid-params',
+    )
+  }
 })

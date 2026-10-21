@@ -140,5 +140,5 @@ bash !sleep 3 · 退出码 0
 
 ===== 已发送 Ctrl+C，退出后的 pane =====
 nano: installing the dsh-tui-nano profile (first launch or --install)
-nano: profile ready at /var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s08-evidence.LKzmqz/dsh/profiles/dsh-tui-nano (installed: true)
+nano: profile ready at /var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s08-evidence.Tku6Rh/dsh/profiles/dsh-tui-nano (installed: true)
 EXIT:0

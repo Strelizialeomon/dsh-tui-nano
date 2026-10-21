@@ -16,6 +16,11 @@ import { RpcError } from '../runtime/errors.mjs'
 // bounded, with an explicit truncation marker and spill path.
 const INJECTION_MAX_JSON_BYTES = 200_000
 
+// Manual commands share the profile executor deadline. Setting it on the
+// request keeps the Rust wait bound (75s) independent of another executor's
+// default (bash-local defaults to 120s).
+const SHELL_TIMEOUT_MS = 60_000
+
 /**
  * One manual-shell service per host generation.
  */
@@ -76,7 +81,8 @@ export class ShellService {
     try {
       // Per call only. The profile default and the Agent's sandbox stay as they
       // are; this command is the user acting directly, not an Agent escalation.
-      sandboxPolicy = policy.resolve({ session: this.session, mode: 'danger-full-access' })
+      // This is the exact override the spec names.
+      sandboxPolicy = policy.resolve({ mode: 'danger-full-access' })
     } catch (error) {
       throw new RpcError('nano/shell/exec-failed', `could not resolve the user shell policy: ${describe(error)}`)
     }
@@ -84,7 +90,12 @@ export class ShellService {
     let result
     try {
       const workdir = this.session.header?.cwd ?? process.cwd()
-      const spec = shell.resolve({ command, workdir, sandboxPolicy })
+      const spec = shell.resolve({
+        command,
+        workdir,
+        timeoutMs: SHELL_TIMEOUT_MS,
+        sandboxPolicy,
+      })
       const execution = await shell.execute(spec)
       result = await execution.result()
     } catch (error) {
@@ -98,6 +109,9 @@ export class ShellService {
       aborted: result.aborted === true,
       stdout: collected(result.stdout),
       stderr: collected(result.stderr),
+      // The resolved request policy, for display and tests. The executor's own
+      // sandbox facts (when present) remain authoritative for enforcement.
+      policy: { mode: sandboxPolicy.mode },
     }
     if (result.sandbox !== undefined) {
       payload.sandbox = {
@@ -108,22 +122,25 @@ export class ShellService {
       }
     }
 
-    // Injection is best-effort: the command already ran, so a failure here must
-    // not turn a real result into an infrastructure failure.
-    try {
-      const messageId = randomUUID()
-      const message = Object.freeze({
-        id: messageId,
-        role: 'user',
-        content: Object.freeze([
-          Object.freeze({ type: 'text', text: boundedSyntheticText(command, payload) }),
-        ]),
-        source: Object.freeze({ kind: 'bash-mode' }),
-      })
-      this.agent.inject(message)
-      payload.injectedMessageId = messageId
-    } catch (error) {
-      payload.injectError = describe(error)
+    // `!!` is ordinary shell text with no context-injection path. Everything
+    // else is injected best-effort: the command already ran, so a failure here
+    // must not turn a real result into an infrastructure failure.
+    if (params.inject !== false) {
+      try {
+        const messageId = randomUUID()
+        const message = Object.freeze({
+          id: messageId,
+          role: 'user',
+          content: Object.freeze([
+            Object.freeze({ type: 'text', text: boundedSyntheticText(command, payload) }),
+          ]),
+          source: Object.freeze({ kind: 'bash-mode' }),
+        })
+        this.agent.inject(message)
+        payload.injectedMessageId = messageId
+      } catch (error) {
+        payload.injectError = describe(error)
+      }
     }
     return payload
   }

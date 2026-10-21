@@ -169,6 +169,12 @@ pub struct App {
     pub jobs_scroll_back: usize,
     /// Jobs whose follow request is in flight.
     pub following: std::collections::HashSet<String>,
+    /// Jobs that produced output while a follow was in flight.
+    pub follow_dirty: std::collections::HashSet<String>,
+    /// A jobs snapshot request is in flight.
+    pub jobs_snapshot_pending: bool,
+    /// Line count of the last rendered job detail, for scroll bounds.
+    pub jobs_detail_lines: usize,
     /// Local `!` records shown until the official synthetic message is durable.
     pub bash_records: Vec<BashRecord>,
     /// Local bash record id sequence.
@@ -225,6 +231,9 @@ impl App {
             jobs_open: false,
             jobs_scroll_back: 0,
             following: std::collections::HashSet::new(),
+            follow_dirty: std::collections::HashSet::new(),
+            jobs_snapshot_pending: false,
+            jobs_detail_lines: 0,
             bash_records: Vec::new(),
             bash_counter: 0,
             shell_notice_acked: false,
@@ -345,6 +354,11 @@ impl App {
             return true;
         }
         if matches!(key.code, KeyCode::Enter) {
+            // A held Enter must not send or satisfy the first-use gate by
+            // auto-repeat; one physical press is one action.
+            if key.kind == KeyEventKind::Repeat {
+                return true;
+            }
             if key.modifiers.contains(KeyModifiers::SHIFT) {
                 self.drafts.current_mut().handle(&InputEvent::Newline);
                 return true;
@@ -392,7 +406,9 @@ impl App {
 
     /// Insert a bracketed-paste payload exactly as received.
     pub fn handle_paste(&mut self, text: String) -> bool {
-        if !self.scene.focus().input_focused() {
+        // The task panel owns the keyboard; it must own paste too, or a paste
+        // would silently edit the hidden draft.
+        if self.jobs_open || !self.scene.focus().input_focused() {
             return false;
         }
         self.clear_transient_status();
@@ -412,6 +428,7 @@ impl App {
                 self.hello = Some(hello);
                 self.notice = Some("已连接官方会话".to_string());
                 self.refresh_snapshot();
+                self.refresh_jobs_snapshot();
                 true
             }
             LinkEvent::Host(event) => self.handle_host_event(event),
@@ -433,6 +450,7 @@ impl App {
                     format!("{message}；宿主诊断：{}", tail.join(" | "))
                 });
                 self.model.mark_disconnected();
+                self.handle_host_loss();
                 true
             }
         }
@@ -448,10 +466,18 @@ impl App {
                 let changed = match params.kind.as_str() {
                     "jobs.event" => {
                         let previous_notice = self.jobs.last_notice().map(str::to_string);
+                        let previous_error = self.jobs.last_error().map(str::to_string);
                         let changed = self.jobs.apply_event(&params.kind, &params.payload);
                         if self.jobs.last_notice().map(str::to_string) != previous_notice {
                             self.notice = self.jobs.last_notice().map(str::to_string);
                             self.jobs.clear_diagnostics();
+                        }
+                        if self.jobs.last_error().map(str::to_string) != previous_error {
+                            self.error = self.jobs.last_error().map(str::to_string);
+                            self.jobs.clear_diagnostics();
+                        }
+                        if !self.jobs.detail_open() {
+                            self.jobs_scroll_back = 0;
                         }
                         if params.payload.get("type").and_then(Value::as_str) == Some("settled") {
                             if let Some(job_id) = self.jobs.detail_id().map(str::to_string) {
@@ -468,8 +494,9 @@ impl App {
                         changed
                     }
                     "jobs.output" => {
+                        let changed = self.jobs.apply_event(&params.kind, &params.payload);
                         self.handle_jobs_output(&params.payload);
-                        false
+                        changed
                     }
                     _ => self.model.apply_event(&params.kind, &params.payload),
                 };
@@ -520,7 +547,7 @@ impl App {
                 self.stop_pending = false;
                 self.resubscribe_at = None;
                 self.resubscribing = false;
-                self.following.clear();
+                self.handle_host_loss();
                 let root = &self.model.address().root_session_id;
                 self.error = Some(if lost {
                     format!("宿主进程已退出（会话 {root}）；重启时用 --resume {root}")
@@ -534,12 +561,14 @@ impl App {
                 self.ready = false;
                 self.connection = Connection::Failed(message.clone());
                 self.error = Some(format!("协议错误：{message}"));
+                self.handle_host_loss();
                 true
             }
             HostEvent::StartupError(params) => {
                 self.ready = false;
                 self.connection = Connection::Failed(params.message.clone());
                 self.error = Some(params.message);
+                self.handle_host_loss();
                 true
             }
             HostEvent::Hello(_) => false,
@@ -682,6 +711,9 @@ impl App {
                     Ok(_) => {
                         self.notice = Some("订阅已重建；正在对齐官方 baseline".to_string());
                         self.refresh_snapshot();
+                        // Jobs events are live-only, so re-read the official
+                        // baseline after a gap instead of trusting the old list.
+                        self.refresh_jobs_snapshot();
                     }
                     Err(error) => {
                         let root = self.model.address().root_session_id.clone();
@@ -774,67 +806,107 @@ impl App {
                         ));
                     }
                 }
+                self.trim_bash_records();
             }
-            Pending::JobsSnapshot => match result {
-                Ok(value) => {
-                    if let Err(message) = self.jobs.apply_snapshot(&value) {
-                        self.error = Some(format!("任务列表无效：{message}"));
+            Pending::JobsSnapshot => {
+                self.jobs_snapshot_pending = false;
+                if !self.ready {
+                    return;
+                }
+                match result {
+                    Ok(value) => match self.jobs.apply_snapshot(&value) {
+                        Ok(applied) => {
+                            if applied {
+                                if let Some(job_id) = self.jobs.detail_id().map(str::to_string) {
+                                    self.follow_job(&job_id);
+                                }
+                            }
+                        }
+                        Err(message) => {
+                            self.error = Some(format!("任务列表无效：{message}"));
+                        }
+                    },
+                    Err(error) => {
+                        if matches!(error.kind, RequestErrorKind::Rpc | RequestErrorKind::Local) {
+                            self.error = Some(format!("读取任务列表失败：{}", error.message));
+                        }
                     }
                 }
-                Err(error) => {
-                    self.error = Some(format!("读取任务列表失败：{}", error.message));
-                }
-            },
+            }
             Pending::JobsFollow { job_id } => {
                 self.following.remove(&job_id);
+                let was_dirty = self.follow_dirty.remove(&job_id);
+                if !self.ready {
+                    return;
+                }
                 match result {
                     Ok(value) => {
                         if let Err(message) = self.jobs.apply_follow(&job_id, &value) {
                             self.jobs.record_error(message.clone());
                             self.error = Some(format!("任务输出无效：{message}"));
-                        } else if let Some(job) = self.jobs.job(&job_id) {
-                            // A settlement may land while a read is in flight.
-                            // If the final ring is longer than what this read
-                            // covered, drain it once.
-                            if job.status().is_terminal()
-                                && self.jobs.next_offset(&job_id) < job.output.total
-                            {
+                        } else {
+                            // Output may have arrived while this read was in
+                            // flight; drain once more until the cursor reaches
+                            // the projection's total. Running jobs are included,
+                            // not just settlements.
+                            let behind = self.jobs.job(&job_id).is_some_and(|job| {
+                                self.jobs.next_offset(&job_id) < job.output.total
+                            });
+                            if behind || was_dirty {
                                 self.follow_job(&job_id);
                             }
                         }
                     }
                     Err(error) => {
                         self.jobs.record_error(error.message.clone());
-                        if matches!(error.kind, RequestErrorKind::Rpc | RequestErrorKind::Local) {
+                        if error.code == Some(1020) {
+                            self.error =
+                                Some(format!("任务不存在或已被移除（job/not-found）：{job_id}"));
+                        } else if error.kind == RequestErrorKind::Unknown {
+                            self.error = Some(format!("任务输出读取结果未知：{}", error.message));
+                        } else if matches!(
+                            error.kind,
+                            RequestErrorKind::Rpc | RequestErrorKind::Local
+                        ) {
                             self.error = Some(format!("读取任务输出失败：{}", error.message));
                         }
                     }
                 }
             }
-            Pending::JobsKill { job_id } => match result {
-                Ok(value) => {
-                    let outcome = value
-                        .get("outcome")
-                        .and_then(Value::as_str)
-                        .unwrap_or("requested");
-                    let notice = if outcome == "already-finished" {
-                        "任务已经结束".to_string()
-                    } else {
-                        "已请求停止；等待官方终态".to_string()
-                    };
-                    self.notice = Some(notice);
-                    self.refresh_jobs_snapshot();
+            Pending::JobsKill { job_id } => {
+                if !self.ready {
+                    return;
                 }
-                Err(error) => {
-                    if error.message.contains("not-found") {
-                        self.error =
-                            Some(format!("任务不存在或已被移除（job/not-found）：{job_id}"));
-                    } else {
-                        self.error = Some(format!("停止失败：{}", error.message));
+                match result {
+                    Ok(value) => {
+                        let outcome = value
+                            .get("outcome")
+                            .and_then(Value::as_str)
+                            .unwrap_or("requested");
+                        let notice = if outcome == "already-finished" {
+                            "任务已经结束".to_string()
+                        } else {
+                            "已请求停止；等待官方终态".to_string()
+                        };
+                        self.notice = Some(notice);
+                        self.refresh_jobs_snapshot();
                     }
-                    self.refresh_jobs_snapshot();
+                    Err(error) => {
+                        if error.code == Some(1020) {
+                            self.error =
+                                Some(format!("任务不存在或已被移除（job/not-found）：{job_id}"));
+                        } else if error.kind == RequestErrorKind::Unknown {
+                            self.error = Some(format!(
+                                "停止请求结果未知（可能已被接受）；请刷新任务列表：{}",
+                                error.message
+                            ));
+                        } else {
+                            self.error = Some(format!("停止失败：{}", error.message));
+                        }
+                        self.refresh_jobs_snapshot();
+                    }
                 }
-            },
+            }
         }
     }
 
@@ -845,6 +917,23 @@ impl App {
             self.error = None;
             self.notice = None;
             self.model.clear_notice();
+            self.jobs.clear_diagnostics();
+        }
+    }
+
+    /// The host is gone: no job it owned can still be running. Drop the last
+    /// projection instead of showing it as live across a restart.
+    fn handle_host_loss(&mut self) {
+        self.jobs.clear();
+        self.jobs_snapshot_pending = false;
+        self.following.clear();
+        self.follow_dirty.clear();
+        self.jobs_scroll_back = 0;
+        self.jobs_detail_lines = 0;
+        for record in &mut self.bash_records {
+            if matches!(record.state, nano_jobs::BashState::Running) {
+                record.unknown("宿主已断开，命令可能已执行");
+            }
         }
     }
 
@@ -910,26 +999,28 @@ impl App {
             self.shell_notice_acked = true;
         }
         self.shell_confirm = None;
+        // The local feed is bounded. Refuse rather than push a record we would
+        // immediately have no room to keep; finished records free a slot.
+        if self.bash_records.len() >= 20
+            && !self
+                .bash_records
+                .iter()
+                .any(|record| !matches!(record.state, nano_jobs::BashState::Running))
+        {
+            self.error = Some("同时运行的人工命令已达 20 条；等一条结束再试".to_string());
+            return;
+        }
         self.drafts.current_mut().take();
         self.bash_counter = self.bash_counter.wrapping_add(1);
         let record_id = self.bash_counter;
         self.bash_records
             .push(BashRecord::new(record_id, command.clone()));
-        while self.bash_records.len() > 20 {
-            // Never drop a record whose command is still running; its result
-            // would have nowhere to land.
-            let Some(index) = self
-                .bash_records
-                .iter()
-                .position(|record| !matches!(record.state, nano_jobs::BashState::Running))
-            else {
-                break;
-            };
-            self.bash_records.remove(index);
-        }
+        self.trim_bash_records();
         let params = json!({
             "address": self.model.address().wire_value(),
             "command": command,
+            // `!!` is ordinary shell text, not a context-injection path.
+            "inject": !raw.starts_with("!!"),
         });
         let Some(link) = &self.link else {
             if let Some(record) = self.bash_records.iter_mut().find(|r| r.id == record_id) {
@@ -967,9 +1058,14 @@ impl App {
         }
     }
 
+    /// Whether the connected host reports a usable official job registry.
+    fn jobs_supported(&self) -> bool {
+        self.hello.as_ref().is_some_and(crate::link::jobs_supported)
+    }
+
     /// Read the official job list without changing any output cursor.
     fn refresh_jobs_snapshot(&mut self) {
-        if !self.ready {
+        if !self.ready || self.jobs_snapshot_pending || !self.jobs_supported() {
             return;
         }
         let Some(link) = &self.link else {
@@ -978,6 +1074,7 @@ impl App {
         let params = json!({ "address": self.model.address().wire_value() });
         match link.request("nano.jobs.snapshot", params) {
             Ok(id) => {
+                self.jobs_snapshot_pending = true;
                 self.pending.insert(id, Pending::JobsSnapshot);
             }
             Err(message) => {
@@ -1001,7 +1098,8 @@ impl App {
                     true
                 }
                 KeyCode::Up => {
-                    self.jobs_scroll_back = self.jobs_scroll_back.saturating_add(1);
+                    let limit = self.jobs_detail_lines.saturating_sub(1);
+                    self.jobs_scroll_back = self.jobs_scroll_back.saturating_add(1).min(limit);
                     true
                 }
                 KeyCode::Down => {
@@ -1009,7 +1107,8 @@ impl App {
                     true
                 }
                 KeyCode::PageUp => {
-                    self.jobs_scroll_back = self.jobs_scroll_back.saturating_add(10);
+                    let limit = self.jobs_detail_lines.saturating_sub(1);
+                    self.jobs_scroll_back = self.jobs_scroll_back.saturating_add(10).min(limit);
                     true
                 }
                 KeyCode::PageDown => {
@@ -1099,7 +1198,14 @@ impl App {
         let Some(job_id) = self.jobs.output_job_id(payload) else {
             return;
         };
-        if self.jobs.detail_id() == Some(job_id.as_str()) {
+        if self.jobs.detail_id() != Some(job_id.as_str()) {
+            return;
+        }
+        if self.following.contains(&job_id) {
+            // Remember the advancement; the in-flight read may have started
+            // before these bytes. The response handler drains it.
+            self.follow_dirty.insert(job_id);
+        } else {
             self.follow_job(&job_id);
         }
     }
@@ -1142,6 +1248,20 @@ impl App {
             Err(message) => {
                 self.error = Some(format!("停止请求未能发出：{message}"));
             }
+        }
+    }
+
+    /// Keep the local bash feed bounded without dropping a running command.
+    fn trim_bash_records(&mut self) {
+        while self.bash_records.len() > 20 {
+            let Some(index) = self
+                .bash_records
+                .iter()
+                .position(|record| !matches!(record.state, nano_jobs::BashState::Running))
+            else {
+                break;
+            };
+            self.bash_records.remove(index);
         }
     }
 
@@ -1509,21 +1629,17 @@ impl App {
 
     /// Status-bar text.
     pub fn status_hint(&self) -> String {
-        if self.jobs_open {
-            if self.jobs.detail_open() {
-                return "任务详情（非消费跟随）· ↑↓/PageUp/PageDown 滚动 · k 停止 · r 重读 · Esc 返回"
-                    .to_string();
-            }
-            return "任务面板 · ↑↓ 选择 · Enter 详情 · k 停止 · r 刷新 · Esc 关闭".to_string();
-        }
-        if self.shell_confirm.is_some() {
-            return format!("{SHELL_NOTICE} Enter 执行，Esc 取消");
-        }
         if self.stop_pending {
             return "停止中：等待官方 idle 事实（草稿保留）".to_string();
         }
+        // Errors and notices stay visible even while the task panel owns the
+        // keyboard; a failed stop or a malformed projection must not disappear
+        // behind a fixed panel hint.
         if let Some(error) = &self.error {
             return error.clone();
+        }
+        if self.shell_confirm.is_some() {
+            return format!("{SHELL_NOTICE} Enter 执行，Esc 取消");
         }
         if let Some(notice) = &self.notice {
             return notice.clone();
@@ -1533,6 +1649,16 @@ impl App {
         }
         if let Some(notice) = self.model.last_notice() {
             return notice.to_string();
+        }
+        if self.jobs_open {
+            if let Some(error) = self.jobs.last_error() {
+                return error.to_string();
+            }
+            if self.jobs.detail_open() {
+                return "任务详情（非消费跟随）· ↑↓/PageUp/PageDown 滚动 · k 停止 · r 重读 · Esc 返回"
+                    .to_string();
+            }
+            return "任务面板 · ↑↓ 选择 · Enter 详情 · k 停止 · r 刷新 · Esc 关闭".to_string();
         }
         if !self.scene.focus().input_focused() {
             return "队列焦点：↑↓ 选择 · Enter 编辑 · d 删除 · s 插话 · x 清空并停止 · Tab 返回"
@@ -1581,14 +1707,17 @@ impl App {
         let Some(link) = &self.link else {
             return;
         };
-        let (params, replay_truncated) = self.model.resubscribe_params(&[
+        let mut kinds = vec![
             "session.event",
             "conversation.status",
             "conversation.inbox",
             "conversation.stream",
-            "jobs.event",
-            "jobs.output",
-        ]);
+        ];
+        if self.jobs_supported() {
+            kinds.push("jobs.event");
+            kinds.push("jobs.output");
+        }
+        let (params, replay_truncated) = self.model.resubscribe_params(&kinds);
         if replay_truncated {
             self.notice = Some("重连回放窗口超过上限；从较新的 seq 开始重建".to_string());
         }
@@ -1856,6 +1985,7 @@ mod tests {
             5,
             Err(RequestError {
                 kind: RequestErrorKind::Local,
+                code: None,
                 message: "not sent".into(),
             }),
         );
@@ -1932,6 +2062,163 @@ mod tests {
         assert_eq!(app.jobs.len(), 1);
         assert_eq!(app.jobs.active_count(), 1);
         assert!(app.model.items().is_empty());
+    }
+
+    #[test]
+    fn panel_errors_stay_visible_in_the_status_line() {
+        let mut app = app();
+        app.jobs_open = true;
+        app.error = Some("停止失败：示例".to_string());
+        assert_eq!(app.status_hint(), "停止失败：示例");
+    }
+
+    #[test]
+    fn paste_is_ignored_while_the_task_panel_owns_the_keyboard() {
+        let mut app = app();
+        app.jobs_open = true;
+        assert!(!app.handle_paste("hidden".to_string()));
+        assert!(app.drafts.current().is_empty());
+    }
+
+    #[test]
+    fn a_repeated_enter_does_not_satisfy_the_manual_command_gate() {
+        let mut app = app();
+        app.ready = true;
+        app.drafts.current_mut().set_text("!ls");
+        app.handle_key(KeyEvent::new_with_kind(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+            KeyEventKind::Repeat,
+        ));
+        assert!(app.shell_confirm.is_none());
+        assert_eq!(app.drafts.current().text(), "!ls");
+    }
+
+    #[test]
+    fn host_loss_drops_job_projections_and_marks_running_bash_unknown() {
+        let mut app = app();
+        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::Event(
+            nano_runtime::protocol::EventParams {
+                runtime_id: "rt".into(),
+                generation: 1,
+                subscription_id: "sub-1".into(),
+                sequence: 3,
+                kind: "jobs.event".into(),
+                payload: json!({
+                    "address": {"rootSessionId": "root"},
+                    "seq": 1,
+                    "type": "registered",
+                    "job": {
+                        "id": "bash-0123456789abcdef",
+                        "kind": "bash",
+                        "label": "sleep 30",
+                        "status": "running",
+                        "startedAt": 1,
+                        "output": {"total": 0, "earliest": 0}
+                    }
+                }),
+            },
+        )));
+        app.bash_counter = 1;
+        app.bash_records
+            .push(nano_jobs::BashRecord::new(1, "sleep"));
+        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::TransportClosed {
+            lost: true,
+        }));
+        assert!(app.jobs.is_empty());
+        assert!(matches!(
+            app.bash_records[0].state,
+            nano_jobs::BashState::Unknown(_)
+        ));
+    }
+
+    #[test]
+    fn a_not_found_stop_is_reported_by_error_code() {
+        let mut app = app();
+        app.ready = true;
+        app.pending.insert(
+            1,
+            Pending::JobsKill {
+                job_id: "bash-a".into(),
+            },
+        );
+        app.handle_request_done(
+            1,
+            Err(RequestError {
+                kind: RequestErrorKind::Rpc,
+                code: Some(1020),
+                message: "job not visible".into(),
+            }),
+        );
+        assert!(app.error.as_deref().unwrap().contains("job/not-found"));
+    }
+
+    #[test]
+    fn an_unknown_stop_result_is_not_reported_as_failure() {
+        let mut app = app();
+        app.ready = true;
+        app.pending.insert(
+            1,
+            Pending::JobsKill {
+                job_id: "bash-a".into(),
+            },
+        );
+        app.handle_request_done(
+            1,
+            Err(RequestError {
+                kind: RequestErrorKind::Unknown,
+                code: None,
+                message: "transport closed".into(),
+            }),
+        );
+        assert!(app.error.as_deref().unwrap().contains("结果未知"));
+    }
+
+    #[test]
+    fn an_old_jobs_snapshot_cannot_overwrite_a_newer_terminal_event() {
+        let mut app = app();
+        app.ready = true;
+        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::Event(
+            nano_runtime::protocol::EventParams {
+                runtime_id: "rt".into(),
+                generation: 1,
+                subscription_id: "sub-1".into(),
+                sequence: 3,
+                kind: "jobs.event".into(),
+                payload: json!({
+                    "address": {"rootSessionId": "root"},
+                    "seq": 5,
+                    "type": "settled",
+                    "cause": "producer",
+                    "awaited": false,
+                    "job": {
+                        "id": "bash-a",
+                        "kind": "bash",
+                        "label": "true",
+                        "status": "completed",
+                        "startedAt": 1,
+                        "finishedAt": 2,
+                        "output": {"total": 0, "earliest": 0}
+                    }
+                }),
+            },
+        )));
+        app.pending.insert(1, Pending::JobsSnapshot);
+        app.handle_request_done(
+            1,
+            Ok(json!({
+                "seq": 4,
+                "jobs": [{
+                    "id": "bash-a",
+                    "kind": "bash",
+                    "label": "true",
+                    "status": "running",
+                    "startedAt": 1,
+                    "output": {"total": 0, "earliest": 0}
+                }]
+            })),
+        );
+        assert_eq!(app.jobs.jobs()[0].status(), nano_jobs::JobStatus::Completed);
     }
 
     #[test]
@@ -2191,6 +2478,7 @@ mod tests {
             9,
             Err(RequestError {
                 kind: RequestErrorKind::Unknown,
+                code: None,
                 message: "transport closed".into(),
             }),
         );
@@ -2216,6 +2504,7 @@ mod tests {
             9,
             Err(RequestError {
                 kind: RequestErrorKind::Local,
+                code: None,
                 message: "not sent".into(),
             }),
         );

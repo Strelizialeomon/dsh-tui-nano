@@ -68,18 +68,17 @@ fn every_event_kind_is_covered_by_the_contract_shape() {
         .iter()
         .map(|entry| entry["kind"].as_str().unwrap())
         .collect();
-    assert!(kinds.contains(&"session.event"));
-    let conversation: Vec<&str> = kinds
-        .iter()
-        .copied()
-        .filter(|kind| kind.starts_with("conversation."))
-        .collect();
+    // Exact set, not a subset: a future unknown kind must fail this contract
+    // test instead of silently widening what the conversation model accepts.
     assert_eq!(
-        conversation,
+        kinds,
         vec![
+            "session.event",
             "conversation.status",
             "conversation.inbox",
-            "conversation.stream"
+            "conversation.stream",
+            "jobs.event",
+            "jobs.output"
         ]
     );
 }
