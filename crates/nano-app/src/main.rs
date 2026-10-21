@@ -3,6 +3,7 @@
 mod app;
 mod cli;
 mod link;
+mod restart;
 mod ui;
 
 use std::io::{self, Stdout};

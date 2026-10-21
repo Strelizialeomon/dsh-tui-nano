@@ -1,8 +1,8 @@
-# The Nano bridge bundle patch. It inserts the bridge app and the model-facing
-# question tool, and disables HMR so a runtime profile cannot recompose itself
-# underneath a live Rust window. The launcher-supplied --patch overlay sets the
-# per-session storage roots and the nano-bridge config; this file only owns the
-# stable row set.
+# The Nano bridge bundle patch. It inserts the bridge app, the model-facing
+# question tool, and the official @file discovery provider, and disables HMR so
+# a runtime profile cannot recompose itself underneath a live Rust window. The
+# launcher-supplied --patch overlay sets the per-session storage roots and the
+# nano-bridge config; this file only owns the stable row set.
 
 - insert:
     - id: nano-bridge
@@ -20,6 +20,14 @@
     # blocking schema; timed mode is an S03 decision, not an S01 default.
     - id: tool-ask-user
       name: '@deepseek-ai/dsh-tool-ask-user'
+
+    # S06 `@file` completion. The minimal dsh-base composition does not mount
+    # the file-reference provider, while the web bundle does. Discovery is
+    # path-only; selecting a candidate never reads the file.
+    - id: file-reference-local
+      name: '@deepseek-ai/dsh-file-reference-local'
+      config:
+        maxResults: 20
 
 - id: hmr
   disabled: true

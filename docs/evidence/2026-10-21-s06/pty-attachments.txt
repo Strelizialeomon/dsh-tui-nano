@@ -1,0 +1,226 @@
+{
+  "ok": true,
+  "checks": [
+    [
+      "connected",
+      true
+    ],
+    [
+      "completion visible",
+      true
+    ],
+    [
+      "candidate path",
+      true
+    ],
+    [
+      "mention inserted",
+      true
+    ],
+    [
+      "completion closed",
+      true
+    ],
+    [
+      "picker visible",
+      true
+    ],
+    [
+      "image card ready",
+      true
+    ],
+    [
+      "single-card reorder survives",
+      true
+    ],
+    [
+      "file card ready",
+      true
+    ],
+    [
+      "reorder survives",
+      true
+    ],
+    [
+      "cards reordered",
+      true
+    ],
+    [
+      "submission accepted",
+      true
+    ],
+    [
+      "turn failure surfaced",
+      true
+    ],
+    [
+      "clean exit",
+      true
+    ]
+  ],
+  "exit": 0
+}
+--- SCREEN completion ---
+ nano 已连接 · 空闲 · seq 3 · 队列 0 · ctx 未知 · 参考
+输入消息后按 Enter 发送。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 文件补全（1 项）· ↑↓ 选择 · Enter/Tab 插入 · Esc 关闭 ─────────────────────────────────────────────────────────────────
+▶ src/main.rs
+┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除附件 · Ctrl+J 换行 · Ctrl+┐
+│@mai                                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+work · 权限 workspace-write · Enter 发送 · Alt+Enter 插话 · @ 引用文件 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除…
+--- SCREEN attachment ---
+ nano 已连接 · 空闲 · seq 3 · 队列 0 · ctx 未知 · 参考
+输入消息后按 Enter 发送。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除附件 · Ctrl+J 换行 · Ctrl+┐
+│  [图片] pixel.png · 70 B · 1×1 · 已就绪                                                                              │
+│@src/main.rs                                                                                                          │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+work · 权限 workspace-write · 附件「pixel.png」已就绪
+--- SCREEN reordered ---
+ nano 已连接 · 空闲 · seq 3 · 队列 0 · ctx 未知 · 参考
+输入消息后按 Enter 发送。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除附件 · Ctrl+J 换行 · Ctrl+┐
+│  [文件] notes.txt · 11 B · 已就绪                                                                                    │
+│  [图片] pixel.png · 70 B · 1×1 · 已就绪                                                                              │
+│@src/main.rs                                                                                                          │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+work · 权限 workspace-write · 已调整附件顺序（只影响本次列表）
+--- SCREEN submitted ---
+ nano 已连接 · 空闲 · seq 18 · 队列 0 · ctx 未知 · 参考
+# 全局规矩（跨 harness 唯一真相源）
+
+**Claude Code / Codex / kimi 读的是本文件，规矩正文一字不差：**
+
+| harness | 怎么读到 |
+|---|---|
+| Claude Code | `~/.claude/CLAUDE.md` 用 `@` 把它导入 |
+| Codex | `~/.codex/AGENTS.md` 是指向本文件的符号链接，启动时自动读取 |
+| kimi | 原生读 `~/.agents/AGENTS.md` |
+
+**要改规矩，只改这一份**——各工具下次加载全局指令时读取同一份正文；已有会话需重新启动以确保加载新内容。
+别在任何
+上下文
+Current runtime context. This snapshot supersedes earlier runtime-context snapshots.
+
+Current working directory: "/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-pty-s06-pea7aj0b/work".
+
+Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files unda
+
+tform temporary areas may also be writable.
+
+Approval policy: ask. Operations that require approval may ask through the configured answerers; without an availa
+上下文
+<system-reminder>
+A skill is a reusable set of task-specific instructions. The following skills are available in this session:
+
+<available_skills>
+- `arkcli-agent`: arkcli agent：管理 ARK Managed Agents，包括 Agent / Skill / Env / Session / File / Memory Store / Vaul
+t / MCP OAuth。控制面优先走 ForTop/OpenTOP，Session 运行时和 Files 走数据面直联。
+- `arkcli-api-explorer`: Inspect or invoke locally registered ArkCLI actions when product commands cannot cover a task.
+Use for registry errors or exact raw payloads. Not for public API catalogs or OpenAPI schemas.
+- `arkcli-auth`: arkcli 认证管理：交互式登录、Volc SSO 登录、查看状态、退出登录、生成 A
+回合 （失败）
+llm-deepseek: no API key for provider route "deepseek-official"; store DEEPSEEK_API_KEY through the credentials service
+(the web Models page writes it), or export DEEPSEEK_API_KEY in the launching environment
+┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除附件 · Ctrl+J 换行 · Ctrl+┐
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+work · 权限 workspace-write · 已接收

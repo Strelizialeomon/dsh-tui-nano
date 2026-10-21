@@ -1,0 +1,23 @@
+✔ attachment staging, ordered admission, discovery, and resume (3937.294375ms)
+✔ malformed frame is reported, subscription replays, shutdown is clean (2387.900334ms)
+✔ manual shell execution injects bash context and job observation is non-consuming (1624.364209ms)
+✔ conversation surface submits, dedupes, and keeps official identity (2277.922ms)
+✔ official CRUD, delivery, cold catch-up, lease, and route refusal (138610.95175ms)
+✔ a live schedule lease refuses startup before the scheduler mounts (1353.805125ms)
+✔ a wrong schedule route refuses startup instead of falling back to json (1337.487375ms)
+✔ an unprovided backend service key times out as unsupported and never mounts the scheduler (11316.591584ms)
+✔ a corrupt probe leftover is replaced instead of bricking startup (1327.459542ms)
+✔ two root sessions keep separate schedule tables (2900.808459ms)
+✔ official sessions list, rename, context, compact, occupancy, and resume (5759.97675ms)
+✔ nested instructions reach the next request and resume corrects a changed baseline (3541.756958ms)
+✔ a root-marker failure surfaces the official error and builds no sources (1591.288041ms)
+✔ an unreadable base file is skipped while a readable local overlay loads (1496.904084ms)
+✔ real host discovers, previews, invalidates, and injects skills (2683.885167ms)
+ℹ tests 15
+ℹ suites 0
+ℹ pass 15
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 156893.050375

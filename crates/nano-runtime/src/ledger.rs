@@ -39,8 +39,8 @@ pub fn read_ledger(path: &Path) -> Result<Option<MountLedger>, String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(format!("could not read {}: {error}", path.display())),
     };
-    let ledger: MountLedger =
-        serde_json::from_str(&text).map_err(|error| format!("invalid ledger {}: {error}", path.display()))?;
+    let ledger: MountLedger = serde_json::from_str(&text)
+        .map_err(|error| format!("invalid ledger {}: {error}", path.display()))?;
     if ledger.version != 1 {
         return Err(format!("unsupported ledger version {}", ledger.version));
     }
@@ -97,7 +97,9 @@ mod tests {
     #[test]
     fn missing_is_none_and_corrupt_is_error() {
         let directory = tempfile::tempdir().unwrap();
-        assert!(read_ledger(&directory.path().join("missing.json")).unwrap().is_none());
+        assert!(read_ledger(&directory.path().join("missing.json"))
+            .unwrap()
+            .is_none());
         let path = directory.path().join("broken.json");
         fs::write(&path, "{not json").unwrap();
         assert!(read_ledger(&path).is_err());

@@ -181,6 +181,53 @@ def main():
     checks = []
     pump(4)
     checks.append(("connected", "已连接" in screen.text()))
+    if os.environ.get("NANO_SCHEDULE") == "1":
+        send("\x07")  # Ctrl+G opens the schedule overlay
+        pump(1.5)
+        now = screen.text()
+        checks.append(("schedule overlay", "定时任务" in now))
+        checks.append(("official schedule capability", "活跃 0" in now or "还没有任务" in now))
+        send("n")
+        pump(0.5)
+        checks.append(("create form", "新建定时任务" in screen.text()))
+        send("巡检提醒")
+        send("\t")
+        send("检查队列")
+        send("\t\t")  # selector (keep After) -> delay field
+        send("\r")
+        pump(3)
+        now = screen.text()
+        checks.append(("task created", "巡检提醒" in now))
+        checks.append(("official confirmation", "任务已由官方确认创建" in now))
+        # Exercise a non-default selector through the real form: cycle
+        # After -> At -> Every -> Daily, keep the displayed local zone, submit.
+        send("n")
+        pump(0.5)
+        send("每日巡检")
+        send("\t")
+        send("每日检查")
+        send("\t")
+        send("\x1b[C\x1b[C\x1b[C")
+        send("\t\t")
+        send("\r")
+        pump(3)
+        now = screen.text()
+        checks.append(("daily selector created", "每日巡检" in now and "每日" in now))
+        snapshot = now
+        send("\x1b")
+        pump(0.5)
+        send("\x03")
+        pump(2)
+        try:
+            code = child.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            code = "timeout"
+        checks.append(("clean exit", code == 0))
+        print(json.dumps({"ok": all(ok for _, ok in checks), "checks": checks, "exit": code}, ensure_ascii=False, indent=2))
+        print("--- SCREEN ---")
+        print(snapshot)
+        return 0 if all(ok for _, ok in checks) else 2
     send("\r")
     pump(0.6)
     checks.append(("blank rejected", "内容为空" in screen.text()))

@@ -263,6 +263,19 @@ pub fn write_runtime_patch(
             "config": { "root": storage_root.to_string_lossy() }
         }),
         json!({
+            // S11 routes only the `schedule` domain to its dedicated backend.
+            // The patch replaces the whole config, so `backend` must stay here
+            // even though only `routes` differs from the bundle default.
+            "id": "storage-domain",
+            "config": {
+                "backend": "json",
+                "routes": {
+                    "schedule": "nano-schedule-json",
+                    "nano_probe": "nano-schedule-json"
+                }
+            }
+        }),
+        json!({
             "id": "nano-bridge",
             "config": bridge_config
         }),

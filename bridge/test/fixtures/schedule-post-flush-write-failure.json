@@ -1,0 +1,24 @@
+{
+  "scenario": "Session flush acknowledged the reminder, then the task-row write failed. The reminder is in the inbox, but the task is still active with no new receipt. This is the official non-atomic window that makes a repeat delivery possible.",
+  "catalog": {
+    "address": { "rootSessionId": "session-fixture" },
+    "entries": [
+      {
+        "id": "schedule-fixture",
+        "kind": "at",
+        "title": "写失败夹具",
+        "prompt": "这条提醒已经进入 inbox，但回执没有落盘",
+        "scheduledAt": "2026-10-21T00:00:00.000Z",
+        "sessionId": "session-fixture",
+        "status": "active"
+      }
+    ]
+  },
+  "history": {
+    "id": "schedule-fixture",
+    "records": [],
+    "earlierRecordsUnavailable": false,
+    "earlierRecordsPruned": false,
+    "retention": { "days": 30, "records": 200 }
+  }
+}

@@ -43,16 +43,31 @@ impl fmt::Display for ProtocolError {
         match self {
             Self::InvalidJson(message) => write!(formatter, "invalid JSON: {message}"),
             Self::InvalidFrame(message) => write!(formatter, "invalid frame: {message}"),
-            Self::UnsupportedMajor(major) => write!(formatter, "unsupported protocol major {major}"),
-            Self::UnknownCapabilityStatus(status) => write!(formatter, "unknown capability status {status}"),
-            Self::UnsupportedRequiredCapability(name) => write!(formatter, "unknown required capability {name}"),
+            Self::UnsupportedMajor(major) => {
+                write!(formatter, "unsupported protocol major {major}")
+            }
+            Self::UnknownCapabilityStatus(status) => {
+                write!(formatter, "unknown capability status {status}")
+            }
+            Self::UnsupportedRequiredCapability(name) => {
+                write!(formatter, "unknown required capability {name}")
+            }
             Self::UnknownEventKind(kind) => write!(formatter, "unknown event kind {kind}"),
-            Self::FrameTooLarge(bytes) => write!(formatter, "frame of {bytes} bytes exceeds the limit"),
-            Self::GenerationMismatch => write!(formatter, "frame belongs to another host generation"),
+            Self::FrameTooLarge(bytes) => {
+                write!(formatter, "frame of {bytes} bytes exceeds the limit")
+            }
+            Self::GenerationMismatch => {
+                write!(formatter, "frame belongs to another host generation")
+            }
             Self::RuntimeMismatch => write!(formatter, "frame belongs to another runtime identity"),
             Self::NonceMismatch => write!(formatter, "frame nonce does not match this generation"),
-            Self::LimitMismatch(field) => write!(formatter, "declared limit {field} does not match the contract"),
-            Self::UnknownStartupCode(code) => write!(formatter, "unknown startup error code {code}"),
+            Self::LimitMismatch(field) => write!(
+                formatter,
+                "declared limit {field} does not match the contract"
+            ),
+            Self::UnknownStartupCode(code) => {
+                write!(formatter, "unknown startup error code {code}")
+            }
             Self::MalformedResponse(message) => write!(formatter, "malformed response: {message}"),
         }
     }
@@ -134,21 +149,28 @@ impl fmt::Display for HostError {
         match self {
             Self::Io(error) => write!(formatter, "I/O error: {error}"),
             Self::Spawn(message) => write!(formatter, "could not start the host: {message}"),
-            Self::UnsupportedVersion(version) => write!(formatter, "unsupported official dsh version {version}"),
+            Self::UnsupportedVersion(version) => {
+                write!(formatter, "unsupported official dsh version {version}")
+            }
             Self::Startup {
                 code,
                 message,
                 holder_pid,
                 ..
             } => match holder_pid {
-                Some(pid) => write!(formatter, "host startup failed ({code}) by pid {pid}: {message}"),
+                Some(pid) => write!(
+                    formatter,
+                    "host startup failed ({code}) by pid {pid}: {message}"
+                ),
                 None => write!(formatter, "host startup failed ({code}): {message}"),
             },
             Self::TransportClosed => write!(formatter, "host transport closed"),
             Self::PendingLimit => write!(formatter, "too many pending host requests"),
             Self::Rpc(error) => write!(formatter, "{error}"),
             Self::Timeout(message) => write!(formatter, "timed out: {message}"),
-            Self::Lifecycle(message) => write!(formatter, "invalid lifecycle transition: {message}"),
+            Self::Lifecycle(message) => {
+                write!(formatter, "invalid lifecycle transition: {message}")
+            }
             Self::Handshake(message) => write!(formatter, "handshake failed: {message}"),
             Self::Protocol(error) => write!(formatter, "protocol error: {error}"),
             Self::ProcessGone => write!(formatter, "host process is gone"),

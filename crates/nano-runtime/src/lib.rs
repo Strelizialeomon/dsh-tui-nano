@@ -12,7 +12,7 @@ pub mod paths;
 pub mod protocol;
 pub mod protocol_error;
 
-pub use host::{Host, HostEvent, HostOptions, SessionMode, ShutdownOutcome};
+pub use host::{Host, HostEvent, HostOptions, PendingRequest, SessionMode, ShutdownOutcome};
 pub use lifecycle::{Lifecycle, LifecycleState};
 pub use paths::{Preflight, RuntimePaths};
 pub use protocol::{Capability, CapabilityStatus, Hello, ProtocolVersion, RpcError};
@@ -81,7 +81,7 @@ pub const LIFECYCLE_TRANSITIONS: [(&str, &str); 15] = [
 ];
 
 /// Error code names shared with the bridge contract.
-pub const ERROR_CODE_NAMES: [(&str, i64); 31] = [
+pub const ERROR_CODE_NAMES: [(&str, i64); 57] = [
     ("jsonrpc/parse-error", -32700),
     ("jsonrpc/invalid-request", -32600),
     ("jsonrpc/method-not-found", -32601),
@@ -105,18 +105,44 @@ pub const ERROR_CODE_NAMES: [(&str, i64); 31] = [
     ("nano/conversation/steer-unavailable", 1016),
     ("nano/conversation/rejected", 1017),
     ("nano/conversation/too-large", 1018),
-    ("nano/terminal/unavailable", 1019),
-    ("nano/terminal/limit-reached", 1020),
-    ("nano/terminal/control-unavailable", 1021),
-    ("nano/terminal/not-found", 1022),
-    ("nano/terminal/input", 1023),
-    ("nano/terminal/input-full", 1024),
-    ("nano/terminal/closed-id", 1025),
-    ("nano/terminal/failed", 1026),
+    ("nano/skills/not-found", 1019),
+    ("nano/skills/no-preview", 1020),
+    ("nano/skills/preview-failed", 1021),
+    ("nano/controls/writer-held", 1022),
+    ("nano/controls/model-unavailable", 1023),
+    ("nano/controls/permission-rejected", 1024),
+    ("nano/controls/command-failed", 1025),
+    ("nano/controls/unavailable", 1026),
+    ("nano/shell/exec-failed", 1027),
+    ("nano/jobs/not-found", 1028),
+    ("nano/sessions/unavailable", 1029),
+    ("nano/sessions/not-active", 1030),
+    ("nano/sessions/title-invalid", 1031),
+    ("nano/sessions/compact-unavailable", 1032),
+    ("nano/sessions/rejected", 1033),
+    ("nano/attachments/receipt-unknown", 1034),
+    ("nano/attachments/receipt-committed", 1035),
+    ("nano/attachments/receipt-incomplete", 1036),
+    ("nano/attachments/chunk-sequence", 1037),
+    ("nano/attachments/image-invalid", 1038),
+    ("nano/attachments/model-no-images", 1039),
+    ("nano/attachments/limit", 1040),
+    ("nano/attachments/file-failed", 1041),
+    ("nano/file-references/failed", 1042),
+    ("nano/schedule/unavailable", 1043),
+    ("nano/schedule/error", 1044),
+    ("nano/terminal/unavailable", 1045),
+    ("nano/terminal/limit-reached", 1046),
+    ("nano/terminal/control-unavailable", 1047),
+    ("nano/terminal/not-found", 1048),
+    ("nano/terminal/input", 1049),
+    ("nano/terminal/input-full", 1050),
+    ("nano/terminal/closed-id", 1051),
+    ("nano/terminal/failed", 1052),
 ];
 
 /// Method names implemented by this generation.
-pub const IMPLEMENTED_METHODS: [&str; 30] = [
+pub const IMPLEMENTED_METHODS: [&str; 58] = [
     "nano.hello",
     "nano.startupError",
     "nano.shutdown",
@@ -125,12 +151,40 @@ pub const IMPLEMENTED_METHODS: [&str; 30] = [
     "nano.cancelRequest",
     "nano.event",
     "nano.streamEnded",
+    "nano.attachment.begin",
+    "nano.attachment.chunk",
+    "nano.attachment.finish",
+    "nano.attachment.discard",
+    "nano.fileReferences.list",
     "nano.conversation.submit",
     "nano.conversation.editQueued",
     "nano.conversation.deleteQueued",
     "nano.conversation.steerQueued",
     "nano.conversation.cancel",
     "nano.conversation.snapshot",
+    "nano.schedule.catalog",
+    "nano.schedule.list",
+    "nano.schedule.create",
+    "nano.schedule.update",
+    "nano.schedule.delete",
+    "nano.schedule.history",
+    "nano.sessions.list",
+    "nano.sessions.rename",
+    "nano.sessions.context",
+    "nano.sessions.compact",
+    "nano.sessions.compactCancel",
+    "nano.skills.list",
+    "nano.skills.preview",
+    "nano.instructions.snapshot",
+    "nano.controls.state",
+    "nano.controls.modelCatalog",
+    "nano.controls.selectModel",
+    "nano.controls.setPermission",
+    "nano.controls.executeCommand",
+    "nano.shell.exec",
+    "nano.jobs.snapshot",
+    "nano.jobs.follow",
+    "nano.jobs.kill",
     "nano.terminal.environment",
     "nano.terminal.shells",
     "nano.terminal.list",
@@ -148,7 +202,6 @@ pub const IMPLEMENTED_METHODS: [&str; 30] = [
     "nano.terminal.ack",
     "nano.terminal.ended",
 ];
-
 /// Host-to-client terminal notifications understood by this client.
 pub const TERMINAL_NOTIFICATION_METHODS: [&str; 4] = [
     "nano.terminal.output",
@@ -158,11 +211,19 @@ pub const TERMINAL_NOTIFICATION_METHODS: [&str; 4] = [
 ];
 
 /// Event kinds this client accepts.
-pub const EVENT_KINDS: [&str; 4] = [
+pub const EVENT_KINDS: [&str; 12] = [
     "session.event",
     "conversation.status",
     "conversation.inbox",
     "conversation.stream",
+    "schedule.changed",
+    "controls.model",
+    "controls.permission",
+    "sessions.context",
+    "skills.changed",
+    "instructions.changed",
+    "jobs.event",
+    "jobs.output",
 ];
 
 /// Shutdown report step names, in report order.

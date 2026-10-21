@@ -202,6 +202,41 @@ impl Diagnostics {
     }
 }
 
+/// One request already written to the host, waiting for its response.
+pub struct PendingRequest {
+    method: String,
+    id: String,
+    receiver: mpsc::Receiver<Result<Value, HostRpcError>>,
+    shared: Arc<Shared>,
+}
+
+impl PendingRequest {
+    /// Protocol request id, suitable for `nano.cancelRequest`.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Wait for the response, cleaning up the pending slot on timeout.
+    pub fn wait(self, timeout: Duration) -> Result<Value, HostError> {
+        match self.receiver.recv_timeout(timeout) {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(error)) => Err(HostError::Rpc(error)),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                self.shared
+                    .pending
+                    .lock()
+                    .expect("pending mutex poisoned")
+                    .remove(&self.id);
+                Err(HostError::Timeout(format!(
+                    "{} did not answer",
+                    self.method
+                )))
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(HostError::TransportClosed),
+        }
+    }
+}
+
 impl Host {
     /// Resolve paths and verify the official version without spawning.
     pub fn preflight(options: &HostOptions) -> Result<Preflight, HostError> {
@@ -353,77 +388,79 @@ impl Host {
                 .unwrap_or(Duration::from_secs(60))
         });
         let deadline = Instant::now() + timeout;
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(self.fail_handshake(HostError::Timeout(format!(
-                "handshake did not complete; diagnostics: {}",
-                self.diagnostics_tail(5).join(" | ")
-            ))));
-        }
-        let event = self.next_event(Some(remaining))?;
-        match event {
-            HostEvent::Hello(hello) => {
-                hello
-                    .validate(&self.inner.shared.runtime_id, self.inner.shared.generation)
-                    .map_err(|error| self.fail_handshake(error.into()))?;
-                if hello.root_session_id != self.inner.shared.root_session_id {
-                    return Err(self.fail_handshake(HostError::Handshake(format!(
-                        "rootSessionId mismatch: expected {}, received {}",
-                        self.inner.shared.root_session_id, hello.root_session_id
-                    ))));
-                }
-                let expected_mode = match self.inner.shared.session_mode {
-                    SessionMode::Create => SessionFactMode::Created,
-                    SessionMode::Resume => SessionFactMode::Resumed,
-                };
-                if hello.session.mode != expected_mode {
-                    return Err(self.fail_handshake(HostError::Handshake(format!(
-                        "session mode mismatch: expected {:?}, received {:?}",
-                        expected_mode, hello.session.mode
-                    ))));
-                }
-                self.inner
-                    .shared
-                    .lifecycle
-                    .transition(LifecycleState::Ready)?;
-                *self.inner.hello.lock().expect("hello mutex poisoned") = Some(hello.clone());
-                return Ok(hello);
-            }
-            HostEvent::StartupError(params) => {
-                self.inner
-                    .shared
-                    .lifecycle
-                    .transition_if_allowed(LifecycleState::Failed);
-                self.wait_for_exit(Duration::from_secs(5));
-                let final_state = if self.inner.shared.exited.load(Ordering::SeqCst) {
-                    LifecycleState::Stopped
-                } else {
-                    LifecycleState::CleanupFailed
-                };
-                let lifecycle = &self.inner.shared.lifecycle;
-                lifecycle.transition_if_allowed(LifecycleState::Stopping);
-                lifecycle.transition_if_allowed(final_state);
-                return Err(HostError::Startup {
-                    code: params.code,
-                    message: params.message,
-                    holder_pid: params.holder_pid,
-                    repair_path: params.repair_path,
-                });
-            }
-            HostEvent::TransportClosed { lost } => {
-                return Err(if lost {
-                    HostError::ProcessGone
-                } else {
-                    HostError::TransportClosed
-                });
-            }
-            HostEvent::ProtocolFailure(message) => {
-                return Err(self.fail_handshake(HostError::Handshake(message)));
-            }
-            other => {
-                return Err(self.fail_handshake(HostError::Handshake(format!(
-                    "unexpected frame before hello: {other:?}"
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(self.fail_handshake(HostError::Timeout(format!(
+                    "handshake did not complete; diagnostics: {}",
+                    self.diagnostics_tail(5).join(" | ")
                 ))));
+            }
+            let event = self.next_event(Some(remaining))?;
+            match event {
+                HostEvent::Hello(hello) => {
+                    hello
+                        .validate(&self.inner.shared.runtime_id, self.inner.shared.generation)
+                        .map_err(|error| self.fail_handshake(error.into()))?;
+                    if hello.root_session_id != self.inner.shared.root_session_id {
+                        return Err(self.fail_handshake(HostError::Handshake(format!(
+                            "rootSessionId mismatch: expected {}, received {}",
+                            self.inner.shared.root_session_id, hello.root_session_id
+                        ))));
+                    }
+                    let expected_mode = match self.inner.shared.session_mode {
+                        SessionMode::Create => SessionFactMode::Created,
+                        SessionMode::Resume => SessionFactMode::Resumed,
+                    };
+                    if hello.session.mode != expected_mode {
+                        return Err(self.fail_handshake(HostError::Handshake(format!(
+                            "session mode mismatch: expected {:?}, received {:?}",
+                            expected_mode, hello.session.mode
+                        ))));
+                    }
+                    self.inner
+                        .shared
+                        .lifecycle
+                        .transition(LifecycleState::Ready)?;
+                    *self.inner.hello.lock().expect("hello mutex poisoned") = Some(hello.clone());
+                    return Ok(hello);
+                }
+                HostEvent::StartupError(params) => {
+                    self.inner
+                        .shared
+                        .lifecycle
+                        .transition_if_allowed(LifecycleState::Failed);
+                    self.wait_for_exit(Duration::from_secs(5));
+                    let final_state = if self.inner.shared.exited.load(Ordering::SeqCst) {
+                        LifecycleState::Stopped
+                    } else {
+                        LifecycleState::CleanupFailed
+                    };
+                    let lifecycle = &self.inner.shared.lifecycle;
+                    lifecycle.transition_if_allowed(LifecycleState::Stopping);
+                    lifecycle.transition_if_allowed(final_state);
+                    return Err(HostError::Startup {
+                        code: params.code,
+                        message: params.message,
+                        holder_pid: params.holder_pid,
+                        repair_path: params.repair_path,
+                    });
+                }
+                HostEvent::TransportClosed { lost } => {
+                    return Err(if lost {
+                        HostError::ProcessGone
+                    } else {
+                        HostError::TransportClosed
+                    });
+                }
+                HostEvent::ProtocolFailure(message) => {
+                    return Err(self.fail_handshake(HostError::Handshake(message)));
+                }
+                other => {
+                    return Err(self.fail_handshake(HostError::Handshake(format!(
+                        "unexpected frame before hello: {other:?}"
+                    ))));
+                }
             }
         }
     }
@@ -495,6 +532,33 @@ impl Host {
             },
         )?;
         self.write_frame(&encoded)
+    }
+
+    /// Send one request without waiting. The returned handle exposes the
+    /// protocol request id, so a caller can cancel it through
+    /// `nano.cancelRequest` while waiting.
+    pub fn start_request(&self, method: &str, params: Value) -> Result<PendingRequest, HostError> {
+        self.start_request_internal(method, params, false)
+    }
+
+    /// Default request timeout from the launch options.
+    pub fn request_timeout(&self) -> Duration {
+        self.inner
+            .options
+            .request_timeout
+            .unwrap_or(Duration::from_secs(30))
+    }
+
+    /// Send one request with a caller-chosen wait bound. Used by long official
+    /// actions such as manual compaction and shell commands; a timeout still
+    /// means the result is unknown, not that the action was refused.
+    pub fn request_with_timeout(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, HostError> {
+        self.request_internal(method, params, timeout, false)
     }
 
     /// Receive the next host event.
@@ -765,6 +829,16 @@ impl Host {
         timeout: Duration,
         allow_stopping: bool,
     ) -> Result<Value, HostError> {
+        self.start_request_internal(method, params, allow_stopping)?
+            .wait(timeout)
+    }
+
+    fn start_request_internal(
+        &self,
+        method: &str,
+        params: Value,
+        allow_stopping: bool,
+    ) -> Result<PendingRequest, HostError> {
         let state = self.inner.shared.lifecycle.state();
         if !(state == LifecycleState::Ready
             || (allow_stopping && state == LifecycleState::Stopping))
@@ -826,20 +900,12 @@ impl Host {
                 .remove(&id);
             return Err(error);
         }
-        match receiver.recv_timeout(timeout) {
-            Ok(Ok(value)) => Ok(value),
-            Ok(Err(error)) => Err(HostError::Rpc(error)),
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                self.inner
-                    .shared
-                    .pending
-                    .lock()
-                    .expect("pending mutex poisoned")
-                    .remove(&id);
-                Err(HostError::Timeout(format!("{method} did not answer")))
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => Err(HostError::TransportClosed),
-        }
+        Ok(PendingRequest {
+            method: method.to_string(),
+            id,
+            receiver,
+            shared: Arc::clone(&self.inner.shared),
+        })
     }
 
     fn write_frame(&self, bytes: &[u8]) -> Result<(), HostError> {
