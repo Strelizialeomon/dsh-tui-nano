@@ -13,7 +13,7 @@ S01「宿主与通信」已实施（执行单 [#4](https://github.com/Strelizial
 
 S02「对话与输入」已实施（执行单 [#5](https://github.com/Strelizialeomon/dsh-tui-nano/issues/5)）：`nano` 终端应用可编辑多行输入、按地址保存草稿、提交/排队/插话/停止、同步官方 inbox、合并流式预览与持久消息；`bridge/conversation/` 提供 submit、queue 编辑/删除/插话、cancel、snapshot 与三类实时事件。transcript 的阅读层级与样式属 S03，模型选择属 S04；当前可用 `--provider/--model` 传入初始路由。
 
-S06「引用与图片」实施中（执行单 [#9](https://github.com/Strelizialeomon/dsh-tui-nano/issues/9)）：输入框支持 `@file` 补全（只插入路径，不读文件内容）、Alt+A 附加本地图片/通用文件、Alt+Backspace 移除本地卡片；图片在提交时交给官方 `ctx.attachments.admitPromptContent` 校验、规范化并持久化；通用文件经 chunk 上传，`finish` 时由官方 `saveFileStream` 生成 `FileAttachmentRef`，提交时校验归属并转交。附件的顺序与文本一致，失败保留草稿和卡片。
+S06「引用与图片」已实施（执行单 [#9](https://github.com/Strelizialeomon/dsh-tui-nano/issues/9)）：输入框支持 `@file` 补全（只插入路径，不读文件内容）、Alt+A 附加本地图片/通用文件、Alt+Backspace 移除本地卡片；图片在提交时交给官方 `ctx.attachments.admitPromptContent` 校验、规范化并持久化；通用文件经 chunk 上传，`finish` 时由官方 `saveFileStream` 生成 `FileAttachmentRef`，提交时校验归属并转交。附件的顺序与文本一致，失败保留草稿和卡片。
 
 ## 结构
 
