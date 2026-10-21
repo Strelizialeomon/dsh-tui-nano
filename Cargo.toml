@@ -2,6 +2,7 @@
 members = [
     "crates/nano-runtime",
     "crates/nano-conversation",
+    "crates/nano-attachments",
     "crates/nano-controls",
     "crates/nano-skills",
     "crates/nano-jobs",

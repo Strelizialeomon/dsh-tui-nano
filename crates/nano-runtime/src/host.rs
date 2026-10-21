@@ -188,6 +188,38 @@ impl Diagnostics {
     }
 }
 
+/// One request already written to the host, waiting for its response.
+pub struct PendingRequest {
+    method: String,
+    id: String,
+    receiver: mpsc::Receiver<Result<Value, HostRpcError>>,
+    shared: Arc<Shared>,
+}
+
+impl PendingRequest {
+    /// Protocol request id, suitable for `nano.cancelRequest`.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Wait for the response, cleaning up the pending slot on timeout.
+    pub fn wait(self, timeout: Duration) -> Result<Value, HostError> {
+        match self.receiver.recv_timeout(timeout) {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(error)) => Err(HostError::Rpc(error)),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                self.shared
+                    .pending
+                    .lock()
+                    .expect("pending mutex poisoned")
+                    .remove(&self.id);
+                Err(HostError::Timeout(format!("{} did not answer", self.method)))
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(HostError::TransportClosed),
+        }
+    }
+}
+
 impl Host {
     /// Resolve paths and verify the official version without spawning.
     pub fn preflight(options: &HostOptions) -> Result<Preflight, HostError> {
@@ -457,6 +489,21 @@ impl Host {
             .request_timeout
             .unwrap_or(Duration::from_secs(30));
         self.request_internal(method, params, timeout, false)
+    }
+
+    /// Send one request without waiting. The returned handle exposes the
+    /// protocol request id, so a caller can cancel it through
+    /// `nano.cancelRequest` while waiting.
+    pub fn start_request(&self, method: &str, params: Value) -> Result<PendingRequest, HostError> {
+        self.start_request_internal(method, params, false)
+    }
+
+    /// Default request timeout from the launch options.
+    pub fn request_timeout(&self) -> Duration {
+        self.inner
+            .options
+            .request_timeout
+            .unwrap_or(Duration::from_secs(30))
     }
 
     /// Send one request with a caller-chosen wait bound. Used by long official
@@ -739,6 +786,16 @@ impl Host {
         timeout: Duration,
         allow_stopping: bool,
     ) -> Result<Value, HostError> {
+        self.start_request_internal(method, params, allow_stopping)?
+            .wait(timeout)
+    }
+
+    fn start_request_internal(
+        &self,
+        method: &str,
+        params: Value,
+        allow_stopping: bool,
+    ) -> Result<PendingRequest, HostError> {
         let state = self.inner.shared.lifecycle.state();
         if !(state == LifecycleState::Ready
             || (allow_stopping && state == LifecycleState::Stopping))
@@ -800,20 +857,12 @@ impl Host {
                 .remove(&id);
             return Err(error);
         }
-        match receiver.recv_timeout(timeout) {
-            Ok(Ok(value)) => Ok(value),
-            Ok(Err(error)) => Err(HostError::Rpc(error)),
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                self.inner
-                    .shared
-                    .pending
-                    .lock()
-                    .expect("pending mutex poisoned")
-                    .remove(&id);
-                Err(HostError::Timeout(format!("{method} did not answer")))
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => Err(HostError::TransportClosed),
-        }
+        Ok(PendingRequest {
+            method: method.to_string(),
+            id,
+            receiver,
+            shared: Arc::clone(&self.inner.shared),
+        })
     }
 
     fn write_frame(&self, bytes: &[u8]) -> Result<(), HostError> {

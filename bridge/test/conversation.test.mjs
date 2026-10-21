@@ -85,9 +85,9 @@ function serviceFor({ status, nextTurn, nextStep, events } = {}) {
 
 const address = { rootSessionId: ROOT }
 
-test('submit queues an ordinary follow-up with official request identity', () => {
+test('submit queues an ordinary follow-up with official request identity', async () => {
   const { agent, service } = serviceFor()
-  const result = service.submit({
+  const result = await service.submit({
     address,
     requestId: 'req-a',
     delivery: 'queue',
@@ -106,50 +106,50 @@ test('submit queues an ordinary follow-up with official request identity', () =>
   assert.ok(Object.isFrozen(message.source))
 })
 
-test('the same requestId never creates a second message', () => {
+test('the same requestId never creates a second message', async () => {
   const { agent, service } = serviceFor()
-  const first = service.submit({ address, requestId: 'req-a', delivery: 'queue', content: [{ type: 'text', text: 'one' }] })
-  const second = service.submit({ address, requestId: 'req-a', delivery: 'queue', content: [{ type: 'text', text: 'two' }] })
+  const first = await service.submit({ address, requestId: 'req-a', delivery: 'queue', content: [{ type: 'text', text: 'one' }] })
+  const second = await service.submit({ address, requestId: 'req-a', delivery: 'queue', content: [{ type: 'text', text: 'two' }] })
   assert.equal(second.duplicate, true)
   assert.equal(second.messageId, first.messageId)
   assert.equal(agent.calls.followup.length, 1)
 })
 
-test('a durable user message with the same rpcId is recognised after a restart', () => {
+test('a durable user message with the same rpcId is recognised after a restart', async () => {
   const events = [
     { type: 'user/message', data: { id: 'durable-1', role: 'user', content: [], source: { kind: 'user', rpcId: 'req-a' } } },
   ]
   const { agent, service } = serviceFor({ events })
-  const result = service.submit({ address, requestId: 'req-a', delivery: 'queue', content: [{ type: 'text', text: 'again' }] })
+  const result = await service.submit({ address, requestId: 'req-a', delivery: 'queue', content: [{ type: 'text', text: 'again' }] })
   assert.equal(result.duplicate, true)
   assert.equal(result.messageId, 'durable-1')
   assert.equal(agent.calls.followup.length, 0)
 })
 
-test('blank content is rejected with a distinguishable reason', () => {
+test('blank content is rejected with a distinguishable reason', async () => {
   const { agent, service } = serviceFor()
-  assert.throws(
-    () => service.submit({ address, requestId: 'r', delivery: 'queue', content: [{ type: 'text', text: ' \n\t' }] }),
+  await assert.rejects(
+    service.submit({ address, requestId: 'r', delivery: 'queue', content: [{ type: 'text', text: ' \n\t' }] }),
     (error) => error.code === 1012,
   )
   assert.equal(agent.calls.followup.length, 0)
 })
 
-test('non-text blocks are rejected instead of half-submitting attachments', () => {
+test('attachment blocks without a receipt are rejected instead of half-submitting', () => {
   assert.throws(() => validateContent([{ type: 'image', attachment: {} }]), (error) => error.code === 1013)
   assert.throws(() => validateContent([]), (error) => error.code === 1012)
 })
 
-test('steer is only offered while the turn is running', () => {
+test('steer is only offered while the turn is running', async () => {
   const idle = serviceFor({ status: 'idle' })
-  assert.throws(
-    () => idle.service.submit({ address, requestId: 's', delivery: 'steer', content: [{ type: 'text', text: 'x' }] }),
+  await assert.rejects(
+    idle.service.submit({ address, requestId: 's', delivery: 'steer', content: [{ type: 'text', text: 'x' }] }),
     (error) => error.code === 1016,
   )
   assert.equal(idle.agent.calls.steer.length, 0)
 
   const running = serviceFor({ status: 'running' })
-  const result = running.service.submit({ address, requestId: 's', delivery: 'steer', content: [{ type: 'text', text: 'x' }] })
+  const result = await running.service.submit({ address, requestId: 's', delivery: 'steer', content: [{ type: 'text', text: 'x' }] })
   assert.equal(result.accepted, true)
   assert.equal(running.agent.calls.steer.length, 1)
 })
@@ -242,26 +242,26 @@ test('child addresses and foreign roots are refused', () => {
   )
 })
 
-test('oversized text is rejected before it reaches the official inbox', () => {
+test('oversized text is rejected before it reaches the official inbox', async () => {
   const { agent, service } = serviceFor()
   const text = 'x'.repeat(32 * 1024 + 1)
-  assert.throws(
-    () => service.submit({ address, requestId: 'big', delivery: 'queue', content: [{ type: 'text', text }] }),
+  await assert.rejects(
+    service.submit({ address, requestId: 'big', delivery: 'queue', content: [{ type: 'text', text }] }),
     (error) => error.code === 1018,
   )
   assert.equal(agent.calls.followup.length, 0)
 })
 
-test('a deleted queued item no longer dedupes a later submit', () => {
+test('a deleted queued item no longer dedupes a later submit', async () => {
   const { service } = serviceFor()
-  const first = service.submit({
+  const first = await service.submit({
     address,
     requestId: 'r-1',
     delivery: 'queue',
     content: [{ type: 'text', text: 'one' }],
   })
   service.deleteQueued({ address, messageId: first.messageId })
-  const second = service.submit({
+  const second = await service.submit({
     address,
     requestId: 'r-1',
     delivery: 'queue',
@@ -271,9 +271,9 @@ test('a deleted queued item no longer dedupes a later submit', () => {
   assert.notEqual(second.messageId, first.messageId)
 })
 
-test('a discarded inbox item clears its accepted request id', () => {
+test('a discarded inbox item clears its accepted request id', async () => {
   const { ctx, agent, service } = serviceFor()
-  const first = service.submit({
+  const first = await service.submit({
     address,
     requestId: 'r-1',
     delivery: 'queue',
@@ -284,7 +284,7 @@ test('a discarded inbox item clears its accepted request id', () => {
     agent,
     message: { id: first.messageId, role: 'user', content: [], source: { kind: 'user', rpcId: 'r-1' } },
   })
-  const second = service.submit({
+  const second = await service.submit({
     address,
     requestId: 'r-1',
     delivery: 'queue',

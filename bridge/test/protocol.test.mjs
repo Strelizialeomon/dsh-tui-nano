@@ -32,7 +32,7 @@ import {
 test('implemented methods match the contract', () => {
   assert.deepEqual([...IMPLEMENTED_METHODS].sort(), [...CONTRACT_IMPLEMENTED.keys()].sort())
   for (const [name, method] of CONTRACT_IMPLEMENTED) {
-    assert.ok(['S01', 'S02', 'S04', 'S05', 'S07', 'S08'].includes(method.owner), `${name} owner`)
+    assert.ok(['S01', 'S02', 'S04', 'S05', 'S06', 'S07', 'S08'].includes(method.owner), `${name} owner`)
     if (method.kind === 'request') {
       assert.ok(IMPLEMENTED_REQUEST_METHODS.includes(name), `${name} must be dispatched as a request`)
     } else {
@@ -126,6 +126,9 @@ test('hello fixture validates and echoes contract limits', () => {
   assert.equal(hello.rootSessionId, 'session-fixture')
   assert.equal(hello.limits.maxFrameBytes, LIMITS.maxFrameBytes)
   assert.equal(hello.capabilities['tool-ask-user'].mode, 'blocking')
+  assert.equal(hello.capabilities.fileReferences.status, 'supported')
+  assert.equal(hello.attachmentLimits.maxImageBytes, 20 * 1024 * 1024)
+  assert.equal(hello.attachmentLimits.fileAdmission, 'verbatim')
 })
 
 test('startupError, event, and streamEnded fixtures validate', () => {
@@ -153,6 +156,13 @@ test('conversation fixtures parse on the bridge side', () => {
   assert.equal(submit.method, 'nano.conversation.submit')
   assert.equal(submit.params.delivery, 'queue')
   assert.equal(submit.params.content[0].type, 'text')
+  const withAttachments = parseFrameLine(
+    JSON.stringify(CONTRACT.fixtures.conversationSubmitAttachments),
+  )
+  assert.equal(withAttachments.type, 'request')
+  assert.equal(withAttachments.params.content[1].type, 'image')
+  assert.equal(withAttachments.params.content[1].receiptId, 'receipt-image-fixture')
+  assert.equal(withAttachments.params.content[2].type, 'file')
   const event = parseFrameLine(JSON.stringify(CONTRACT.fixtures.conversationEvent))
   assert.equal(event.type, 'notification')
   const validated = validateEvent(event.params, { runtimeId: 'rt-fixture', generation: 1 })

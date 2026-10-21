@@ -1,14 +1,23 @@
 //! Application state and key handling.
 
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
+use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver};
 use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use nano_attachments::{
+    begin_params, check_image, chunk_params, discard_params, encode_base64, finish_params,
+    list_params, parse_candidates, parse_finished, probe_image, AttachmentCard,
+    AttachmentDraftStore, AttachmentKind, AttachmentState, CompletionState, ComposerAttachments,
+    ImageLimitError, ImageLimits, ImageMediaType, ImageProbeError,
+};
 use nano_controls::{ControlsModel, ModelSelection, Panel, PanelAction, PanelMode};
 use nano_conversation::{
     CommandRouter, ConversationItem, ConversationModel, Delivery, DraftStore, FeatureContribution,
-    FeatureRegistry, FocusId, InputBuffer, InputEvent, InputOutcome, InputRoute, OrderedContent,
+    FeatureRegistry, FocusId, InputBuffer, InputEvent, InputOutcome, InputRoute,
     SceneId, SceneState, SessionAddress, SubmitError,
 };
 use nano_jobs::{BashRecord, JobsModel, SHELL_NOTICE};
@@ -72,8 +81,6 @@ pub enum Pending {
     Submit {
         /// Business identity.
         request_id: String,
-        /// Text snapshot, used to restore the draft on explicit failure.
-        text: String,
     },
     /// An edit of one queued item.
     Edit {
@@ -111,6 +118,30 @@ pub enum Pending {
         generation: u64,
         /// Official message id being deleted.
         message_id: String,
+    },
+    /// Start one attachment staging upload.
+    AttachmentBegin {
+        /// Receipt identity.
+        receipt_id: String,
+    },
+    /// One attachment chunk acknowledgement.
+    AttachmentChunk {
+        /// Receipt identity.
+        receipt_id: String,
+        /// Sequence that was acknowledged.
+        sequence: u64,
+    },
+    /// Finish one attachment staging upload.
+    AttachmentFinish {
+        /// Receipt identity.
+        receipt_id: String,
+    },
+    /// One `@file` completion response.
+    FileReferences {
+        /// Revision the response must match.
+        revision: u64,
+        /// Protocol id, for clearing the cancellation slot.
+        protocol_id: String,
     },
     /// Read the official session list.
     SessionsList,
@@ -165,6 +196,61 @@ pub enum Pending {
         /// Name used in status messages.
         name: String,
     },
+}
+
+/// A submission's draft snapshot, used to restore on an explicit failure.
+#[derive(Debug, Clone)]
+pub struct SubmittedDraft {
+    /// Original text, byte-for-byte.
+    pub text: String,
+    /// Attachments and their text anchors.
+    pub attachments: ComposerAttachments,
+}
+
+/// One attachment staging upload in flight.
+struct UploadJob {
+    kind: AttachmentKind,
+    image_bytes: Option<Vec<u8>>,
+    file: Option<File>,
+    total: u64,
+    offset: u64,
+    sequence: u64,
+    finishing: bool,
+}
+
+impl UploadJob {
+    /// Read the next raw chunk, or `None` when every byte was sent.
+    fn next_chunk(&mut self, max_bytes: usize) -> std::io::Result<Option<Vec<u8>>> {
+        if self.offset >= self.total {
+            return Ok(None);
+        }
+        if let Some(bytes) = &self.image_bytes {
+            let start = self.offset as usize;
+            let end = (start + max_bytes).min(bytes.len());
+            self.offset = end as u64;
+            return Ok(Some(bytes[start..end].to_vec()));
+        }
+        let Some(file) = &mut self.file else {
+            return Ok(None);
+        };
+        let start = self.offset;
+        file.seek(SeekFrom::Start(start))?;
+        let mut chunk = vec![0u8; max_bytes];
+        let read = file.read(&mut chunk)?;
+        if read == 0 {
+            return Ok(None);
+        }
+        chunk.truncate(read);
+        self.offset += read as u64;
+        Ok(Some(chunk))
+    }
+}
+
+/// A file path being typed in the attachment picker.
+#[derive(Debug, Clone, Default)]
+pub struct AttachmentPicker {
+    /// Raw path text.
+    pub path: String,
 }
 
 /// Inline rename editor inside the session panel.
@@ -249,8 +335,8 @@ pub struct App {
     pub edit_target: Option<String>,
     /// Draft that was displaced by entering queue edit mode.
     pub edit_backup: Option<InputBuffer>,
-    /// Request id to text snapshot for failure restoration.
-    pub submit_backups: HashMap<String, String>,
+    /// Request id to draft snapshot for failure restoration.
+    pub submit_backups: HashMap<String, SubmittedDraft>,
     /// In-flight requests.
     pub pending: HashMap<u64, Pending>,
     /// Feed lines scrolled back from the bottom.
@@ -284,6 +370,18 @@ pub struct App {
     /// After a truncated queue projection, reopen this item's editor once a
     /// full snapshot arrives.
     pub edit_after_snapshot: Option<String>,
+    /// Per-address attachments and their text anchors.
+    pub attachments: AttachmentDraftStore,
+    /// Deployment image limits, when the host reports them.
+    pub attachment_limits: Option<ImageLimits>,
+    /// Active `@file` completion state.
+    pub completion: CompletionState,
+    /// Protocol id of the in-flight file-reference request, for cancellation.
+    completion_cancel: Option<String>,
+    /// Open attachment path picker.
+    pub picker: Option<AttachmentPicker>,
+    /// Staging uploads keyed by receipt id.
+    uploads: HashMap<String, UploadJob>,
     /// Explicit main-session switch phase.
     pub switch: SwitchMachine,
     /// Official task projections, never a second task table.
@@ -375,7 +473,8 @@ impl App {
         Self {
             cli,
             model: ConversationModel::new(address.clone()),
-            drafts: DraftStore::new(address),
+            drafts: DraftStore::new(address.clone()),
+            attachments: AttachmentDraftStore::new(address),
             registry,
             scene,
             link: None,
@@ -403,6 +502,11 @@ impl App {
             clear_stop_failed: false,
             clear_after_snapshot: false,
             edit_after_snapshot: None,
+            attachment_limits: None,
+            completion: CompletionState::default(),
+            completion_cancel: None,
+            picker: None,
+            uploads: HashMap::new(),
             switch: SwitchMachine::new(),
             jobs: JobsModel::new(jobs_root),
             jobs_open: false,
@@ -857,6 +961,41 @@ impl App {
                 .saturating_sub(self.feed_height.saturating_sub(1).max(1));
             return true;
         }
+        if self.picker.is_some() {
+            return self.handle_picker_key(key);
+        }
+        // The completion popup owns unmodified navigation and insertion keys
+        // while visible; modified shortcuts still reach the input.
+        if self.scene.focus().input_focused()
+            && self.edit_target.is_none()
+            && self.completion.visible()
+            && key.modifiers.is_empty()
+        {
+            match key.code {
+                KeyCode::Up => {
+                    self.completion.move_selection(-1);
+                    return true;
+                }
+                KeyCode::Down => {
+                    self.completion.move_selection(1);
+                    return true;
+                }
+                KeyCode::Enter | KeyCode::Tab => {
+                    self.accept_completion();
+                    return true;
+                }
+                KeyCode::Esc => {
+                    self.cancel_completion();
+                    return true;
+                }
+                KeyCode::Left | KeyCode::Right | KeyCode::Home | KeyCode::End => {
+                    // Moving away from the token dismisses the popup, then the
+                    // key keeps its ordinary editing meaning.
+                    self.cancel_completion();
+                }
+                _ => {}
+            }
+        }
         if matches!(key.code, KeyCode::Tab) {
             self.toggle_focus();
             return true;
@@ -870,10 +1009,16 @@ impl App {
             match key.code {
                 KeyCode::Char('u') => {
                     self.drafts.current_mut().clear();
+                    self.attachments.current_mut().clear();
+                    self.completion.clear();
                     return true;
                 }
                 KeyCode::Char('j') => {
+                    let old = self.drafts.current().text().to_string();
                     self.drafts.current_mut().handle(&InputEvent::Newline);
+                    let new = self.drafts.current().text().to_string();
+                    self.shift_attachment_anchors(&old, &new);
+                    self.refresh_completion();
                     return true;
                 }
                 KeyCode::Char('y') => {
@@ -890,6 +1035,14 @@ impl App {
         }
         if key.modifiers.contains(KeyModifiers::ALT) {
             match key.code {
+                KeyCode::Left => {
+                    self.move_attachment(-1);
+                    return true;
+                }
+                KeyCode::Right => {
+                    self.move_attachment(1);
+                    return true;
+                }
                 KeyCode::Up => {
                     self.select_queue_previous();
                     return true;
@@ -914,12 +1067,20 @@ impl App {
                     self.clear_and_stop();
                     return true;
                 }
+                KeyCode::Char('a') | KeyCode::Char('A') => {
+                    self.open_picker();
+                    return true;
+                }
                 KeyCode::Char('k') | KeyCode::Char('K') => {
                     self.open_skills_panel();
                     return true;
                 }
                 KeyCode::Char('r') | KeyCode::Char('R') => {
                     self.open_instructions_panel();
+                    return true;
+                }
+                KeyCode::Backspace => {
+                    self.remove_attachment_before_cursor();
                     return true;
                 }
                 KeyCode::Enter => {
@@ -948,7 +1109,11 @@ impl App {
                 return true;
             }
             if key.modifiers.contains(KeyModifiers::SHIFT) {
+                let old = self.drafts.current().text().to_string();
                 self.drafts.current_mut().handle(&InputEvent::Newline);
+                let new = self.drafts.current().text().to_string();
+                self.shift_attachment_anchors(&old, &new);
+                self.refresh_completion();
                 return true;
             }
             // The input model owns the IME gate: while composing, Enter is
@@ -983,9 +1148,15 @@ impl App {
             _ => None,
         };
         if let Some(event) = event {
+            let old = self.drafts.current().text().to_string();
             let outcome = self.drafts.current_mut().handle(&event);
             if outcome == InputOutcome::RejectedEmpty {
                 self.error = Some("内容为空，草稿已保留".to_string());
+            }
+            if outcome != InputOutcome::Ignored {
+                let new = self.drafts.current().text().to_string();
+                self.shift_attachment_anchors(&old, &new);
+                self.refresh_completion();
             }
             return outcome != InputOutcome::Ignored;
         }
@@ -994,6 +1165,10 @@ impl App {
 
     /// Insert a bracketed-paste payload exactly as received.
     pub fn handle_paste(&mut self, text: String) -> bool {
+        if let Some(picker) = &mut self.picker {
+            picker.path.push_str(&text);
+            return true;
+        }
         // The task and control panels own the keyboard; they must own paste
         // too, or a paste would silently edit the hidden draft.
         if self.jobs_open
@@ -1005,7 +1180,13 @@ impl App {
             return false;
         }
         self.clear_transient_status();
+        let old = self.drafts.current().text().to_string();
         let outcome = self.drafts.current_mut().handle(&InputEvent::Paste(text));
+        if outcome != InputOutcome::Ignored {
+            let new = self.drafts.current().text().to_string();
+            self.shift_attachment_anchors(&old, &new);
+            self.refresh_completion();
+        }
         outcome != InputOutcome::Ignored
     }
 
@@ -1028,6 +1209,7 @@ impl App {
                 self.replay_truncated = self.replay_truncated || truncated;
                 self.model
                     .apply_replay_baseline(hello.session.seq, truncated);
+                self.attachment_limits = nano_attachments::ImageLimits::from_hello(&hello);
                 self.controls.set_capabilities(
                     capability_supported(&hello, "modelSelection"),
                     capability_supported(&hello, "permissionPresets"),
@@ -1074,6 +1256,7 @@ impl App {
                     format!("{message}；宿主诊断：{}", tail.join(" | "))
                 });
                 self.model.mark_disconnected();
+                self.mark_uploads_unknown("宿主连接已关闭");
                 self.handle_host_loss();
                 self.controls.reset();
                 self.claim_controls_commands();
@@ -1253,6 +1436,7 @@ impl App {
                     format!("通信已断开（会话 {root}）")
                 });
                 self.model.mark_disconnected();
+                self.mark_uploads_unknown("连接断开");
                 self.controls.reset();
                 self.claim_controls_commands();
                 true
@@ -1290,6 +1474,10 @@ impl App {
                     | Pending::ClearStopDelete { .. }
                     | Pending::Snapshot
                     | Pending::Cancel
+                    | Pending::AttachmentBegin { .. }
+                    | Pending::AttachmentChunk { .. }
+                    | Pending::AttachmentFinish { .. }
+                    | Pending::FileReferences { .. }
                     | Pending::ControlsState
                     | Pending::ControlsCatalog
                     | Pending::ControlsSelectModel { .. }
@@ -1308,7 +1496,7 @@ impl App {
             return;
         }
         match pending {
-            Pending::Submit { request_id, text } => match result {
+            Pending::Submit { request_id } => match result {
                 Ok(value) => {
                     let accepted = value
                         .get("accepted")
@@ -1330,7 +1518,9 @@ impl App {
                     } else {
                         self.invocation.clear();
                         self.model.submit_failed(&request_id, "官方未接受");
-                        self.restore_draft(&request_id, &text);
+                        if let Some(snapshot) = self.submit_backups.get(&request_id).cloned() {
+                            self.restore_draft(&request_id, &snapshot);
+                        }
                     }
                 }
                 Err(error)
@@ -1338,7 +1528,9 @@ impl App {
                 {
                     self.invocation.clear();
                     self.model.submit_failed(&request_id, error.message.clone());
-                    self.restore_draft(&request_id, &text);
+                    if let Some(snapshot) = self.submit_backups.get(&request_id).cloned() {
+                        self.restore_draft(&request_id, &snapshot);
+                    }
                     self.error = Some(format!("发送失败：{}", error.message));
                 }
                 Err(error) => {
@@ -1468,6 +1660,65 @@ impl App {
                     self.finish_clear_stop();
                 }
             }
+            Pending::AttachmentBegin { receipt_id } => match result {
+                Ok(_) => self.send_next_chunk(&receipt_id),
+                Err(error) => self.fail_upload(&receipt_id, error),
+            },
+            Pending::AttachmentChunk {
+                receipt_id,
+                sequence,
+            } => match result {
+                Ok(value) => {
+                    let received = value
+                        .get("received")
+                        .and_then(Value::as_u64)
+                        .unwrap_or_default();
+                    self.update_upload_progress(&receipt_id, received);
+                    if let Some(job) = self.uploads.get_mut(&receipt_id) {
+                        job.sequence = sequence.saturating_add(1);
+                    }
+                    self.send_next_chunk(&receipt_id);
+                }
+                Err(error) => self.fail_upload(&receipt_id, error),
+            },
+            Pending::AttachmentFinish { receipt_id } => match result {
+                Ok(value) => self.finish_upload(&receipt_id, &value),
+                Err(error) => self.fail_upload(&receipt_id, error),
+            },
+            Pending::FileReferences {
+                revision,
+                protocol_id,
+            } => {
+                if self.completion_cancel.as_deref() == Some(protocol_id.as_str()) {
+                    self.completion_cancel = None;
+                }
+                let current = revision == self.completion.revision();
+                match result {
+                    Ok(value) => match parse_candidates(&value) {
+                        Ok(candidates) => {
+                            self.completion.apply(revision, candidates);
+                        }
+                        Err(message) if current => {
+                            self.completion.clear();
+                            self.error = Some(format!("文件补全结果无效：{message}"));
+                        }
+                        Err(_) => {}
+                    },
+                    Err(error) if matches!(error.kind, RequestErrorKind::Unknown) => {
+                        if current {
+                            self.completion.clear();
+                        }
+                    }
+                    Err(error) => {
+                        if current {
+                            self.completion.clear();
+                            if !error.message.contains("cancelled") {
+                                self.error = Some(format!("文件补全失败：{}", error.message));
+                            }
+                        }
+                    }
+                }
+            },
             Pending::SessionsList => {
                 self.sessions_panel.loading = false;
                 match result {
@@ -1832,7 +2083,7 @@ impl App {
                         self.error = Some(format!("读取项目规矩来源失败：{}", error.message));
                     }
                 }
-            }
+            },
             Pending::Shell { record_id } => {
                 let command = self
                     .bash_records
@@ -1991,7 +2242,7 @@ impl App {
                         self.refresh_jobs_snapshot();
                     }
                 }
-            }
+            },
         }
     }
 
@@ -2022,28 +2273,596 @@ impl App {
         }
     }
 
-    fn restore_draft(&mut self, request_id: &str, text: &str) {
+    /// Address value for S06 request params.
+    fn address_value(&self) -> Value {
+        self.model.address().wire_value()
+    }
+
+    /// Whether one capability is composed and usable now.
+    fn capability_supported(&self, name: &str) -> bool {
+        self.hello
+            .as_ref()
+            .and_then(|hello| hello.capabilities.get(name))
+            .is_some_and(|capability| capability.status == CapabilityStatus::Supported)
+    }
+
+    fn attachments_supported(&self) -> bool {
+        self.capability_supported("attachments")
+    }
+
+    fn file_references_supported(&self) -> bool {
+        self.capability_supported("fileReferences")
+    }
+
+    /// Shift attachment anchors after one text edit.
+    fn shift_attachment_anchors(&mut self, old: &str, new: &str) {
+        if old == new {
+            return;
+        }
+        let prefix = common_prefix_bytes(old, new);
+        let removed = old.len().saturating_sub(prefix);
+        let inserted = new.len().saturating_sub(prefix);
+        let suffix = common_suffix_bytes(&old[prefix..], &new[prefix..]);
+        let removed = removed.saturating_sub(suffix);
+        let inserted = inserted.saturating_sub(suffix);
+        self.attachments
+            .current_mut()
+            .shift_for_edit(prefix, removed, inserted);
+    }
+
+    /// Ask the host for `@file` candidates for the current token.
+    fn refresh_completion(&mut self) {
+        if !self.ready || self.edit_target.is_some() || !self.file_references_supported() {
+            self.cancel_completion();
+            return;
+        }
+        let text = self.drafts.current().text().to_string();
+        let cursor = self.drafts.current().cursor();
+        let update = self.completion.update(&text, cursor);
+        if update.cancel.is_some() {
+            self.cancel_completion_request();
+        }
+        let Some(request) = update.request else {
+            return;
+        };
+        let Some(link) = &self.link else {
+            return;
+        };
+        let params = list_params(&self.address_value(), &request.query);
+        match link.request_handle("nano.fileReferences.list", params) {
+            Ok(handle) => {
+                self.completion.set_pending(handle.id, request.revision);
+                self.completion_cancel = Some(handle.protocol_id.clone());
+                self.pending.insert(
+                    handle.id,
+                    Pending::FileReferences {
+                        revision: request.revision,
+                        protocol_id: handle.protocol_id,
+                    },
+                );
+            }
+            Err(message) => {
+                self.completion.clear();
+                self.error = Some(format!("文件补全请求失败：{message}"));
+            }
+        }
+    }
+
+    /// Cancel the in-flight file-reference request without changing the popup.
+    fn cancel_completion_request(&mut self) {
+        if let Some(protocol_id) = self.completion_cancel.take() {
+            if let Some(link) = &self.link {
+                let _ = link.cancel_request(&protocol_id);
+            }
+        }
+    }
+
+    /// Dismiss the popup and cancel its pending request.
+    fn cancel_completion(&mut self) {
+        let _ = self.completion.dismiss();
+        self.cancel_completion_request();
+    }
+
+    /// Insert the selected `@file` candidate.
+    fn accept_completion(&mut self) {
+        let text = self.drafts.current().text().to_string();
+        let cursor = self.drafts.current().cursor();
+        let Some(accepted) = self.completion.accept(&text, cursor) else {
+            self.cancel_completion();
+            return;
+        };
+        self.drafts.current_mut().set_text(accepted.text.clone());
+        self.drafts.current_mut().set_cursor(accepted.cursor);
+        self.shift_attachment_anchors(&text, &accepted.text);
+        if accepted.directory {
+            // A directory mention keeps its quote open for another level.
+            self.refresh_completion();
+        } else {
+            // A file mention is complete; dismiss without reopening the same
+            // query until the user edits the token.
+            self.cancel_completion();
+        }
+    }
+
+    /// Open the attachment path picker.
+    fn open_picker(&mut self) {
+        if self.edit_target.is_some() {
+            self.error = Some("编辑队列项时不能附加文件".to_string());
+            return;
+        }
+        if !self.attachments_supported() {
+            self.error = Some("宿主未提供附件服务；图片和文件不可用".to_string());
+            return;
+        }
+        self.picker = Some(AttachmentPicker::default());
+        self.notice = Some("输入文件路径，Enter 附加，Esc 取消".to_string());
+    }
+
+    /// Handle one key while the attachment picker is open.
+    fn handle_picker_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Esc => {
+                self.picker = None;
+                self.notice = Some("已取消附加文件".to_string());
+                true
+            }
+            KeyCode::Enter => {
+                let path = self
+                    .picker
+                    .as_ref()
+                    .map(|picker| picker.path.trim().to_string())
+                    .unwrap_or_default();
+                if path.is_empty() {
+                    self.error = Some("附件路径为空".to_string());
+                    return true;
+                }
+                match self.attach_path(&path) {
+                    Ok(()) => {
+                        self.picker = None;
+                        true
+                    }
+                    Err(message) => {
+                        self.error = Some(message);
+                        true
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(picker) = &mut self.picker {
+                    picker.path.pop();
+                }
+                true
+            }
+            KeyCode::Char(character)
+                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                if let Some(picker) = &mut self.picker {
+                    picker.path.push(character);
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Resolve a picker path against the host working directory.
+    fn resolve_path(&self, raw: &str) -> PathBuf {
+        let path = if raw == "~" || raw.starts_with("~/") {
+            let home = std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_default();
+            if raw == "~" {
+                home
+            } else {
+                home.join(&raw[2..])
+            }
+        } else {
+            PathBuf::from(raw)
+        };
+        if path.is_absolute() {
+            return path;
+        }
+        let base = self
+            .hello
+            .as_ref()
+            .map(|hello| PathBuf::from(&hello.cwd))
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_default();
+        base.join(path)
+    }
+
+    /// Inspect, validate, and start staging one local file.
+    fn attach_path(&mut self, raw: &str) -> Result<(), String> {
+        if !self.ready {
+            return Err("宿主未就绪；草稿已保留".to_string());
+        }
+        if !self.attachments_supported() {
+            return Err("宿主未提供附件服务".to_string());
+        }
+        let path = self.resolve_path(raw);
+        let metadata = std::fs::metadata(&path)
+            .map_err(|error| format!("无法读取「{}」：{error}", path.display()))?;
+        if !metadata.is_file() {
+            return Err("只能附加普通文件".to_string());
+        }
+        let total = metadata.len();
+        let declared = ImageMediaType::from_extension(&path);
+        let mut header = [0u8; 16];
+        let mut probe_file = File::open(&path)
+            .map_err(|error| format!("无法打开「{}」：{error}", path.display()))?;
+        let read = probe_file
+            .read(&mut header)
+            .map_err(|error| format!("无法读取「{}」：{error}", path.display()))?;
+        let looks_image = probe_image(&header[..read]).is_ok();
+        let name = nano_attachments::wire::display_name(&path);
+        if declared.is_some() || looks_image {
+            return self.attach_image(path, name, total, declared);
+        }
+        if let Some(limits) = &self.attachment_limits {
+            if limits.file_admission == "unsupported" {
+                return Err("当前部署不支持通用文件附件".to_string());
+            }
+        }
+        let file = File::open(&path)
+            .map_err(|error| format!("无法打开「{}」：{error}", path.display()))?;
+        let receipt_id = nano_conversation::new_request_id();
+        let cursor = self.drafts.current().cursor();
+        self.attachments.current_mut().insert(
+            cursor,
+            AttachmentCard {
+                receipt_id: receipt_id.clone(),
+                kind: AttachmentKind::File,
+                name: name.clone(),
+                bytes: total,
+                media_type: None,
+                width: None,
+                height: None,
+                state: AttachmentState::Uploading { sent: 0, total },
+            },
+        );
+        self.uploads.insert(
+            receipt_id.clone(),
+            UploadJob {
+                kind: AttachmentKind::File,
+                image_bytes: None,
+                file: Some(file),
+                total,
+                offset: 0,
+                sequence: 0,
+                finishing: false,
+            },
+        );
+        self.start_upload(&receipt_id);
+        self.notice = Some(format!("正在附加文件「{name}」"));
+        Ok(())
+    }
+
+    fn attach_image(
+        &mut self,
+        path: PathBuf,
+        name: String,
+        total: u64,
+        declared: Option<ImageMediaType>,
+    ) -> Result<(), String> {
+        let limits = self
+            .attachment_limits
+            .as_ref()
+            .ok_or_else(|| "宿主未报告图片限额，无法安全检查图片".to_string())?;
+        if total > limits.max_image_bytes {
+            return Err(ImageLimitError::TooLarge {
+                bytes: total as usize,
+                limit: limits.max_image_bytes,
+            }
+            .to_string());
+        }
+        let bytes = std::fs::read(&path)
+            .map_err(|error| format!("无法读取「{}」：{error}", path.display()))?;
+        let probe = probe_image(&bytes).map_err(|error| match error {
+            ImageProbeError::Unsupported => "不支持的图片格式（仅 PNG/JPEG/WebP/GIF）".to_string(),
+            ImageProbeError::Corrupt(detail) => format!("图片已损坏：{detail}"),
+        })?;
+        check_image(declared, &probe, bytes.len(), limits).map_err(|error| error.to_string())?;
+        let cards = self.attachments.current().cards();
+        let image_count = cards
+            .iter()
+            .filter(|card| card.kind == AttachmentKind::Image)
+            .count() as u64;
+        if image_count + 1 > limits.max_images_per_message {
+            return Err(format!(
+                "每条消息最多 {} 张图片",
+                limits.max_images_per_message
+            ));
+        }
+        let image_bytes: u64 = cards
+            .iter()
+            .filter(|card| card.kind == AttachmentKind::Image)
+            .map(|card| card.bytes)
+            .sum();
+        if image_bytes + bytes.len() as u64 > limits.max_message_image_bytes {
+            return Err("图片总字节超过部署上限".to_string());
+        }
+        let receipt_id = nano_conversation::new_request_id();
+        let cursor = self.drafts.current().cursor();
+        let media_type = probe.media_type.as_str().to_string();
+        self.attachments.current_mut().insert(
+            cursor,
+            AttachmentCard {
+                receipt_id: receipt_id.clone(),
+                kind: AttachmentKind::Image,
+                name: name.clone(),
+                bytes: bytes.len() as u64,
+                media_type: Some(media_type),
+                width: Some(probe.width),
+                height: Some(probe.height),
+                state: AttachmentState::Uploading { sent: 0, total },
+            },
+        );
+        self.uploads.insert(
+            receipt_id.clone(),
+            UploadJob {
+                kind: AttachmentKind::Image,
+                image_bytes: Some(bytes),
+                file: None,
+                total,
+                offset: 0,
+                sequence: 0,
+                finishing: false,
+            },
+        );
+        self.start_upload(&receipt_id);
+        self.notice = Some(format!("正在附加图片「{name}」"));
+        Ok(())
+    }
+
+    /// Begin one staging upload.
+    fn start_upload(&mut self, receipt_id: &str) {
+        let Some(job) = self.uploads.get(receipt_id) else {
+            return;
+        };
+        let kind = job.kind;
+        let total = job.total;
+        let Some(card) = self.attachments.current().card(receipt_id) else {
+            return;
+        };
+        let name = card.name.clone();
+        let media_type = card.media_type.clone();
+        let params = begin_params(
+            &self.address_value(),
+            receipt_id,
+            kind,
+            Some(&name),
+            media_type.as_deref(),
+            total,
+        );
+        let Some(link) = &self.link else {
+            self.fail_upload_message(receipt_id, "宿主连接已关闭".to_string());
+            return;
+        };
+        match link.request_handle("nano.attachment.begin", params) {
+            Ok(handle) => {
+                self.pending.insert(
+                    handle.id,
+                    Pending::AttachmentBegin {
+                        receipt_id: receipt_id.to_string(),
+                    },
+                );
+            }
+            Err(message) => self.fail_upload_message(receipt_id, message),
+        }
+    }
+
+    /// Send the next staging chunk, or finish when every byte was sent.
+    fn send_next_chunk(&mut self, receipt_id: &str) {
+        let max_bytes = self.chunk_bytes();
+        let next = match self.uploads.get_mut(receipt_id) {
+            Some(job) if !job.finishing => match job.next_chunk(max_bytes) {
+                Ok(next) => next,
+                Err(error) => {
+                    self.fail_upload_message(receipt_id, format!("读取文件失败：{error}"));
+                    return;
+                }
+            },
+            _ => return,
+        };
+        let Some(link) = &self.link else {
+            self.fail_upload_message(receipt_id, "宿主连接已关闭".to_string());
+            return;
+        };
+        match next {
+            Some(bytes) => {
+                let sequence = self
+                    .uploads
+                    .get(receipt_id)
+                    .map(|job| job.sequence)
+                    .unwrap_or_default();
+                let encoded = encode_base64(&bytes);
+                match link.request_handle(
+                    "nano.attachment.chunk",
+                    chunk_params(receipt_id, sequence, &encoded),
+                ) {
+                    Ok(handle) => {
+                        self.pending.insert(
+                            handle.id,
+                            Pending::AttachmentChunk {
+                                receipt_id: receipt_id.to_string(),
+                                sequence,
+                            },
+                        );
+                    }
+                    Err(message) => self.fail_upload_message(receipt_id, message),
+                }
+            }
+            None => {
+                if let Some(job) = self.uploads.get_mut(receipt_id) {
+                    job.finishing = true;
+                }
+                match link.request_handle("nano.attachment.finish", finish_params(receipt_id)) {
+                    Ok(handle) => {
+                        self.pending.insert(
+                            handle.id,
+                            Pending::AttachmentFinish {
+                                receipt_id: receipt_id.to_string(),
+                            },
+                        );
+                    }
+                    Err(message) => self.fail_upload_message(receipt_id, message),
+                }
+            }
+        }
+    }
+
+    fn chunk_bytes(&self) -> usize {
+        self.attachment_limits
+            .as_ref()
+            .map(|limits| limits.max_chunk_bytes)
+            .unwrap_or(49_152)
+            .min(49_152) as usize
+    }
+
+    fn update_upload_progress(&mut self, receipt_id: &str, received: u64) {
+        let total = self
+            .uploads
+            .get(receipt_id)
+            .map(|job| job.total)
+            .unwrap_or_default();
+        if let Some(card) = self.attachments.current_mut().card_mut(receipt_id) {
+            card.state = AttachmentState::Uploading {
+                sent: received,
+                total,
+            };
+        }
+    }
+
+    fn finish_upload(&mut self, receipt_id: &str, value: &Value) {
+        self.uploads.remove(receipt_id);
+        let finished = match parse_finished(value) {
+            Ok(finished) => finished,
+            Err(message) => {
+                self.fail_upload_message(receipt_id, message);
+                return;
+            }
+        };
+        let Some(card) = self.attachments.current_mut().card_mut(receipt_id) else {
+            return;
+        };
+        card.state = AttachmentState::Ready;
+        if let Some(file) = finished.file {
+            card.name = file.name;
+            card.bytes = file.bytes;
+        }
+        let name = card.name.clone();
+        self.notice = Some(format!("附件「{name}」已就绪"));
+    }
+
+    fn fail_upload(&mut self, receipt_id: &str, error: RequestError) {
+        let message = match error.kind {
+            RequestErrorKind::Unknown => {
+                self.set_upload_state(
+                    receipt_id,
+                    AttachmentState::Unknown(format!("{}；不会自动重发", error.message)),
+                );
+                return;
+            }
+            _ => error.message,
+        };
+        self.fail_upload_message(receipt_id, message);
+    }
+
+    fn fail_upload_message(&mut self, receipt_id: &str, message: String) {
+        self.uploads.remove(receipt_id);
+        self.set_upload_state(receipt_id, AttachmentState::Failed(message.clone()));
+        if let Some(link) = &self.link {
+            // A definite failure can drop any staging the host still holds.
+            let _ = link.request("nano.attachment.discard", discard_params(receipt_id));
+        }
+        self.error = Some(format!("附件上传失败：{message}"));
+    }
+
+    fn set_upload_state(&mut self, receipt_id: &str, state: AttachmentState) {
+        if let Some(card) = self.attachments.current_mut().card_mut(receipt_id) {
+            card.state = state;
+        }
+    }
+
+    /// Mark every in-flight upload as unknown after the transport ends.
+    fn mark_uploads_unknown(&mut self, reason: &str) {
+        let ids: Vec<String> = self.uploads.keys().cloned().collect();
+        for receipt_id in ids {
+            self.set_upload_state(&receipt_id, AttachmentState::Unknown(reason.to_string()));
+        }
+        self.uploads.clear();
+        self.completion.clear();
+        self.completion_cancel = None;
+    }
+
+    /// Reorder the attachment nearest the cursor. Only anchors move; uploaded
+    /// bytes are not sent again.
+    fn move_attachment(&mut self, delta: isize) {
+        let cursor = self.drafts.current().cursor();
+        if self
+            .attachments
+            .current_mut()
+            .move_at_cursor(cursor, delta)
+            .is_some()
+        {
+            self.notice = Some("已调整附件顺序（只影响本次列表）".to_string());
+        } else {
+            self.notice = Some("没有可移动的附件".to_string());
+        }
+    }
+
+    /// Remove the nearest attachment at or before the cursor.
+    fn remove_attachment_before_cursor(&mut self) {
+        let cursor = self.drafts.current().cursor();
+        let removed = self.attachments.current_mut().remove_before(cursor);
+        let Some(card) = removed else {
+            self.notice = Some("没有可移除的附件".to_string());
+            return;
+        };
+        self.uploads.remove(&card.receipt_id);
+        if let Some(link) = &self.link {
+            let _ = link.request("nano.attachment.discard", discard_params(&card.receipt_id));
+        }
+        self.notice = Some(format!("已移除本地卡片「{}」", card.name));
+    }
+
+    fn restore_draft(&mut self, request_id: &str, submitted: &SubmittedDraft) {
         if self.submit_backups.remove(request_id).is_none() {
             return;
         }
         if self.edit_target.is_some() {
             // Do not merge a failed prompt into a queue edit; the queue text is
-            // the draft the user is actively editing. Report the failed text
-            // instead of silently writing it back.
+            // the draft the user is actively editing.
             self.error = Some(format!(
-                "发送失败，原稿未自动合并（正在编辑队列项）：{text}"
+                "发送失败，原稿未自动合并（正在编辑队列项）：{}",
+                submitted.text
             ));
             return;
         }
         let current = self.drafts.current().text().to_string();
         if current.is_empty() {
-            self.drafts.current_mut().set_text(text);
-        } else if current != text && !current.starts_with(text) {
+            self.drafts.current_mut().set_text(submitted.text.clone());
+            *self.attachments.current_mut() = submitted.attachments.clone();
+        } else if current == submitted.text || current.starts_with(&submitted.text) {
+            // The user retyped or extended the same text; restore the failed
+            // attachments if the current draft has none.
+            if self.attachments.current().is_empty() {
+                *self.attachments.current_mut() = submitted.attachments.clone();
+            }
+        } else {
             // The user typed while the request was in flight. Keep both the
-            // failed text and the new draft instead of silently dropping one.
+            // failed draft and the new input, with the failed attachments back
+            // at their original offsets.
+            let prefix = format!("{}\n\n", submitted.text);
+            let prefix_len = prefix.len();
+            self.attachments.current_mut().shift_all(prefix_len);
+            self.attachments
+                .current_mut()
+                .extend_from(&submitted.attachments);
             self.drafts
                 .current_mut()
-                .set_text(format!("{text}\n\n{current}"));
+                .set_text(format!("{prefix}{current}"));
         }
     }
 
@@ -2378,54 +3197,60 @@ impl App {
     /// Route the current input and submit it when it is an ordinary prompt.
     pub fn submit_draft(&mut self, delivery: Delivery) {
         let text = self.drafts.current().text().to_string();
-        if text.trim().is_empty() {
+        let has_attachments = !self.attachments.current().is_empty();
+        if text.trim().is_empty() && !has_attachments {
             self.error = Some("内容为空，草稿已保留".to_string());
             return;
         }
-        let route = CommandRouter::new(&self.registry, self.scene.active().clone()).route(&text);
+        // Commands, skills, and `!` are routed only for text-only input; an
+        // attachment makes this an ordinary prompt.
         let mut skill_name = None;
-        match route {
-            InputRoute::Prompt { .. } => {
-                self.shell_confirm = None;
-            }
-            InputRoute::Bash { command, raw } => {
-                self.submit_bash(command, raw);
-                return;
-            }
-            InputRoute::Command {
-                owner,
-                name,
-                args,
-                raw,
-            } => {
-                if owner == "controls" {
+        if !has_attachments {
+            let route =
+                CommandRouter::new(&self.registry, self.scene.active().clone()).route(&text);
+            match route {
+                InputRoute::Prompt { .. } => {
+                    self.shell_confirm = None;
+                }
+                InputRoute::Bash { command, raw } => {
+                    self.submit_bash(command, raw);
+                    return;
+                }
+                InputRoute::Command {
+                    owner,
+                    name,
+                    args,
+                    raw,
+                } => {
+                    if owner == "controls" {
+                        self.dispatch_controls_line(&name, &args, &raw);
+                        return;
+                    }
+                    self.error = Some(format!("命令入口 {owner} 尚未接入；草稿已保留"));
+                    return;
+                }
+                InputRoute::Skill { name, args, raw } => {
+                    // Commands win before the line ever becomes a prompt. The
+                    // line is submitted literally in every other case,
+                    // including an unknown or deleted name; only the turn's own
+                    // events may say whether the official host injected a body.
+                    if self.skills.resolve(&name) == NameResolution::Command {
+                        self.dispatch_controls_line(&name, &args, &raw);
+                        return;
+                    }
+                    skill_name = Some(name);
+                }
+                InputRoute::Unregistered {
+                    owner: _,
+                    name,
+                    args,
+                    raw,
+                } => {
+                    // Slash-command business belongs to S04. A name the official
+                    // registry advertises wins over a not-yet-registered skill.
                     self.dispatch_controls_line(&name, &args, &raw);
                     return;
                 }
-                self.error = Some(format!("命令入口 {owner} 尚未接入；草稿已保留"));
-                return;
-            }
-            InputRoute::Skill { name, args, raw } => {
-                // Commands win before the line ever becomes a prompt. The line
-                // is submitted literally in every other case, including an
-                // unknown or deleted name; only the turn's own events may say
-                // whether the official host injected a body.
-                if self.skills.resolve(&name) == NameResolution::Command {
-                    self.dispatch_controls_line(&name, &args, &raw);
-                    return;
-                }
-                skill_name = Some(name);
-            }
-            InputRoute::Unregistered {
-                owner: _,
-                name,
-                args,
-                raw,
-            } => {
-                // Slash-command business belongs to S04. A name the official
-                // registry advertises wins over a not-yet-registered skill.
-                self.dispatch_controls_line(&name, &args, &raw);
-                return;
             }
         }
         if !self.ready {
@@ -2436,15 +3261,27 @@ impl App {
             self.error = Some("正在停止，等待官方 idle；草稿已保留".to_string());
             return;
         }
-        match self
-            .model
-            .begin_submit_content(&OrderedContent::from_text(&text), delivery)
-        {
+        if let Err(blocker) = self.attachments.current().ready() {
+            self.error = Some(blocker.message());
+            return;
+        }
+        let content = self.attachments.current().content(&text);
+        match self.model.begin_submit_content(&content, delivery) {
             Ok(plan) => {
+                let snapshot = SubmittedDraft {
+                    text: text.clone(),
+                    attachments: self.attachments.current().clone(),
+                };
                 self.drafts.current_mut().take();
+                self.attachments.current_mut().clear();
+                self.completion.clear();
                 self.submit_backups
-                    .insert(plan.request_id.clone(), text.clone());
+                    .insert(plan.request_id.clone(), snapshot);
                 let Some(link) = &self.link else {
+                    // No link means this process cannot observe the result;
+                    // keep the accepted echo as unknown instead of claiming a
+                    // definite failure. The S02 submission state machine owns
+                    // the later official reconciliation.
                     self.invocation.clear();
                     self.model
                         .submit_unknown(&plan.request_id, "宿主连接已关闭");
@@ -2460,13 +3297,16 @@ impl App {
                             id,
                             Pending::Submit {
                                 request_id: plan.request_id,
-                                text,
                             },
                         );
                     }
                     Err(message) => {
                         self.invocation.clear();
-                        self.model.submit_unknown(&plan.request_id, message);
+                        self.model.submit_failed(&plan.request_id, message.clone());
+                        if let Some(snapshot) = self.submit_backups.get(&plan.request_id).cloned() {
+                            self.restore_draft(&plan.request_id, &snapshot);
+                        }
+                        self.error = Some(format!("发送失败：{message}"));
                     }
                 }
             }
@@ -2815,6 +3655,7 @@ impl App {
             return;
         }
         self.edit_backup = Some(self.drafts.current().clone());
+        self.completion.clear();
         self.drafts.current_mut().set_text(item.text.clone());
         self.edit_target = Some(item.id.clone());
         self.scene.focus_mut().push(FocusId::input());
@@ -3097,7 +3938,7 @@ impl App {
         if let Some(message_id) = &self.edit_target {
             return format!("编辑队列项 {message_id}：Enter 应用，Esc 取消");
         }
-        "Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行 · Esc 停止 · Alt+O 会话 · Alt+C 压缩 · Alt+K 技能 · Alt+R 规矩 · Ctrl+Y 复制原文 · Ctrl+C 退出"
+        "Enter 发送 · Alt+Enter 插话 · @ 引用文件 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除附件 · Alt+O 会话 · Alt+C 压缩 · Alt+K 技能 · Alt+R 规矩 · Ctrl+J 换行 · Esc 停止 · Ctrl+Y 复制原文 · Ctrl+C 退出"
             .to_string()
     }
 }
@@ -3693,6 +4534,44 @@ impl App {
     }
 }
 
+/// Longest common byte prefix ending on a character boundary.
+fn common_prefix_bytes(left: &str, right: &str) -> usize {
+    let mut prefix = 0;
+    for ((left_offset, left_char), (right_offset, right_char)) in
+        left.char_indices().zip(right.char_indices())
+    {
+        if left_char != right_char {
+            break;
+        }
+        prefix = left_offset + left_char.len_utf8();
+        let _ = right_offset;
+    }
+    prefix
+}
+
+/// Longest common byte suffix of two strings that starts on a character boundary.
+fn common_suffix_bytes(left: &str, right: &str) -> usize {
+    let mut left_chars = left.char_indices().rev();
+    let mut right_chars = right.char_indices().rev();
+    let mut suffix = 0;
+    loop {
+        match (left_chars.next(), right_chars.next()) {
+            (Some((left_offset, left_char)), Some((right_offset, right_char)))
+                if left_char == right_char =>
+            {
+                let left_end = left_offset + left_char.len_utf8();
+                let right_end = right_offset + right_char.len_utf8();
+                if left_end > left.len() || right_end > right.len() {
+                    break;
+                }
+                suffix = left.len() - left_offset;
+            }
+            _ => break,
+        }
+    }
+    suffix
+}
+
 /// Map one key to a text-editing event for the rename editor.
 fn text_input_event(key: &KeyEvent) -> Option<InputEvent> {
     match key.code {
@@ -3754,6 +4633,87 @@ mod tests {
 
     fn app() -> App {
         App::new(Cli::default(), "root".to_string(), false)
+    }
+
+    fn hello_with_attachments(max_image_bytes: u64) -> Hello {
+        use nano_runtime::protocol::{
+            AttachmentLimits, Capability, Limits, ProtocolVersion, SessionFactMode, SessionFacts,
+            Versions,
+        };
+        use std::collections::BTreeMap;
+        let mut capabilities = BTreeMap::new();
+        for name in ["attachments", "fileReferences"] {
+            capabilities.insert(
+                name.to_string(),
+                Capability {
+                    status: CapabilityStatus::Supported,
+                    mode: None,
+                    detail: None,
+                    required: None,
+                },
+            );
+        }
+        Hello {
+            protocol: ProtocolVersion { major: 1, minor: 1 },
+            runtime_id: "rt-test".into(),
+            generation: 1,
+            versions: Versions {
+                official: "0.2.1-rc.2".into(),
+                bridge: "0.1.0".into(),
+                node: "v24.18.0".into(),
+            },
+            cwd: "/work".into(),
+            root_session_id: "root".into(),
+            session: SessionFacts {
+                mode: SessionFactMode::Created,
+                seq: 1,
+                header: None,
+            },
+            capabilities,
+            limits: Limits {
+                max_frame_bytes: 33_554_432,
+                max_pending_requests: 64,
+                max_attachment_chunk_bytes: 49_152,
+            },
+            attachment_limits: Some(AttachmentLimits {
+                max_image_bytes,
+                max_images_per_message: 20,
+                max_message_image_bytes: 200 * 1024 * 1024,
+                max_image_pixels: 64_000_000,
+                max_image_dimension: 8192,
+                media_types: vec![
+                    "image/png".into(),
+                    "image/jpeg".into(),
+                    "image/webp".into(),
+                    "image/gif".into(),
+                ],
+                max_chunk_bytes: 49_152,
+                file_admission: "verbatim".into(),
+            }),
+        }
+    }
+
+    fn png_fixture() -> Vec<u8> {
+        let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        bytes.extend_from_slice(&[0, 0, 0, 13]);
+        bytes.extend_from_slice(b"IHDR");
+        bytes.extend_from_slice(&1u32.to_be_bytes());
+        bytes.extend_from_slice(&1u32.to_be_bytes());
+        bytes.extend_from_slice(&[8, 6, 0, 0, 0]);
+        bytes
+    }
+
+    fn ready_card(receipt_id: &str, kind: AttachmentKind) -> AttachmentCard {
+        AttachmentCard {
+            receipt_id: receipt_id.into(),
+            kind,
+            name: "pixel.png".into(),
+            bytes: 33,
+            media_type: Some("image/png".into()),
+            width: Some(1),
+            height: Some(1),
+            state: AttachmentState::Ready,
+        }
     }
 
     fn queue_event(app: &mut App, text: &str) {
@@ -4195,7 +5155,7 @@ mod tests {
     }
 
     #[test]
-    fn a_prepared_submission_clears_the_input_and_keeps_an_echo() {
+    fn a_submission_without_a_host_is_marked_unknown() {
         let mut app = app();
         app.ready = true;
         app.drafts.current_mut().set_text("hello");
@@ -4300,9 +5260,12 @@ mod tests {
     fn a_failed_submission_keeps_both_the_failed_text_and_new_input() {
         let mut app = app();
         app.drafts.current_mut().set_text("new draft");
-        app.submit_backups
-            .insert("r-1".into(), "failed text".into());
-        app.restore_draft("r-1", "failed text");
+        let failed = SubmittedDraft {
+            text: "failed text".into(),
+            attachments: ComposerAttachments::default(),
+        };
+        app.submit_backups.insert("r-1".into(), failed.clone());
+        app.restore_draft("r-1", &failed);
         assert_eq!(app.drafts.current().text(), "failed text\n\nnew draft");
     }
 
@@ -4366,13 +5329,17 @@ mod tests {
         let mut app = app();
         app.ready = true;
         let plan = app.model.begin_submit("text", Delivery::Queue).unwrap();
-        app.submit_backups
-            .insert(plan.request_id.clone(), "text".into());
+        app.submit_backups.insert(
+            plan.request_id.clone(),
+            SubmittedDraft {
+                text: plan.text.clone(),
+                attachments: ComposerAttachments::default(),
+            },
+        );
         app.pending.insert(
             9,
             Pending::Submit {
                 request_id: plan.request_id.clone(),
-                text: "text".into(),
             },
         );
         app.handle_request_done(
@@ -4392,13 +5359,17 @@ mod tests {
         let mut app = app();
         app.ready = true;
         let plan = app.model.begin_submit("text", Delivery::Queue).unwrap();
-        app.submit_backups
-            .insert(plan.request_id.clone(), "text".into());
+        app.submit_backups.insert(
+            plan.request_id.clone(),
+            SubmittedDraft {
+                text: plan.text.clone(),
+                attachments: ComposerAttachments::default(),
+            },
+        );
         app.pending.insert(
             9,
             Pending::Submit {
                 request_id: plan.request_id.clone(),
-                text: "text".into(),
             },
         );
         app.handle_request_done(
@@ -4449,7 +5420,10 @@ mod tests {
     #[test]
     fn ctrl_p_opens_the_palette_and_escape_closes_it() {
         let mut app = app();
-        assert!(app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL)));
+        assert!(app.handle_key(KeyEvent::new(
+            KeyCode::Char('p'),
+            KeyModifiers::CONTROL
+        )));
         assert!(app.panel.is_open());
         assert_eq!(app.panel.mode(), &PanelMode::Commands);
         assert!(app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
@@ -4482,9 +5456,7 @@ mod tests {
     #[test]
     fn a_command_needs_a_ready_host_and_keeps_the_draft_until_then() {
         let mut app = app();
-        app.drafts
-            .current_mut()
-            .set_text("/permission danger-full-access");
+        app.drafts.current_mut().set_text("/permission danger-full-access");
         assert!(app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
         assert_eq!(
             app.drafts.current().text(),
@@ -4697,7 +5669,11 @@ mod tests {
             Ok(json!({"executed": true, "commandId": "cmd-2", "kind": "error", "text": "nope"})),
         );
         assert!(app.error.as_deref().unwrap().contains("命令 compact 失败"));
-        assert!(!app.notice.as_deref().unwrap_or_default().contains("已完成"));
+        assert!(!app
+            .notice
+            .as_deref()
+            .unwrap_or_default()
+            .contains("已完成"));
     }
 
     #[test]
@@ -4766,6 +5742,505 @@ mod tests {
             }),
         );
         assert!(app.error.as_deref().unwrap().contains("本窗口不接管"));
+    }
+
+    #[test]
+    fn a_stale_file_reference_error_does_not_clear_newer_candidates() {
+        use nano_attachments::{CandidateKind, FileReferenceCandidate};
+        let mut app = app();
+        app.ready = true;
+        let first = app.completion.update("see @sr", 7);
+        let stale = first.request.unwrap().revision;
+        let second = app.completion.update("see @srx", 8);
+        let current = second.request.unwrap().revision;
+        app.completion.apply(
+            current,
+            vec![FileReferenceCandidate {
+                path: "src/lib.rs".into(),
+                kind: CandidateKind::File,
+            }],
+        );
+        app.pending.insert(
+            7,
+            Pending::FileReferences {
+                revision: stale,
+                protocol_id: "old".into(),
+            },
+        );
+        app.handle_request_done(
+            7,
+            Err(RequestError {
+                kind: RequestErrorKind::Rpc,
+                code: None,
+                message: "cancelled".into(),
+            }),
+        );
+        assert!(app.completion.visible());
+        assert_eq!(app.completion.candidates().len(), 1);
+    }
+
+    #[test]
+    fn accepting_a_file_candidate_replaces_only_the_token() {
+        use nano_attachments::{CandidateKind, FileReferenceCandidate};
+        let mut app = app();
+        app.drafts.current_mut().set_text("see @sr");
+        let update = app.completion.update("see @sr", 7);
+        let revision = update.request.unwrap().revision;
+        app.completion.apply(
+            revision,
+            vec![FileReferenceCandidate {
+                path: "src/lib.rs".into(),
+                kind: CandidateKind::File,
+            }],
+        );
+        app.accept_completion();
+        assert_eq!(app.drafts.current().text(), "see @src/lib.rs");
+        assert_eq!(app.drafts.current().cursor(), "see @src/lib.rs".len());
+    }
+
+    #[test]
+    fn a_local_png_is_probed_and_staged_before_the_host_is_contacted() {
+        let mut app = app();
+        app.hello = Some(hello_with_attachments(20 * 1024 * 1024));
+        app.attachment_limits = ImageLimits::from_hello(app.hello.as_ref().unwrap());
+        app.ready = true;
+        let dir = std::env::temp_dir().join(nano_conversation::new_request_id());
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("pixel.png");
+        std::fs::write(&path, png_fixture()).unwrap();
+        app.attach_path(path.to_str().unwrap()).unwrap();
+        let cards = app.attachments.current().cards();
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].kind, AttachmentKind::Image);
+        assert_eq!(cards[0].width, Some(1));
+        // There is no host link in this test, so the staged card is failed,
+        // not silently dropped.
+        assert!(matches!(cards[0].state, AttachmentState::Failed(_)));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_image_over_the_deployment_limit_is_refused_before_staging() {
+        let mut app = app();
+        app.hello = Some(hello_with_attachments(4));
+        app.attachment_limits = ImageLimits::from_hello(app.hello.as_ref().unwrap());
+        app.ready = true;
+        let dir = std::env::temp_dir().join(nano_conversation::new_request_id());
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("pixel.png");
+        std::fs::write(&path, png_fixture()).unwrap();
+        let error = app.attach_path(path.to_str().unwrap()).unwrap_err();
+        assert!(error.contains("超过"), "{error}");
+        assert!(app.attachments.current().is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn restoring_a_failed_submission_keeps_attachment_cards() {
+        let mut app = app();
+        app.drafts.current_mut().set_text("look ");
+        let cursor = app.drafts.current().cursor();
+        app.attachments
+            .current_mut()
+            .insert(cursor, ready_card("r-img", AttachmentKind::Image));
+        let submitted = SubmittedDraft {
+            text: "look ".into(),
+            attachments: app.attachments.current().clone(),
+        };
+        app.drafts.current_mut().take();
+        app.attachments.current_mut().clear();
+        app.submit_backups.insert("r-1".into(), submitted.clone());
+        app.restore_draft("r-1", &submitted);
+        assert_eq!(app.drafts.current().text(), "look ");
+        let cards = app.attachments.current().cards();
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].receipt_id, "r-img");
+        assert_eq!(app.attachments.current().anchors()[0].offset, cursor);
+    }
+
+    #[test]
+    fn finishing_an_upload_during_a_queue_edit_keeps_the_card_ready() {
+        let mut app = app();
+        app.drafts.current_mut().set_text("original");
+        queue_event(&mut app, "queued text");
+        app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::ALT));
+        assert_eq!(app.editing_queue(), Some("m-1"));
+        let mut card = ready_card("r-img", AttachmentKind::Image);
+        card.state = AttachmentState::Uploading { sent: 1, total: 2 };
+        app.attachments.current_mut().insert(0, card);
+        app.uploads.insert(
+            "r-img".into(),
+            UploadJob {
+                kind: AttachmentKind::Image,
+                image_bytes: None,
+                file: None,
+                total: 2,
+                offset: 1,
+                sequence: 1,
+                finishing: true,
+            },
+        );
+        app.finish_upload(
+            "r-img",
+            &serde_json::json!({
+                "receiptId": "r-img",
+                "kind": "image",
+                "ready": true,
+                "image": {"mediaType": "image/png", "bytes": 1}
+            }),
+        );
+        assert!(app.uploads.is_empty());
+        assert_eq!(
+            app.attachments.current().card("r-img").unwrap().state,
+            AttachmentState::Ready
+        );
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.editing_queue(), None);
+        assert_eq!(app.attachments.current().cards().len(), 1);
+    }
+
+    #[test]
+    fn transport_loss_marks_uploading_cards_unknown() {
+        let mut app = app();
+        let mut card = ready_card("r-img", AttachmentKind::Image);
+        card.state = AttachmentState::Uploading { sent: 1, total: 2 };
+        app.attachments.current_mut().insert(0, card);
+        app.uploads.insert(
+            "r-img".into(),
+            UploadJob {
+                kind: AttachmentKind::Image,
+                image_bytes: None,
+                file: None,
+                total: 2,
+                offset: 1,
+                sequence: 1,
+                finishing: false,
+            },
+        );
+        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::TransportClosed {
+            lost: true,
+        }));
+        let card = app.attachments.current().cards()[0].clone();
+        assert!(matches!(card.state, AttachmentState::Unknown(_)));
+    }
+
+    #[test]
+    fn stale_agent_events_for_another_address_are_ignored() {
+        let mut app = app();
+        let payload = json!({
+            "address": {"rootSessionId": "other"},
+            "inbox": {"nextTurn": [{"id": "m-9", "content": [], "source": {}}], "nextStep": []}
+        });
+        assert!(!app.model.apply_event("conversation.inbox", &payload));
+        assert!(app.model.inbox().is_empty());
+    }
+
+    fn skill_entry(name: &str, shadowed: bool) -> Value {
+        json!({
+            "name": name,
+            "description": format!("{name} description"),
+            "modelInvocable": true,
+            "userInvocable": true,
+            "path": format!("/tmp/{name}/SKILL.md"),
+            "source": "project-agents",
+            "provider": "filesystem",
+            "shadowedByCommand": shadowed,
+        })
+    }
+
+    fn install_catalog(app: &mut App, skills: Value, commands: Value) {
+        app.skills
+            .apply_list(
+                &json!({
+                    "address": {"rootSessionId": "root"},
+                    "complete": true,
+                    "commands": commands,
+                    "skills": skills,
+                }),
+                "root",
+            )
+            .unwrap();
+    }
+
+    fn session_event(app: &mut App, event_type: &str, data: Value) {
+        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::Event(
+            nano_runtime::protocol::EventParams {
+                runtime_id: "rt".into(),
+                generation: 1,
+                subscription_id: "sub-1".into(),
+                sequence: 1,
+                kind: "session.event".into(),
+                payload: json!({
+                    "address": {"rootSessionId": "root"},
+                    "seq": 1,
+                    "type": event_type,
+                    "data": data,
+                }),
+            },
+        )));
+    }
+
+    #[test]
+    fn alt_k_opens_the_catalog_and_enter_inserts_a_literal_token() {
+        let mut app = app();
+        install_catalog(&mut app, json!([skill_entry("hello", false)]), json!([]));
+        app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::ALT));
+        assert!(app.skills_panel_open());
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.drafts.current().text(), "/hello ");
+        assert!(app.scene.focus().input_focused());
+        assert!(app.notice.as_deref().unwrap().contains("模型成本"));
+    }
+
+    #[test]
+    fn a_same_name_command_blocks_the_skill_submission() {
+        let mut app = app();
+        app.ready = true;
+        install_catalog(
+            &mut app,
+            json!([skill_entry("compact", true)]),
+            json!(["compact"]),
+        );
+        app.drafts.current_mut().set_text("/compact");
+        app.submit_draft(Delivery::Queue);
+        assert_eq!(app.drafts.current().text(), "/compact");
+        assert!(app.error.as_deref().unwrap().contains("命令优先"));
+        assert!(app.model.live().echoes.is_empty());
+    }
+
+    #[test]
+    fn an_unknown_slash_name_is_submitted_literally_and_tracked() {
+        let mut app = app();
+        app.ready = true;
+        install_catalog(&mut app, json!([skill_entry("hello", false)]), json!([]));
+        app.drafts.current_mut().set_text("/gone now");
+        app.submit_draft(Delivery::Queue);
+        assert!(app.drafts.current().is_empty());
+        assert_eq!(app.model.live().echoes[0].text, "/gone now");
+        assert_eq!(app.skills.resolve("gone"), NameResolution::Unknown);
+    }
+
+    #[test]
+    fn a_failed_preview_keeps_the_error_visible() {
+        let mut app = app();
+        app.ready = true;
+        install_catalog(&mut app, json!([skill_entry("hello", false)]), json!([]));
+        app.open_skills_panel();
+        app.skill_preview_target = Some("hello".into());
+        app.pending.insert(
+            7,
+            Pending::SkillPreview {
+                name: "hello".into(),
+            },
+        );
+        app.handle_request_done(
+            7,
+            Err(RequestError {
+                kind: RequestErrorKind::Rpc,
+                code: None,
+                message: "skill path is unreadable".into(),
+            }),
+        );
+        assert!(app.skill_preview_target.is_some());
+        assert!(app
+            .skill_preview_error
+            .as_deref()
+            .unwrap()
+            .contains("unreadable"));
+    }
+
+    #[test]
+    fn a_foreign_preview_response_is_rejected() {
+        let mut app = app();
+        app.ready = true;
+        app.skill_preview_target = Some("hello".into());
+        app.pending.insert(
+            8,
+            Pending::SkillPreview {
+                name: "hello".into(),
+            },
+        );
+        app.handle_request_done(
+            8,
+            Ok(json!({
+                "address": {"rootSessionId": "other"},
+                "name": "hello",
+                "path": "/tmp/hello/SKILL.md",
+                "text": "body",
+                "truncated": false,
+                "bytes": 4,
+                "limit": 65536,
+            })),
+        );
+        assert!(app.skill_preview.is_none());
+        assert!(app
+            .skill_preview_error
+            .as_deref()
+            .unwrap()
+            .contains("belongs to root session"));
+    }
+
+    #[test]
+    fn a_catalog_refresh_drops_a_removed_preview() {
+        let mut app = app();
+        install_catalog(&mut app, json!([skill_entry("hello", false)]), json!([]));
+        app.skill_preview_target = Some("hello".into());
+        app.skill_preview = Some(
+            SkillPreview::parse(
+                &json!({
+                    "address": {"rootSessionId": "root"},
+                    "name": "hello",
+                    "path": "/tmp/hello/SKILL.md",
+                    "text": "body",
+                    "truncated": false,
+                    "bytes": 4,
+                    "limit": 65536,
+                }),
+                "root",
+            )
+            .unwrap(),
+        );
+        install_catalog(&mut app, json!([skill_entry("other", false)]), json!([]));
+        app.reconcile_skill_preview();
+        assert!(app.skill_preview_target.is_none());
+        assert!(app.skill_preview.is_none());
+    }
+
+    #[test]
+    fn a_pathless_skill_is_still_submitted_literally() {
+        let mut app = app();
+        app.ready = true;
+        let mut entry = skill_entry("virtual", false);
+        entry.as_object_mut().unwrap().remove("path");
+        install_catalog(&mut app, json!([entry]), json!([]));
+        app.drafts.current_mut().set_text("/virtual");
+        app.submit_draft(Delivery::Queue);
+        assert!(app.drafts.current().is_empty());
+        assert_eq!(app.model.live().echoes[0].text, "/virtual");
+    }
+
+    #[test]
+    fn an_official_injection_clears_the_pending_skill_fact() {
+        let mut app = app();
+        app.ready = true;
+        install_catalog(&mut app, json!([skill_entry("hello", false)]), json!([]));
+        app.drafts.current_mut().set_text("/hello");
+        app.submit_draft(Delivery::Queue);
+        let request_id = app.model.live().echoes[0].request_id.clone();
+        // The unit environment has no live host link; simulate the accepted
+        // submission that would have armed the official-message tracker.
+        app.invocation.note_submission("hello", request_id.clone());
+        session_event(
+            &mut app,
+            "user/message",
+            json!({"source": {"kind": "user", "rpcId": request_id}, "content": []}),
+        );
+        session_event(
+            &mut app,
+            "user/message",
+            json!({"source": {"kind": "skill-invocation", "name": "hello"}, "content": []}),
+        );
+        assert!(app.notice.as_deref().unwrap().contains("已注入"));
+        assert_eq!(app.invocation.pending(), None);
+    }
+
+    #[test]
+    fn a_turn_end_without_injection_reports_not_injected() {
+        let mut app = app();
+        app.ready = true;
+        install_catalog(&mut app, json!([skill_entry("hello", false)]), json!([]));
+        app.drafts.current_mut().set_text("/hello");
+        app.submit_draft(Delivery::Queue);
+        let request_id = app.model.live().echoes[0].request_id.clone();
+        app.invocation.note_submission("hello", request_id.clone());
+        session_event(
+            &mut app,
+            "user/message",
+            json!({"source": {"kind": "user", "rpcId": request_id}, "content": []}),
+        );
+        session_event(
+            &mut app,
+            "turn/end",
+            json!({"turn": 1, "reason": {"kind": "completed"}}),
+        );
+        assert!(app.notice.as_deref().unwrap().contains("未注入"));
+    }
+
+    #[test]
+    fn page_keys_scroll_the_rules_panel_instead_of_the_feed() {
+        let mut app = app();
+        app.open_instructions_panel();
+        app.instructions_max_scroll = 100;
+        let before = app.scroll_back;
+        app.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+        assert_eq!(app.instructions_scroll, 10);
+        assert_eq!(app.scroll_back, before);
+        assert!(app.instructions_panel_open());
+    }
+
+    #[test]
+    fn subscription_kinds_cover_every_contracted_event_kind() {
+        let mut ours = crate::link::SUBSCRIPTION_KINDS.to_vec();
+        // Job kinds are added by `subscription_kinds` only when the host
+        // reports the capability; the full potential set must still cover the
+        // whole contract.
+        ours.extend(["jobs.event", "jobs.output"]);
+        ours.sort_unstable();
+        let mut expected = nano_runtime::EVENT_KINDS.to_vec();
+        expected.sort_unstable();
+        assert_eq!(ours, expected);
+    }
+
+    #[test]
+    fn a_stream_event_does_not_close_the_skills_panel() {
+        let mut app = app();
+        app.open_skills_panel();
+        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::Event(
+            nano_runtime::protocol::EventParams {
+                runtime_id: "rt".into(),
+                generation: 1,
+                subscription_id: "sub-1".into(),
+                sequence: 1,
+                kind: "conversation.status".into(),
+                payload: json!({"address": {"rootSessionId": "root"}, "status": "idle"}),
+            },
+        )));
+        assert!(app.skills_panel_open());
+    }
+
+    #[test]
+    fn tab_does_not_close_the_skills_panel() {
+        let mut app = app();
+        app.open_skills_panel();
+        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert!(app.skills_panel_open());
+    }
+
+    #[test]
+    fn alt_r_opens_the_instruction_sources_panel() {
+        let mut app = app();
+        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::Event(
+            nano_runtime::protocol::EventParams {
+                runtime_id: "rt".into(),
+                generation: 1,
+                subscription_id: "sub-1".into(),
+                sequence: 1,
+                kind: "instructions.changed".into(),
+                payload: json!({
+                    "address": {"rootSessionId": "root"},
+                    "available": true,
+                    "baseline": true,
+                    "loadedAt": 1_000_000,
+                    "sources": [{"path": "AGENTS.md", "action": "set"}],
+                    "budgetNotice": "Workspace instruction budget 65536 bytes: omitted CLAUDE.md",
+                }),
+            },
+        )));
+        assert_eq!(app.instructions.sources.len(), 1);
+        app.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::ALT));
+        assert!(app.instructions_panel_open());
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.scene.focus().input_focused());
     }
 
     #[test]
@@ -5137,324 +6612,5 @@ mod tests {
         app.sessions_panel.close();
         assert!(app.sessions_panel.rows.is_empty());
         assert_eq!(app.sessions_panel.selected, 0);
-    }
-
-    #[test]
-    fn stale_agent_events_for_another_address_are_ignored() {
-        let mut app = app();
-        let payload = json!({
-            "address": {"rootSessionId": "other"},
-            "inbox": {"nextTurn": [{"id": "m-9", "content": [], "source": {}}], "nextStep": []}
-        });
-        assert!(!app.model.apply_event("conversation.inbox", &payload));
-        assert!(app.model.inbox().is_empty());
-    }
-
-    fn skill_entry(name: &str, shadowed: bool) -> Value {
-        json!({
-            "name": name,
-            "description": format!("{name} description"),
-            "modelInvocable": true,
-            "userInvocable": true,
-            "path": format!("/tmp/{name}/SKILL.md"),
-            "source": "project-agents",
-            "provider": "filesystem",
-            "shadowedByCommand": shadowed,
-        })
-    }
-
-    fn install_catalog(app: &mut App, skills: Value, commands: Value) {
-        app.skills
-            .apply_list(
-                &json!({
-                    "address": {"rootSessionId": "root"},
-                    "complete": true,
-                    "commands": commands,
-                    "skills": skills,
-                }),
-                "root",
-            )
-            .unwrap();
-    }
-
-    fn session_event(app: &mut App, event_type: &str, data: Value) {
-        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::Event(
-            nano_runtime::protocol::EventParams {
-                runtime_id: "rt".into(),
-                generation: 1,
-                subscription_id: "sub-1".into(),
-                sequence: 1,
-                kind: "session.event".into(),
-                payload: json!({
-                    "address": {"rootSessionId": "root"},
-                    "seq": 1,
-                    "type": event_type,
-                    "data": data,
-                }),
-            },
-        )));
-    }
-
-    #[test]
-    fn alt_k_opens_the_catalog_and_enter_inserts_a_literal_token() {
-        let mut app = app();
-        install_catalog(&mut app, json!([skill_entry("hello", false)]), json!([]));
-        app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::ALT));
-        assert!(app.skills_panel_open());
-        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        assert_eq!(app.drafts.current().text(), "/hello ");
-        assert!(app.scene.focus().input_focused());
-        assert!(app.notice.as_deref().unwrap().contains("模型成本"));
-    }
-
-    #[test]
-    fn a_same_name_command_blocks_the_skill_submission() {
-        let mut app = app();
-        app.ready = true;
-        install_catalog(
-            &mut app,
-            json!([skill_entry("compact", true)]),
-            json!(["compact"]),
-        );
-        app.drafts.current_mut().set_text("/compact");
-        app.submit_draft(Delivery::Queue);
-        assert_eq!(app.drafts.current().text(), "/compact");
-        assert!(app.error.as_deref().unwrap().contains("命令优先"));
-        assert!(app.model.live().echoes.is_empty());
-    }
-
-    #[test]
-    fn an_unknown_slash_name_is_submitted_literally_and_tracked() {
-        let mut app = app();
-        app.ready = true;
-        install_catalog(&mut app, json!([skill_entry("hello", false)]), json!([]));
-        app.drafts.current_mut().set_text("/gone now");
-        app.submit_draft(Delivery::Queue);
-        assert!(app.drafts.current().is_empty());
-        assert_eq!(app.model.live().echoes[0].text, "/gone now");
-        assert_eq!(app.skills.resolve("gone"), NameResolution::Unknown);
-    }
-
-    #[test]
-    fn a_failed_preview_keeps_the_error_visible() {
-        let mut app = app();
-        app.ready = true;
-        install_catalog(&mut app, json!([skill_entry("hello", false)]), json!([]));
-        app.open_skills_panel();
-        app.skill_preview_target = Some("hello".into());
-        app.pending.insert(
-            7,
-            Pending::SkillPreview {
-                name: "hello".into(),
-            },
-        );
-        app.handle_request_done(
-            7,
-            Err(RequestError {
-                kind: RequestErrorKind::Rpc,
-                code: None,
-                message: "skill path is unreadable".into(),
-            }),
-        );
-        assert!(app.skill_preview_target.is_some());
-        assert!(app
-            .skill_preview_error
-            .as_deref()
-            .unwrap()
-            .contains("unreadable"));
-    }
-
-    #[test]
-    fn a_foreign_preview_response_is_rejected() {
-        let mut app = app();
-        app.ready = true;
-        app.skill_preview_target = Some("hello".into());
-        app.pending.insert(
-            8,
-            Pending::SkillPreview {
-                name: "hello".into(),
-            },
-        );
-        app.handle_request_done(
-            8,
-            Ok(json!({
-                "address": {"rootSessionId": "other"},
-                "name": "hello",
-                "path": "/tmp/hello/SKILL.md",
-                "text": "body",
-                "truncated": false,
-                "bytes": 4,
-                "limit": 65536,
-            })),
-        );
-        assert!(app.skill_preview.is_none());
-        assert!(app
-            .skill_preview_error
-            .as_deref()
-            .unwrap()
-            .contains("belongs to root session"));
-    }
-
-    #[test]
-    fn a_catalog_refresh_drops_a_removed_preview() {
-        let mut app = app();
-        install_catalog(&mut app, json!([skill_entry("hello", false)]), json!([]));
-        app.skill_preview_target = Some("hello".into());
-        app.skill_preview = Some(
-            SkillPreview::parse(
-                &json!({
-                    "address": {"rootSessionId": "root"},
-                    "name": "hello",
-                    "path": "/tmp/hello/SKILL.md",
-                    "text": "body",
-                    "truncated": false,
-                    "bytes": 4,
-                    "limit": 65536,
-                }),
-                "root",
-            )
-            .unwrap(),
-        );
-        install_catalog(&mut app, json!([skill_entry("other", false)]), json!([]));
-        app.reconcile_skill_preview();
-        assert!(app.skill_preview_target.is_none());
-        assert!(app.skill_preview.is_none());
-    }
-
-    #[test]
-    fn a_pathless_skill_is_still_submitted_literally() {
-        let mut app = app();
-        app.ready = true;
-        let mut entry = skill_entry("virtual", false);
-        entry.as_object_mut().unwrap().remove("path");
-        install_catalog(&mut app, json!([entry]), json!([]));
-        app.drafts.current_mut().set_text("/virtual");
-        app.submit_draft(Delivery::Queue);
-        assert!(app.drafts.current().is_empty());
-        assert_eq!(app.model.live().echoes[0].text, "/virtual");
-    }
-
-    #[test]
-    fn an_official_injection_clears_the_pending_skill_fact() {
-        let mut app = app();
-        app.ready = true;
-        install_catalog(&mut app, json!([skill_entry("hello", false)]), json!([]));
-        app.drafts.current_mut().set_text("/hello");
-        app.submit_draft(Delivery::Queue);
-        let request_id = app.model.live().echoes[0].request_id.clone();
-        // The unit environment has no live host link; simulate the accepted
-        // submission that would have armed the official-message tracker.
-        app.invocation.note_submission("hello", request_id.clone());
-        session_event(
-            &mut app,
-            "user/message",
-            json!({"source": {"kind": "user", "rpcId": request_id}, "content": []}),
-        );
-        session_event(
-            &mut app,
-            "user/message",
-            json!({"source": {"kind": "skill-invocation", "name": "hello"}, "content": []}),
-        );
-        assert!(app.notice.as_deref().unwrap().contains("已注入"));
-        assert_eq!(app.invocation.pending(), None);
-    }
-
-    #[test]
-    fn a_turn_end_without_injection_reports_not_injected() {
-        let mut app = app();
-        app.ready = true;
-        install_catalog(&mut app, json!([skill_entry("hello", false)]), json!([]));
-        app.drafts.current_mut().set_text("/hello");
-        app.submit_draft(Delivery::Queue);
-        let request_id = app.model.live().echoes[0].request_id.clone();
-        app.invocation.note_submission("hello", request_id.clone());
-        session_event(
-            &mut app,
-            "user/message",
-            json!({"source": {"kind": "user", "rpcId": request_id}, "content": []}),
-        );
-        session_event(
-            &mut app,
-            "turn/end",
-            json!({"turn": 1, "reason": {"kind": "completed"}}),
-        );
-        assert!(app.notice.as_deref().unwrap().contains("未注入"));
-    }
-
-    #[test]
-    fn page_keys_scroll_the_rules_panel_instead_of_the_feed() {
-        let mut app = app();
-        app.open_instructions_panel();
-        app.instructions_max_scroll = 100;
-        let before = app.scroll_back;
-        app.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
-        assert_eq!(app.instructions_scroll, 10);
-        assert_eq!(app.scroll_back, before);
-        assert!(app.instructions_panel_open());
-    }
-
-    #[test]
-    fn subscription_kinds_cover_every_contracted_event_kind() {
-        let mut ours = crate::link::SUBSCRIPTION_KINDS.to_vec();
-        // Job kinds are added by `subscription_kinds` only when the host
-        // reports the capability; the full potential set must still cover the
-        // whole contract.
-        ours.extend(["jobs.event", "jobs.output"]);
-        ours.sort_unstable();
-        let mut expected = nano_runtime::EVENT_KINDS.to_vec();
-        expected.sort_unstable();
-        assert_eq!(ours, expected);
-    }
-
-    #[test]
-    fn a_stream_event_does_not_close_the_skills_panel() {
-        let mut app = app();
-        app.open_skills_panel();
-        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::Event(
-            nano_runtime::protocol::EventParams {
-                runtime_id: "rt".into(),
-                generation: 1,
-                subscription_id: "sub-1".into(),
-                sequence: 1,
-                kind: "conversation.status".into(),
-                payload: json!({"address": {"rootSessionId": "root"}, "status": "idle"}),
-            },
-        )));
-        assert!(app.skills_panel_open());
-    }
-
-    #[test]
-    fn tab_does_not_close_the_skills_panel() {
-        let mut app = app();
-        app.open_skills_panel();
-        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-        assert!(app.skills_panel_open());
-    }
-
-    #[test]
-    fn alt_r_opens_the_instruction_sources_panel() {
-        let mut app = app();
-        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::Event(
-            nano_runtime::protocol::EventParams {
-                runtime_id: "rt".into(),
-                generation: 1,
-                subscription_id: "sub-1".into(),
-                sequence: 1,
-                kind: "instructions.changed".into(),
-                payload: json!({
-                    "address": {"rootSessionId": "root"},
-                    "available": true,
-                    "baseline": true,
-                    "loadedAt": 1_000_000,
-                    "sources": [{"path": "AGENTS.md", "action": "set"}],
-                    "budgetNotice": "Workspace instruction budget 65536 bytes: omitted CLAUDE.md",
-                }),
-            },
-        )));
-        assert_eq!(app.instructions.sources.len(), 1);
-        app.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::ALT));
-        assert!(app.instructions_panel_open());
-        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        assert!(app.scene.focus().input_focused());
     }
 }

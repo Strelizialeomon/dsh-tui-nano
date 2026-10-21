@@ -1,0 +1,14 @@
+✔ attachment staging, ordered admission, discovery, and resume (3358.6855ms)
+✔ malformed frame is reported, subscription replays, shutdown is clean (2144.990125ms)
+✔ manual shell execution injects bash context and job observation is non-consuming (1398.977708ms)
+✔ conversation surface submits, dedupes, and keeps official identity (2028.264917ms)
+✔ official sessions list, rename, context, compact, occupancy, and resume (5118.0345ms)
+✔ real host discovers, previews, invalidates, and injects skills (2478.408708ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5612.220375

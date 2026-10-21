@@ -15,6 +15,7 @@ import { BoundedWriter } from './writer.mjs'
 import { claimMount, releaseMount } from './ledger.mjs'
 import { SubscriptionHub } from './events.mjs'
 import { ConversationService } from '../conversation/service.mjs'
+import { AttachmentService } from '../attachments/service.mjs'
 import { SessionsService } from '../sessions/service.mjs'
 import { ShellService } from '../shell/service.mjs'
 import { JobsService } from '../jobs/service.mjs'
@@ -43,6 +44,7 @@ export function startHost(ctx, config) {
     writer: undefined,
     hub: undefined,
     conversation: undefined,
+    attachments: undefined,
     sessions: undefined,
     shell: undefined,
     jobs: undefined,
@@ -216,12 +218,21 @@ async function runStartup(state, config) {
     nonce: state.config.nonce,
     nonceRequired: state.transport.nonceRequired,
   })
+  state.attachments = new AttachmentService({
+    ctx,
+    agent: state.agentHandle.agent,
+    session,
+    rootSessionId: state.config.rootSessionId,
+    dataRoot: state.config.dataRoot,
+    config: state.config,
+  })
   state.conversation = new ConversationService({
     ctx,
     hub: state.hub,
     agent: state.agentHandle.agent,
     session,
     rootSessionId: state.config.rootSessionId,
+    attachments: state.attachments,
   })
   state.sessions = new SessionsService({
     ctx,
@@ -258,6 +269,7 @@ async function runStartup(state, config) {
     rootSessionId: state.config.rootSessionId,
   })
 
+  const attachmentLimits = state.attachments.helloLimits()
   const hello = {
     jsonrpc: '2.0',
     method: 'nano.hello',
@@ -283,6 +295,7 @@ async function runStartup(state, config) {
         maxPendingRequests: LIMITS.maxPendingRequests,
         maxAttachmentChunkBytes: LIMITS.maxAttachmentChunkBytes,
       },
+      ...(attachmentLimits === undefined ? {} : { attachmentLimits }),
     },
   }
   await state.writer.sendControl(
@@ -469,7 +482,10 @@ function handleLine(state, line) {
     method: frame.method,
     // Manual compaction settles through the official command's cancellation
     // text, so it is a cancellable wait like a subscription replay.
-    cancellable: frame.method === 'nano.subscribe' || frame.method === 'nano.sessions.compact',
+    cancellable:
+      frame.method === 'nano.subscribe' ||
+      frame.method === 'nano.fileReferences.list' ||
+      frame.method === 'nano.sessions.compact',
     controller: new AbortController(),
   }
   state.inFlight.set(frame.id, entry)
@@ -523,8 +539,33 @@ async function dispatchRequest(state, frame) {
       await sendResult(state, id, { cancelled: true })
       return undefined
     }
+    case 'nano.attachment.begin': {
+      await sendResult(state, id, state.attachments.begin(params))
+      return undefined
+    }
+    case 'nano.attachment.chunk': {
+      await sendResult(state, id, state.attachments.chunk(params))
+      return undefined
+    }
+    case 'nano.attachment.finish': {
+      await sendResult(state, id, await state.attachments.finish(params))
+      return undefined
+    }
+    case 'nano.attachment.discard': {
+      await sendResult(state, id, state.attachments.discard(params))
+      return undefined
+    }
+    case 'nano.fileReferences.list': {
+      const entry = state.inFlight.get(id)
+      await sendResult(
+        state,
+        id,
+        await state.attachments.listReferences(params, entry?.controller.signal),
+      )
+      return undefined
+    }
     case 'nano.conversation.submit': {
-      await sendResult(state, id, state.conversation.submit(params))
+      await sendResult(state, id, await state.conversation.submit(params))
       return undefined
     }
     case 'nano.conversation.editQueued': {
@@ -698,6 +739,8 @@ async function runShutdown(state, reason) {
     state.controls = undefined
     state.conversation?.close()
     state.conversation = undefined
+    state.attachments?.close()
+    state.attachments = undefined
     state.sessions?.close()
     state.sessions = undefined
     state.skills?.close()
@@ -829,6 +872,14 @@ async function failStartup(state, error) {
       state.conversation = undefined
     } catch (cleanupError) {
       cleanupFailures.push(`conversation: ${describe(cleanupError)}`)
+    }
+  }
+  if (state.attachments !== undefined) {
+    try {
+      state.attachments.close()
+      state.attachments = undefined
+    } catch (cleanupError) {
+      cleanupFailures.push(`attachments: ${describe(cleanupError)}`)
     }
   }
   if (state.sessions !== undefined) {

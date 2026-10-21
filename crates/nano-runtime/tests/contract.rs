@@ -176,7 +176,7 @@ fn implemented_methods_match() {
         );
         match method["status"].as_str().unwrap() {
             "implemented" => assert!(
-                ["S01", "S02", "S04", "S05", "S07", "S08"]
+                ["S01", "S02", "S04", "S05", "S06", "S07", "S08"]
                     .contains(&method["owner"].as_str().unwrap()),
                 "{name} is implemented by an owner this contract test does not know"
             ),

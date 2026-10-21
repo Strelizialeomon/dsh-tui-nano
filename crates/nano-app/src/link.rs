@@ -101,25 +101,24 @@ pub enum LinkEvent {
     },
 }
 
-/// One queued request. A per-request wait bound lets a manual shell command
-/// outlive the ordinary 30s request timeout without blocking other requests.
-struct Command {
-    id: u64,
-    method: String,
-    params: Value,
-    timeout: Option<Duration>,
+/// One locally tracked request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestHandle {
+    /// Local id used in `RequestDone`.
+    pub id: u64,
+    /// Protocol request id, usable with `nano.cancelRequest`.
+    pub protocol_id: String,
 }
 
 /// Wait bound for `nano.shell.exec`: the executor deadline (60s) plus room for
 /// preparation and termination.
 pub const SHELL_REQUEST_TIMEOUT: Duration = Duration::from_secs(75);
-
 /// Shared handle to the host worker threads.
 pub struct HostLink {
     /// Incoming link events.
     pub events: Receiver<LinkEvent>,
-    /// Outgoing request channel.
-    commands: Sender<Command>,
+    /// Sender cloned by per-request waiter threads.
+    event_tx: Sender<LinkEvent>,
     /// The owning host handle, used for the final ordered shutdown.
     host: Host,
     /// Stops the event loop thread.
@@ -137,7 +136,6 @@ impl HostLink {
         let host = Host::spawn(new_runtime_id(), 1, root_session_id, mode, options)
             .map_err(|error| format!("could not spawn the host: {error}"))?;
         let (event_tx, event_rx) = channel();
-        let (command_tx, command_rx) = channel::<Command>();
         let stop = Arc::new(AtomicBool::new(false));
 
         let startup_host = host.clone();
@@ -197,45 +195,9 @@ impl HostLink {
             }
         });
 
-        let command_host = host.clone();
-        let command_events = event_tx.clone();
-        std::thread::spawn(move || {
-            while let Ok(command) = command_rx.recv() {
-                if let Some(timeout) = command.timeout {
-                    // A manual shell command waits on the executor deadline.
-                    // Only this lane is concurrent; every ordinary request
-                    // still writes and completes in enqueue order.
-                    let host = command_host.clone();
-                    let events = command_events.clone();
-                    std::thread::spawn(move || {
-                        let result = host
-                            .request_with_timeout(&command.method, command.params, timeout)
-                            .map_err(classify_request_error);
-                        let _ = events.send(LinkEvent::RequestDone {
-                            id: command.id,
-                            result,
-                        });
-                    });
-                    continue;
-                }
-                let result = command_host
-                    .request(&command.method, command.params)
-                    .map_err(classify_request_error);
-                if command_events
-                    .send(LinkEvent::RequestDone {
-                        id: command.id,
-                        result,
-                    })
-                    .is_err()
-                {
-                    return;
-                }
-            }
-        });
-
         Ok(Self {
             events: event_rx,
-            commands: command_tx,
+            event_tx,
             host,
             stop,
             counter: AtomicU64::new(1),
@@ -244,35 +206,54 @@ impl HostLink {
 
     /// Send one request; returns the local id used in `RequestDone`.
     pub fn request(&self, method: &str, params: Value) -> Result<u64, String> {
-        self.enqueue(method, params, None)
+        self.request_handle(method, params).map(|handle| handle.id)
     }
 
-    /// Send one request with a caller-chosen wait bound.
+    /// Send one request and keep its protocol id for cancellation.
+    pub fn request_handle(&self, method: &str, params: Value) -> Result<RequestHandle, String> {
+        let id = self.counter.fetch_add(1, Ordering::SeqCst);
+        let pending = self
+            .host
+            .start_request(method, params)
+            .map_err(|error| format!("{error}"))?;
+        let protocol_id = pending.id().to_string();
+        let timeout = self.host.request_timeout();
+        let events = self.event_tx.clone();
+        std::thread::spawn(move || {
+            let result = pending.wait(timeout).map_err(classify_request_error);
+            let _ = events.send(LinkEvent::RequestDone { id, result });
+        });
+        Ok(RequestHandle { id, protocol_id })
+    }
+
+    /// Send one request with a caller-chosen wait bound. Used by the manual
+    /// shell lane, whose executor deadline is longer than the ordinary request
+    /// timeout.
     pub fn request_with_timeout(
         &self,
         method: &str,
         params: Value,
         timeout: Duration,
     ) -> Result<u64, String> {
-        self.enqueue(method, params, Some(timeout))
+        let id = self.counter.fetch_add(1, Ordering::SeqCst);
+        let host = self.host.clone();
+        let events = self.event_tx.clone();
+        let method = method.to_string();
+        std::thread::spawn(move || {
+            let result = host
+                .request_with_timeout(&method, params, timeout)
+                .map_err(classify_request_error);
+            let _ = events.send(LinkEvent::RequestDone { id, result });
+        });
+        Ok(id)
     }
 
-    fn enqueue(
-        &self,
-        method: &str,
-        params: Value,
-        timeout: Option<Duration>,
-    ) -> Result<u64, String> {
-        let id = self.counter.fetch_add(1, Ordering::SeqCst);
-        self.commands
-            .send(Command {
-                id,
-                method: method.to_string(),
-                params,
-                timeout,
-            })
-            .map_err(|_| "the host request worker is gone".to_string())?;
-        Ok(id)
+    /// Ask the host to cancel one in-flight request by protocol id.
+    pub fn cancel_request(&self, protocol_id: &str) -> Result<u64, String> {
+        self.request(
+            "nano.cancelRequest",
+            serde_json::json!({ "id": protocol_id }),
+        )
     }
 
     /// Send one request on the long-action worker with an explicit budget.
