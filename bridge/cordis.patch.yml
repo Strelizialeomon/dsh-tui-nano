@@ -1,0 +1,18 @@
+# The Nano bridge bundle patch. It inserts the bridge app and the model-facing
+# question tool, and disables HMR so a runtime profile cannot recompose itself
+# underneath a live Rust window. The launcher-supplied --patch overlay sets the
+# per-session storage roots and the nano-bridge config; this file only owns the
+# stable row set.
+
+- insert:
+    - id: nano-bridge
+      name: '@dsh-tui-nano/bridge'
+
+    # The question seam (ctx.userQuestions) is in dsh-base; this tool is the
+    # model-facing half. S03 registers the answerer. The shipped default is the
+    # blocking schema; timed mode is an S03 decision, not an S01 default.
+    - id: tool-ask-user
+      name: '@deepseek-ai/dsh-tool-ask-user'
+
+- id: hmr
+  disabled: true

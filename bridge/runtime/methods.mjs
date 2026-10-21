@@ -1,0 +1,25 @@
+// Canonical method and notification names implemented by this host generation.
+// Tests compare these sets with protocol/nano-protocol.json so neither side can
+// silently drift from the contract.
+
+/** Methods that receive a `nano.*` request frame. */
+export const IMPLEMENTED_REQUEST_METHODS = Object.freeze([
+  'nano.shutdown',
+  'nano.subscribe',
+  'nano.unsubscribe',
+  'nano.cancelRequest',
+])
+
+/** Notifications this host can emit. */
+export const IMPLEMENTED_NOTIFICATION_METHODS = Object.freeze([
+  'nano.hello',
+  'nano.startupError',
+  'nano.event',
+  'nano.streamEnded',
+])
+
+/** Every implemented method name. */
+export const IMPLEMENTED_METHODS = Object.freeze([
+  ...IMPLEMENTED_REQUEST_METHODS,
+  ...IMPLEMENTED_NOTIFICATION_METHODS,
+])
