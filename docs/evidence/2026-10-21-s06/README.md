@@ -9,8 +9,8 @@
 
 | 命令 | 结果 | 日志 |
 | --- | --- | --- |
-| `node --test bridge/test/*.test.mjs` | 106 通过 / 0 失败（含 S05 回归） | `bridge-unit.txt` |
-| `cargo test` | 全部通过（`nano-attachments` 26、`nano-app` 47；含 S05 回归） | `rust-unit.txt` |
+| `node --test bridge/test/*.test.mjs` | 130 通过 / 0 失败（含 S04/S05 回归） | `bridge-unit.txt` |
+| `cargo test` | 全部通过（`nano-attachments` 26、`nano-app` 66；含 S04/S05 回归） | `rust-unit.txt` |
 | `NANO_E2E=1 node --test bridge/test/integration/attachments.test.mjs` | 1 通过 | `real-attachments.txt` |
 | `NANO_E2E=1 node --test bridge/test/integration/*.test.mjs` | 4 通过（含 S01/S02/S05 回归） | `real-host-all.txt` |
 | `cargo test -p nano-runtime --test integration -- --ignored --test-threads=1 --skip shutdown_budget_is_bounded_when_cleanup_hangs` | 14 通过 | `rust-real-host.txt` |

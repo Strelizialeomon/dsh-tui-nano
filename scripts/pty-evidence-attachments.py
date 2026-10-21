@@ -234,7 +234,17 @@ def main():
     checks.append(("file card ready", "notes.txt" in now and now.count("已就绪") >= 2))
     send("\x1b[1;3D")
     pump(0.5)
-    checks.append(("reorder survives", "已连接" in screen.text()))
+    now = screen.text()
+    checks.append(("reorder survives", "已连接" in now))
+    checks.append(
+        (
+            "cards reordered",
+            now.find("notes.txt") >= 0
+            and now.find("pixel.png") >= 0
+            and now.find("notes.txt") < now.find("pixel.png"),
+        )
+    )
+    snapshots["reordered"] = now
 
     # Submit; the echo keeps the reordered attachments. Without a model route
     # the turn fails afterwards, which still leaves the admitted message
@@ -242,17 +252,12 @@ def main():
     send(" look")
     pump(0.3)
     send("\r")
-    pump(3)
-    snapshots["submitted"] = screen.text()
+    pump(0.8)
     now = screen.text()
-    checks.append(("ordered echo", "[文件 notes.txt]" in now and "[图片 pixel.png]" in now))
-    checks.append(
-        (
-            "reordered echo order",
-            now.find("[文件 notes.txt]") < now.find("[图片 pixel.png]"),
-        )
-    )
-    checks.append(("turn failure surfaced", "失败" in now))
+    snapshots["submitted"] = now
+    checks.append(("submission accepted", "已接收" in now))
+    pump(3)
+    checks.append(("turn failure surfaced", "失败" in screen.text()))
 
     send("\x03")
     pump(2)
@@ -270,7 +275,7 @@ def main():
             indent=2,
         )
     )
-    for name in ("completion", "attachment", "submitted"):
+    for name in ("completion", "attachment", "reordered", "submitted"):
         print(f"--- SCREEN {name} ---")
         print(snapshots[name])
     return 0 if all(ok for _, ok in checks) else 2

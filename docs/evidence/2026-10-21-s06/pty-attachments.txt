@@ -42,11 +42,11 @@
       true
     ],
     [
-      "ordered echo",
+      "cards reordered",
       true
     ],
     [
-      "reordered echo order",
+      "submission accepted",
       true
     ],
     [
@@ -61,7 +61,7 @@
   "exit": 0
 }
 --- SCREEN completion ---
- nano  work · 已连接 · 空闲 · seq 3 · 队列 0
+ nano 已连接 · 空闲 · seq 3 · 队列 0
 输入消息后按 Enter 发送。
 
 
@@ -100,9 +100,9 @@
 ┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+Backspace 移除附件 ───────────────────────────────────┐
 │@mai                                                                                                                  │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-Enter 发送 · Alt+Enter 插话 · @ 引用文件 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除附件 · Alt+K 技能 · Alt+R 规矩 ·
+work · 权限 workspace-write · Enter 发送 · Alt+Enter 插话 · @ 引用文件 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除…
 --- SCREEN attachment ---
- nano  work · 已连接 · 空闲 · seq 3 · 队列 0
+ nano 已连接 · 空闲 · seq 3 · 队列 0
 输入消息后按 Enter 发送。
 
 
@@ -141,14 +141,12 @@ Enter 发送 · Alt+Enter 插话 · @ 引用文件 · Alt+A 附加 · Alt+←→
 │  [图片] pixel.png · 70 B · 1×1 · 已就绪                                                                              │
 │@src/main.rs                                                                                                          │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-附件「pixel.png」已就绪
---- SCREEN submitted ---
- nano  work · 已连接 · 空闲 · seq 8 · 队列 0
-回合 （失败）
-agent "session-f35fb5d1-e224-4fb2-bf20-b063886aec14" has no provider/model: set AgentOptions.provider and AgentOptions.m
-odel or supply both via the agent/request waterfall
-你（未确认）
-@src/main.rs[文件 notes.txt][图片 pixel.png] look
+work · 权限 workspace-write · 附件「pixel.png」已就绪
+--- SCREEN reordered ---
+ nano 已连接 · 空闲 · seq 3 · 队列 0
+输入消息后按 Enter 发送。
+
+
 
 
 
@@ -180,6 +178,49 @@ odel or supply both via the agent/request waterfall
 
 
 ┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+Backspace 移除附件 ───────────────────────────────────┐
+│  [文件] notes.txt · 11 B · 已就绪                                                                                    │
+│  [图片] pixel.png · 70 B · 1×1 · 已就绪                                                                              │
+│@src/main.rs                                                                                                          │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+work · 权限 workspace-write · 已调整附件顺序（只影响本次列表）
+--- SCREEN submitted ---
+ nano 已连接 · 空闲 · seq 18 · 队列 0
+# 全局规矩（跨 harness 唯一真相源）
+
+**Claude Code / Codex / kimi 读的是本文件，规矩正文一字不差：**
+
+| harness | 怎么读到 |
+|---|---|
+| Claude Code | `~/.claude/CLAUDE.md` 用 `@` 把它导入 |
+| Codex | `~/.codex/AGENTS.md` 是指向本文件的符号链接，启动时自动读取 |
+| kimi | 原生读 `~/.agents/AGENTS.md` |
+
+**要改规矩，只改这一份**——各工具下次加载全局指令时读取同一份正文；已有会话需重新启动以确保加载新内容。
+别在任何
+上下文
+Current runtime context. This snapshot supersedes earlier runtime-context snapshots.
+
+Current working directory: "/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-pty-s06-0q3fgv82/work".
+
+Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files unde
+r the session workspace: "/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-pty-s06-0q3fgv82/work". Some pla
+tform temporary areas may also be writable.
+
+Approval policy: ask. Operations that require approval may ask through the configured answerers; without an availa
+上下文
+<system-reminder>
+A skill is a reusable set of task-specific instructions. The following skills are available in this session:
+
+<available_skills>
+- `arkcli-agent`: arkcli agent：管理 ARK Managed Agents，包括 Agent / Skill / Env / Session / File / Memory Store / Vaul
+t / MCP OAuth。控制面优先走 ForTop/OpenTOP，Session 运行时和 Files 走数据面直联。
+- `arkcli-api-explorer`: Inspect or invoke locally registered ArkCLI actions when product commands cannot cover a task.
+Use for registry errors or exact raw payloads. Not for public API catalogs or OpenAPI schemas.
+- `arkcli-auth`: arkcli 认证管理：交互式登录、Volc SSO 登录、查看状态、退出登录、生成 A
+回合 （失败）
+llm-deepseek: no API key for provider route "deepseek-official"; store DEEPSEEK_API_KEY through the credentials service
+(the web Models page writes it), or export DEEPSEEK_API_KEY in the launching environment
+┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+Backspace 移除附件 ───────────────────────────────────┐
 │                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-有消息在回合结束前未落盘，已标为未确认
+work · 权限 workspace-write · 已接收

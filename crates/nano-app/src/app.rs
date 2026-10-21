@@ -13,6 +13,7 @@ use nano_attachments::{
     AttachmentDraftStore, AttachmentKind, AttachmentState, CompletionState, ComposerAttachments,
     ImageLimitError, ImageLimits, ImageMediaType, ImageProbeError,
 };
+use nano_controls::{ControlsModel, ModelSelection, Panel, PanelAction, PanelMode};
 use nano_conversation::{
     CommandRouter, ConversationModel, Delivery, DraftStore, FeatureContribution, FeatureRegistry,
     FocusId, InputBuffer, InputEvent, InputOutcome, InputRoute, SceneId, SceneState,
@@ -130,6 +131,27 @@ pub enum Pending {
         revision: u64,
         /// Protocol id, for clearing the cancellation slot.
         protocol_id: String,
+    },
+    /// Read the official controls baseline.
+    ControlsState,
+    /// Refresh the official model catalog.
+    ControlsCatalog,
+    /// Switch one session model route.
+    ControlsSelectModel {
+        /// Route the user asked for.
+        requested: ModelSelection,
+    },
+    /// Switch one permission preset through the official command path.
+    ControlsSetPermission {
+        /// Preset the user asked for.
+        preset: String,
+    },
+    /// Execute one official command line.
+    ControlsCommand {
+        /// Complete slash line.
+        line: String,
+        /// Name used in status messages.
+        name: String,
     },
 }
 
@@ -263,6 +285,10 @@ pub struct App {
     pub picker: Option<AttachmentPicker>,
     /// Staging uploads keyed by receipt id.
     uploads: HashMap<String, UploadJob>,
+    /// Model, effort, permission, and command facts from the official services.
+    pub controls: ControlsModel,
+    /// Command palette and selection panes.
+    pub panel: Panel,
     /// Last-good skill catalog and command names.
     pub skills: SkillCatalog,
     /// Selected row in the skills panel.
@@ -294,6 +320,14 @@ impl App {
         let mut registry = FeatureRegistry::new();
         registry.register(
             FeatureContribution::new("conversation", SceneId::conversation()).with_key("enter"),
+        );
+        // S04 owns slash-command routing. The official command list replaces
+        // this contribution once the handshake and the first state read land.
+        registry.register(
+            FeatureContribution::new("controls", SceneId::conversation())
+                .with_command("/model")
+                .with_command("/permission")
+                .with_key("ctrl+p"),
         );
         registry.register(nano_skills::contribution());
         let mut scene = SceneState::conversation();
@@ -335,6 +369,8 @@ impl App {
             completion_cancel: None,
             picker: None,
             uploads: HashMap::new(),
+            controls: ControlsModel::new(),
+            panel: Panel::new(),
             skills: SkillCatalog::new(),
             skill_selection: 0,
             skill_preview: None,
@@ -354,6 +390,331 @@ impl App {
         self.link = Some(link);
     }
 
+    /// Ctrl+P: open the command palette, or close the current pane.
+    pub fn toggle_command_palette(&mut self) {
+        if self.panel.is_open() {
+            self.panel.close();
+            return;
+        }
+        self.clear_transient_status();
+        self.panel.open(PanelMode::Commands);
+        // Refresh so a command registered or removed since the last read is
+        // reflected when the palette opens.
+        self.refresh_controls_state();
+    }
+
+    /// Claim command prefixes in the S02 scene registry. Official commands
+    /// must win over a same-name skill, so each prefix is claimed once when it
+    /// first appears; stale prefixes stay claimed and are then reported as
+    /// missing by the official command service, never as another owner's.
+    fn claim_controls_commands(&mut self) {
+        let scene = SceneId::conversation();
+        let mut contribution = FeatureContribution::new("controls", scene.clone());
+        let mut any = false;
+        for prefix in ["/model".to_string(), "/permission".to_string()]
+            .into_iter()
+            .chain(self.controls.registry_prefixes())
+        {
+            if self.registry.command_owner(&scene, &prefix).is_none() {
+                contribution = contribution.with_command(prefix);
+                any = true;
+            }
+        }
+        if any {
+            self.registry.register(contribution);
+        }
+    }
+
+    /// Re-read the official controls baseline.
+    pub fn refresh_controls_state(&mut self) {
+        if !self.ready {
+            return;
+        }
+        let Some(link) = &self.link else {
+            return;
+        };
+        match link.request("nano.controls.state", serde_json::json!({})) {
+            Ok(id) => {
+                self.pending.insert(id, Pending::ControlsState);
+            }
+            Err(message) => {
+                self.controls.note_state_failure(message.clone());
+                self.error = Some(format!("读取控制状态失败：{message}"));
+            }
+        }
+    }
+
+    /// Refresh the official model catalog. Opening the model pane always
+    /// refreshes; a failure keeps the last catalog marked possibly stale.
+    pub fn refresh_controls_catalog(&mut self) {
+        if !self.ready {
+            return;
+        }
+        let Some(link) = &self.link else {
+            return;
+        };
+        match link.request("nano.controls.modelCatalog", serde_json::json!({})) {
+            Ok(id) => {
+                self.pending.insert(id, Pending::ControlsCatalog);
+            }
+            Err(message) => {
+                self.controls.note_catalog_failure(message.clone());
+                self.error = Some(format!("模型目录刷新失败：{message}（保留上次值，可能过期）"));
+            }
+        }
+    }
+
+    /// Open the model pane and refresh its catalog.
+    pub fn open_models_panel(&mut self) {
+        self.clear_transient_status();
+        if self.panel.is_open() {
+            self.panel.set_mode(PanelMode::Models);
+        } else {
+            self.panel.open(PanelMode::Models);
+        }
+        self.refresh_controls_catalog();
+    }
+
+    /// Open the permission pane and re-read the official projection.
+    pub fn open_permissions_panel(&mut self) {
+        self.clear_transient_status();
+        if self.panel.is_open() {
+            self.panel.set_mode(PanelMode::Permissions);
+        } else {
+            self.panel.open(PanelMode::Permissions);
+        }
+        self.refresh_controls_state();
+    }
+
+    /// Keys for the command palette and selection panes.
+    fn handle_panel_key(&mut self, key: KeyEvent) -> bool {
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            || key.modifiers.contains(KeyModifiers::ALT)
+        {
+            return false;
+        }
+        match key.code {
+            KeyCode::Esc => {
+                self.panel.back();
+                true
+            }
+            KeyCode::Up => {
+                self.panel.move_up();
+                true
+            }
+            KeyCode::Down => {
+                let rows = self.panel.rows(&self.controls).len();
+                self.panel.move_down(rows);
+                true
+            }
+            KeyCode::Backspace => {
+                self.panel.backspace();
+                true
+            }
+            KeyCode::Enter => {
+                self.activate_panel_row();
+                true
+            }
+            KeyCode::Char(character) if !character.is_control() => {
+                self.panel.push_char(character);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Resolve the selected pane row.
+    fn activate_panel_row(&mut self) {
+        let rows = self.panel.rows(&self.controls);
+        self.panel.clamp(rows.len());
+        let Some(row) = rows.get(self.panel.selected()) else {
+            return;
+        };
+        let action = match &row.disabled {
+            Some(reason) => {
+                self.error = Some(reason.clone());
+                return;
+            }
+            None => row.action.clone(),
+        };
+        match action {
+            PanelAction::OpenModels => self.open_models_panel(),
+            PanelAction::OpenEfforts { provider, model } => {
+                self.panel.set_mode(PanelMode::Efforts { provider, model });
+            }
+            PanelAction::OpenPermissions => self.open_permissions_panel(),
+            PanelAction::SelectModel {
+                provider,
+                model,
+                effort,
+            } => {
+                self.panel.close();
+                self.select_model_route(&provider, &model, effort.as_deref());
+            }
+            PanelAction::SetPermission(preset) => {
+                self.panel.close();
+                self.set_permission_preset(&preset);
+            }
+            PanelAction::ExecuteCommand(line) => {
+                self.panel.close();
+                self.execute_controls_command(&line);
+            }
+            PanelAction::PrefillCommand(line) => {
+                self.panel.close();
+                if self.edit_target.is_some() {
+                    self.error =
+                        Some("正在编辑队列项；先应用或取消再选择命令".to_string());
+                    return;
+                }
+                self.drafts.current_mut().set_text(line);
+                self.scene.focus_mut().reset(FocusId::input());
+                self.notice = Some("已填入命令；补参数后按 Enter".to_string());
+            }
+            PanelAction::Close => self.panel.close(),
+        }
+    }
+
+    /// Route one typed slash command owned by S04. The command business is
+    /// always official: `/model` opens a view pane, `/permission <preset>` and
+    /// every other registered command run through the official command path.
+    fn dispatch_controls_line(&mut self, name: &str, args: &str, raw: &str) {
+        if !self.ready {
+            self.error = Some("宿主未就绪；命令未发送（草稿已保留）".to_string());
+            return;
+        }
+        if raw.len() > nano_controls::MAX_COMMAND_LINE_BYTES {
+            self.error = Some("命令过长；未发送（草稿已保留）".to_string());
+            return;
+        }
+        match name {
+            "model" => {
+                self.drafts.current_mut().take();
+                self.open_models_panel();
+            }
+            "permission" => {
+                self.drafts.current_mut().take();
+                let preset = args.trim();
+                if preset.is_empty() {
+                    self.open_permissions_panel();
+                } else {
+                    self.set_permission_preset(preset);
+                }
+            }
+            _ => {
+                if self.controls.find_command(name).is_none() {
+                    let reason = if let Some(error) = self.controls.state_error() {
+                        format!("命令列表未知（{error}）；/{name} 未发送，草稿已保留")
+                    } else if !self.controls.commands_available() {
+                        format!("官方命令服务未组合；/{name} 未发送，草稿已保留")
+                    } else {
+                        format!("命令 /{name} 不在官方命令服务中；草稿已保留")
+                    };
+                    self.error = Some(
+                        if self.skills.resolve(name) == NameResolution::Command {
+                            format!("/{name} 是宿主命令，命令优先；{reason}")
+                        } else {
+                            reason
+                        },
+                    );
+                    return;
+                }
+                self.drafts.current_mut().take();
+                self.execute_controls_command(raw.trim_end());
+            }
+        }
+    }
+
+    /// Ask the official session controller for one exact model route.
+    pub fn select_model_route(&mut self, provider: &str, model: &str, effort: Option<&str>) {
+        if !self.ready {
+            self.error = Some("宿主未就绪".to_string());
+            return;
+        }
+        let Some(link) = &self.link else {
+            return;
+        };
+        let requested = ModelSelection {
+            provider: provider.to_string(),
+            model: model.to_string(),
+            reasoning_effort: effort.map(str::to_string),
+        };
+        let params = self.controls.select_model_params(provider, model, effort);
+        match link.request("nano.controls.selectModel", params) {
+            Ok(id) => {
+                self.pending
+                    .insert(id, Pending::ControlsSelectModel { requested });
+            }
+            Err(message) => {
+                self.error = Some(format!("模型切换失败：{message}"));
+            }
+        }
+    }
+
+    /// Ask the official `/permission <preset>` command path to switch presets.
+    pub fn set_permission_preset(&mut self, preset: &str) {
+        if !self.ready {
+            self.error = Some("宿主未就绪".to_string());
+            return;
+        }
+        let Some(link) = &self.link else {
+            return;
+        };
+        match link.request(
+            "nano.controls.setPermission",
+            self.controls.set_permission_params(preset),
+        ) {
+            Ok(id) => {
+                self.pending.insert(
+                    id,
+                    Pending::ControlsSetPermission {
+                        preset: preset.to_string(),
+                    },
+                );
+            }
+            Err(message) => {
+                self.error = Some(format!("权限写入失败：{message}"));
+            }
+        }
+    }
+
+    /// Execute one official command line.
+    pub fn execute_controls_command(&mut self, line: &str) {
+        if line.len() > nano_controls::MAX_COMMAND_LINE_BYTES {
+            self.error = Some("命令过长；未发送".to_string());
+            return;
+        }
+        if !self.ready {
+            self.error = Some("宿主未就绪".to_string());
+            return;
+        }
+        let name = line
+            .trim_start_matches('/')
+            .split_whitespace()
+            .next()
+            .unwrap_or(line)
+            .to_string();
+        let Some(link) = &self.link else {
+            return;
+        };
+        match link.request(
+            "nano.controls.executeCommand",
+            self.controls.execute_command_params(line),
+        ) {
+            Ok(id) => {
+                self.pending.insert(
+                    id,
+                    Pending::ControlsCommand {
+                        line: line.to_string(),
+                        name,
+                    },
+                );
+            }
+            Err(message) => {
+                self.error = Some(format!("命令失败：{message}"));
+            }
+        }
+    }
+
     /// Apply one key. Returns whether the screen needs a redraw.
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
         if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
@@ -365,6 +726,15 @@ impl App {
         {
             self.should_quit = true;
             return true;
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('p') | KeyCode::Char('P'))
+        {
+            self.toggle_command_palette();
+            return true;
+        }
+        if self.panel.is_open() {
+            return self.handle_panel_key(key);
         }
         // S05 panels own every key while focused, including PageUp/PageDown
         // and Tab; the feed/queue shortcuts must not leak underneath them.
@@ -585,7 +955,7 @@ impl App {
             picker.path.push_str(&text);
             return true;
         }
-        if !self.scene.focus().input_focused() {
+        if self.panel.is_open() || !self.scene.focus().input_focused() {
             return false;
         }
         self.clear_transient_status();
@@ -609,9 +979,16 @@ impl App {
                 self.model
                     .apply_replay_baseline(hello.session.seq, truncated);
                 self.attachment_limits = nano_attachments::ImageLimits::from_hello(&hello);
+                self.controls.set_capabilities(
+                    capability_supported(&hello, "modelSelection"),
+                    capability_supported(&hello, "permissionPresets"),
+                    capability_supported(&hello, "commands"),
+                );
+                self.claim_controls_commands();
                 self.hello = Some(hello);
                 self.notice = Some("已连接官方会话".to_string());
                 self.refresh_snapshot();
+                self.refresh_controls_state();
                 self.refresh_skills();
                 self.refresh_instructions();
                 true
@@ -636,6 +1013,8 @@ impl App {
                 });
                 self.model.mark_disconnected();
                 self.mark_uploads_unknown("宿主连接已关闭");
+                self.controls.reset();
+                self.claim_controls_commands();
                 true
             }
         }
@@ -662,6 +1041,7 @@ impl App {
                     }
                 }
                 let changed = self.model.apply_event(&params.kind, &params.payload);
+                let controls_changed = self.controls.apply_event(&params.kind, &params.payload);
                 if self.stop_pending
                     && params.kind == "conversation.status"
                     && params.payload.get("status").and_then(Value::as_str) == Some("idle")
@@ -680,7 +1060,7 @@ impl App {
                 if changed {
                     self.clamp_queue_selection();
                 }
-                changed
+                changed || controls_changed
             }
             HostEvent::StreamEnded(params) => {
                 if params.outcome == nano_runtime::protocol::StreamOutcome::Failed {
@@ -719,18 +1099,24 @@ impl App {
                 });
                 self.model.mark_disconnected();
                 self.mark_uploads_unknown("连接断开");
+                self.controls.reset();
+                self.claim_controls_commands();
                 true
             }
             HostEvent::ProtocolFailure(message) => {
                 self.ready = false;
                 self.connection = Connection::Failed(message.clone());
                 self.error = Some(format!("协议错误：{message}"));
+                self.controls.reset();
+                self.claim_controls_commands();
                 true
             }
             HostEvent::StartupError(params) => {
                 self.ready = false;
                 self.connection = Connection::Failed(params.message.clone());
                 self.error = Some(params.message);
+                self.controls.reset();
+                self.claim_controls_commands();
                 true
             }
             HostEvent::Hello(_) => false,
@@ -752,6 +1138,11 @@ impl App {
                     | Pending::AttachmentChunk { .. }
                     | Pending::AttachmentFinish { .. }
                     | Pending::FileReferences { .. }
+                    | Pending::ControlsState
+                    | Pending::ControlsCatalog
+                    | Pending::ControlsSelectModel { .. }
+                    | Pending::ControlsSetPermission { .. }
+                    | Pending::ControlsCommand { .. }
                     | Pending::SkillsList
                     | Pending::SkillPreview { .. }
                     | Pending::InstructionsSnapshot
@@ -983,7 +1374,167 @@ impl App {
                         }
                     }
                 }
-            }
+            },
+            Pending::ControlsState => match result {
+                Ok(value) => match self.controls.apply_state(&value) {
+                    Ok(()) => {
+                        self.claim_controls_commands();
+                    }
+                    Err(message) => {
+                        self.controls.note_state_failure(message.clone());
+                        self.error = Some(format!("控制状态无效：{message}"));
+                    }
+                },
+                Err(error) => {
+                    self.controls.note_state_failure(error.message.clone());
+                    self.error = Some(format!("读取控制状态失败：{}", error.message));
+                }
+            },
+            Pending::ControlsCatalog => match result {
+                Ok(value) => match self.controls.apply_catalog(&value) {
+                    Ok(()) => {
+                        if self.controls.catalog().is_some_and(|catalog| catalog.is_empty()) {
+                            self.notice =
+                                Some("官方模型目录为空；保留上次选择与原因".to_string());
+                        }
+                    }
+                    Err(message) => {
+                        self.controls.note_catalog_failure(message.clone());
+                        self.error = Some(format!("模型目录无效：{message}"));
+                    }
+                },
+                Err(error) => {
+                    self.controls.note_catalog_failure(error.message.clone());
+                    self.error = Some(format!(
+                        "模型目录刷新失败：{}（保留上次值，可能过期）",
+                        error.message
+                    ));
+                }
+            },
+            Pending::ControlsSelectModel { requested } => match result {
+                Ok(value) => match self.controls.apply_selection(&value) {
+                    Ok(()) => {
+                        let selected = self
+                            .controls
+                            .model
+                            .next
+                            .as_ref()
+                            .map(ModelSelection::identity)
+                            .unwrap_or_else(|| requested.identity());
+                        self.notice = Some(format!(
+                            "会话内模型已切换为 {selected}；新会话默认值由官方后台保存（本次回执不代表默认值已保存）"
+                        ));
+                    }
+                    Err(message) => {
+                        self.error = Some(format!("模型切换回执无效：{message}"));
+                        self.refresh_controls_state();
+                    }
+                },
+                Err(error) => match error.kind {
+                    RequestErrorKind::Unknown => {
+                        self.error = Some(
+                            "模型切换结果未知；正在重读官方投影，不自动重发".to_string(),
+                        );
+                        self.refresh_controls_state();
+                    }
+                    _ => {
+                        let writer = if error.code == Some(1019) {
+                            "；另一个窗口正在写这个会话，本窗口不接管"
+                        } else {
+                            ""
+                        };
+                        self.error = Some(format!("模型切换失败：{}{writer}", error.message));
+                        self.refresh_controls_state();
+                    }
+                },
+            },
+            Pending::ControlsSetPermission { preset } => match result {
+                Ok(value) => {
+                    let executed = value
+                        .get("executed")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    if !executed {
+                        self.error =
+                            Some("权限切换未执行：官方命令服务没有 /permission".to_string());
+                        self.refresh_controls_state();
+                        return;
+                    }
+                    let kind = value.get("kind").and_then(Value::as_str);
+                    let text = value.get("text").and_then(Value::as_str).unwrap_or("");
+                    let applied = self.controls.apply_permission(value.get("permission"));
+                    if kind == Some("error") {
+                        self.error = Some(format!(
+                            "权限切换失败：{preset}（官方：{text}）；重读当前值：{}",
+                            self.controls.permission_label()
+                        ));
+                    } else if applied.is_ok() {
+                        // Only the official receipt is claimed. Whether the
+                        // model received a changed-by-user notice depends on
+                        // the approval policy actually changing, which this
+                        // command result does not describe.
+                        self.notice = Some(format!(
+                            "权限已切换为 {}（官方回执）",
+                            self.controls.permission_label()
+                        ));
+                    } else {
+                        self.notice = Some(format!("权限命令已完成：{text}"));
+                        self.refresh_controls_state();
+                    }
+                }
+                Err(error) => match error.kind {
+                    RequestErrorKind::Unknown => {
+                        self.error = Some(
+                            "权限写入结果未知；正在重读官方投影（可能已变、可能未变）"
+                                .to_string(),
+                        );
+                        self.refresh_controls_state();
+                    }
+                    _ => {
+                        let writer = if error.code == Some(1019) {
+                            "；另一个窗口正在写这个会话，本窗口不接管"
+                        } else {
+                            ""
+                        };
+                        self.error = Some(format!(
+                            "权限写入失败：{}{writer}；正在重读官方投影",
+                            error.message
+                        ));
+                        self.refresh_controls_state();
+                    }
+                },
+            },
+            Pending::ControlsCommand { line, name } => match result {
+                Ok(value) => {
+                    let executed = value
+                        .get("executed")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    if !executed {
+                        self.error = Some(format!("官方命令服务没有 {line}"));
+                        return;
+                    }
+                    let kind = value.get("kind").and_then(Value::as_str);
+                    let text = value.get("text").and_then(Value::as_str).unwrap_or("");
+                    if kind == Some("error") {
+                        self.error = Some(format!("命令 {name} 失败：{text}"));
+                    } else if text.is_empty() {
+                        self.notice = Some(format!("命令 {name} 已完成"));
+                    } else {
+                        self.notice = Some(format!("命令 {name}：{text}"));
+                    }
+                }
+                Err(error) => match error.kind {
+                    RequestErrorKind::Unknown => {
+                        self.error = Some(format!(
+                            "命令 {name} 结果未知（可能已执行）；不自动重发"
+                        ));
+                    }
+                    _ => {
+                        self.error = Some(format!("命令 {name} 失败：{}", error.message));
+                    }
+                },
+            },
             Pending::SkillsList => {
                 self.skills_refresh_in_flight = false;
                 let root = self.model.address().root_session_id.clone();
@@ -1667,25 +2218,39 @@ impl App {
                     self.error = Some("人工 Shell（S08）尚未接入；草稿已保留".to_string());
                     return;
                 }
-                InputRoute::Command { owner, .. } => {
+                InputRoute::Command {
+                    owner,
+                    name,
+                    args,
+                    raw,
+                } => {
+                    if owner == "controls" {
+                        self.dispatch_controls_line(&name, &args, &raw);
+                        return;
+                    }
                     self.error = Some(format!("命令入口 {owner} 尚未接入；草稿已保留"));
                     return;
                 }
-                InputRoute::Skill { name, .. } => {
+                InputRoute::Skill { name, args, raw } => {
                     // Commands win before the line ever becomes a prompt. The
                     // line is submitted literally in every other case,
                     // including an unknown or deleted name; only the turn's own
                     // events may say whether the official host injected a body.
                     if self.skills.resolve(&name) == NameResolution::Command {
-                        self.error = Some(format!(
-                            "/{name} 是宿主命令，命令优先；命令入口（S04）尚未接入，草稿已保留"
-                        ));
+                        self.dispatch_controls_line(&name, &args, &raw);
                         return;
                     }
                     skill_name = Some(name);
                 }
-                InputRoute::Unregistered { owner, .. } => {
-                    self.error = Some(format!("命令入口 {} 尚未注册；草稿已保留", owner.label()));
+                InputRoute::Unregistered {
+                    owner: _,
+                    name,
+                    args,
+                    raw,
+                } => {
+                    // Slash-command business belongs to S04. A name the official
+                    // registry advertises wins over a not-yet-registered skill.
+                    self.dispatch_controls_line(&name, &args, &raw);
                     return;
                 }
             }
@@ -2278,6 +2843,44 @@ impl App {
         self.edit_target.as_deref()
     }
 
+    /// Bottom status: the resident working directory and permission/safety
+    /// fact, plus a transient hint. A failed controls read marks the retained
+    /// permission value as possibly stale.
+    pub fn status_line(&self) -> String {
+        let stale = if self.controls.state_error().is_some() {
+            "（可能过期）"
+        } else {
+            ""
+        };
+        let hint = self.status_hint();
+        let base = format!(
+            "{} · 权限 {}{stale}",
+            self.display_cwd(),
+            self.controls.permission_label()
+        );
+        if hint.is_empty() {
+            base
+        } else {
+            format!("{base} · {hint}")
+        }
+    }
+
+    /// Basename of the effective working directory.
+    pub fn display_cwd(&self) -> String {
+        self.cli
+            .cwd
+            .as_ref()
+            .and_then(|path| path.file_name())
+            .map(|name| name.to_string_lossy().to_string())
+            .or_else(|| {
+                std::env::current_dir().ok().and_then(|path| {
+                    path.file_name()
+                        .map(|name| name.to_string_lossy().to_string())
+                })
+            })
+            .unwrap_or_else(|| ".".to_string())
+    }
+
     /// Status-bar text.
     pub fn status_hint(&self) -> String {
         if self.stop_pending {
@@ -2490,6 +3093,14 @@ fn common_suffix_bytes(left: &str, right: &str) -> usize {
         }
     }
     suffix
+}
+
+/// Whether the handshake reports one official capability as usable now.
+fn capability_supported(hello: &Hello, name: &str) -> bool {
+    hello
+        .capabilities
+        .get(name)
+        .is_some_and(|capability| capability.status == CapabilityStatus::Supported)
 }
 
 /// Minimal standard base64 for the OSC 52 clipboard payload.
@@ -2890,6 +3501,7 @@ mod tests {
             9,
             Err(RequestError {
                 kind: RequestErrorKind::Unknown,
+                code: None,
                 message: "transport closed".into(),
             }),
         );
@@ -2919,10 +3531,372 @@ mod tests {
             9,
             Err(RequestError {
                 kind: RequestErrorKind::Local,
+                code: None,
                 message: "not sent".into(),
             }),
         );
         assert_eq!(app.drafts.current().text(), "text");
+    }
+
+    fn controls_state(value: serde_json::Value) -> App {
+        let mut app = app();
+        app.ready = true;
+        app.controls.set_capabilities(true, true, true);
+        app.pending.insert(1, Pending::ControlsState);
+        app.handle_request_done(1, Ok(value));
+        app
+    }
+
+    fn controls_state_value() -> serde_json::Value {
+        json!({
+            "address": {"rootSessionId": "root"},
+            "model": {
+                "lastUsed": {"provider": "p", "model": "chat"},
+                "next": {"provider": "p", "model": "chat"}
+            },
+            "permission": {
+                "current": "workspace-write",
+                "catalog": {
+                    "options": [
+                        {"value": "workspace-write", "name": "Workspace", "sandbox": "workspace-write", "approval": "ask"},
+                        {"value": "danger-full-access", "name": "Danger", "sandbox": "danger-full-access", "approval": "never"}
+                    ],
+                    "defaultOptions": [],
+                    "defaultPreset": "workspace-write"
+                }
+            },
+            "commands": [
+                {"name": "compact", "description": "Compact"},
+                {"name": "permission", "description": "Switch", "inputHint": "<preset>"}
+            ]
+        })
+    }
+
+    #[test]
+    fn ctrl_p_opens_the_palette_and_escape_closes_it() {
+        let mut app = app();
+        assert!(app.handle_key(KeyEvent::new(
+            KeyCode::Char('p'),
+            KeyModifiers::CONTROL
+        )));
+        assert!(app.panel.is_open());
+        assert_eq!(app.panel.mode(), &PanelMode::Commands);
+        assert!(app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        assert!(!app.panel.is_open());
+    }
+
+    #[test]
+    fn typing_slash_model_opens_the_model_pane_instead_of_sending() {
+        let mut app = app();
+        app.ready = true;
+        app.drafts.current_mut().set_text("/model");
+        assert!(app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
+        assert!(app.panel.is_open());
+        assert_eq!(app.panel.mode(), &PanelMode::Models);
+        assert!(app.drafts.current().is_empty());
+        assert!(app.model.submissions().echoes().is_empty());
+    }
+
+    #[test]
+    fn typing_bare_slash_permission_opens_the_permission_pane() {
+        let mut app = app();
+        app.ready = true;
+        app.drafts.current_mut().set_text("/permission");
+        assert!(app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
+        assert!(app.panel.is_open());
+        assert_eq!(app.panel.mode(), &PanelMode::Permissions);
+        assert!(app.drafts.current().is_empty());
+    }
+
+    #[test]
+    fn a_command_needs_a_ready_host_and_keeps_the_draft_until_then() {
+        let mut app = app();
+        app.drafts.current_mut().set_text("/permission danger-full-access");
+        assert!(app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
+        assert_eq!(
+            app.drafts.current().text(),
+            "/permission danger-full-access"
+        );
+        assert!(app.error.as_deref().unwrap().contains("宿主未就绪"));
+    }
+
+    #[test]
+    fn an_unknown_controls_command_keeps_the_draft_and_never_becomes_a_prompt() {
+        let mut app = app();
+        app.ready = true;
+        app.controls.set_capabilities(true, true, true);
+        app.drafts.current_mut().set_text("/nope");
+        app.dispatch_controls_line("nope", "", "/nope");
+        assert_eq!(app.drafts.current().text(), "/nope");
+        assert!(app.error.as_deref().unwrap().contains("不在官方命令服务中"));
+        assert!(app.model.submissions().echoes().is_empty());
+    }
+
+    #[test]
+    fn an_official_command_takes_the_draft_and_routes_to_s04() {
+        let mut app = controls_state(controls_state_value());
+        app.drafts.current_mut().set_text("/compact");
+        assert!(app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
+        assert!(app.drafts.current().is_empty());
+        assert!(app.model.submissions().echoes().is_empty());
+    }
+
+    #[test]
+    fn a_controls_state_read_registers_official_command_prefixes() {
+        let app = controls_state(controls_state_value());
+        assert_eq!(app.controls.permission_label(), "workspace-write");
+        let contribution = app
+            .registry
+            .command_owner(&SceneId::conversation(), "/compact")
+            .expect("official command prefix is registered");
+        assert_eq!(contribution.id.0, "controls");
+        assert!(app
+            .registry
+            .command_owner(&SceneId::conversation(), "/permission")
+            .is_some());
+    }
+
+    #[test]
+    fn a_controls_state_event_updates_the_permission_label() {
+        let mut app = app();
+        let changed = app.handle_host_event(nano_runtime::HostEvent::Event(
+            nano_runtime::protocol::EventParams {
+                runtime_id: "rt".into(),
+                generation: 1,
+                subscription_id: "sub".into(),
+                sequence: 0,
+                kind: "controls.permission".into(),
+                payload: json!({
+                    "address": {"rootSessionId": "root"},
+                    "permission": {
+                        "current": "custom",
+                        "catalog": {"options": [], "defaultOptions": [], "defaultPreset": "workspace-write"}
+                    }
+                }),
+            },
+        ));
+        assert!(changed);
+        assert_eq!(app.controls.permission_label(), "custom（非命名预设）");
+        assert!(app.status_line().contains("权限 custom"));
+    }
+
+    #[test]
+    fn a_writer_held_model_rejection_keeps_the_old_selection() {
+        let mut app = controls_state(controls_state_value());
+        app.pending.insert(
+            2,
+            Pending::ControlsSelectModel {
+                requested: ModelSelection {
+                    provider: "p".into(),
+                    model: "reasoner".into(),
+                    reasoning_effort: None,
+                },
+            },
+        );
+        app.handle_request_done(
+            2,
+            Err(RequestError {
+                kind: RequestErrorKind::Rpc,
+                code: Some(1019),
+                message: "session \"root\" is already owned by an active write handle".into(),
+            }),
+        );
+        assert_eq!(
+            app.controls.model.next.as_ref().unwrap().model.as_str(),
+            "chat"
+        );
+        assert!(app.error.as_deref().unwrap().contains("本窗口不接管"));
+    }
+
+    #[test]
+    fn an_unknown_model_result_is_not_shown_as_unchanged_or_changed() {
+        let mut app = controls_state(controls_state_value());
+        app.pending.insert(
+            3,
+            Pending::ControlsSelectModel {
+                requested: ModelSelection::new("p", "reasoner"),
+            },
+        );
+        app.handle_request_done(
+            3,
+            Err(RequestError {
+                kind: RequestErrorKind::Unknown,
+                code: None,
+                message: "transport closed".into(),
+            }),
+        );
+        assert!(app.error.as_deref().unwrap().contains("结果未知"));
+        assert_eq!(
+            app.controls.model.next.as_ref().unwrap().model.as_str(),
+            "chat"
+        );
+    }
+
+    #[test]
+    fn a_failed_catalog_refresh_keeps_the_last_catalog_marked_stale() {
+        let mut app = app();
+        app.ready = true;
+        app.pending.insert(4, Pending::ControlsCatalog);
+        app.handle_request_done(
+            4,
+            Ok(json!({
+                "default": {"provider": "p", "model": "chat"},
+                "routableProviders": ["p"],
+                "groups": [{"id": "p", "name": "P", "models": [{"id": "chat", "name": "Chat"}]}],
+                "failures": []
+            })),
+        );
+        assert!(app.controls.catalog().is_some());
+        app.pending.insert(5, Pending::ControlsCatalog);
+        app.handle_request_done(
+            5,
+            Err(RequestError {
+                kind: RequestErrorKind::Rpc,
+                code: None,
+                message: "catalog failed".into(),
+            }),
+        );
+        assert!(app.controls.catalog().is_some());
+        assert!(app.controls.catalog_stale());
+        assert!(app.error.as_deref().unwrap().contains("可能过期"));
+    }
+
+    #[test]
+    fn an_unknown_permission_result_is_reported_as_unknown() {
+        let mut app = controls_state(controls_state_value());
+        app.pending.insert(
+            6,
+            Pending::ControlsSetPermission {
+                preset: "danger-full-access".into(),
+            },
+        );
+        app.handle_request_done(
+            6,
+            Err(RequestError {
+                kind: RequestErrorKind::Unknown,
+                code: None,
+                message: "transport closed".into(),
+            }),
+        );
+        assert!(app.error.as_deref().unwrap().contains("结果未知"));
+        assert_eq!(app.controls.permission_label(), "workspace-write");
+    }
+
+    #[test]
+    fn a_rejected_permission_command_shows_the_reread_current_value() {
+        let mut app = controls_state(controls_state_value());
+        app.pending.insert(
+            7,
+            Pending::ControlsSetPermission {
+                preset: "danger-full-access".into(),
+            },
+        );
+        app.handle_request_done(
+            7,
+            Ok(json!({
+                "executed": true,
+                "commandId": "cmd-1",
+                "kind": "error",
+                "text": "denied",
+                "permission": {
+                    "current": "custom",
+                    "catalog": {"options": [], "defaultOptions": [], "defaultPreset": "workspace-write"}
+                }
+            })),
+        );
+        assert!(app.error.as_deref().unwrap().contains("权限切换失败"));
+        assert_eq!(app.controls.permission_label(), "custom（非命名预设）");
+    }
+
+    #[test]
+    fn a_command_error_is_not_reported_as_completed() {
+        let mut app = app();
+        app.ready = true;
+        app.pending.insert(
+            8,
+            Pending::ControlsCommand {
+                line: "/compact".into(),
+                name: "compact".into(),
+            },
+        );
+        app.handle_request_done(
+            8,
+            Ok(json!({"executed": true, "commandId": "cmd-2", "kind": "error", "text": "nope"})),
+        );
+        assert!(app.error.as_deref().unwrap().contains("命令 compact 失败"));
+        assert!(!app
+            .notice
+            .as_deref()
+            .unwrap_or_default()
+            .contains("已完成"));
+    }
+
+    #[test]
+    fn a_model_switch_notice_uses_the_official_receipt() {
+        let mut app = controls_state(controls_state_value());
+        app.pending.insert(
+            12,
+            Pending::ControlsSelectModel {
+                requested: ModelSelection::new("p", "requested-route"),
+            },
+        );
+        app.handle_request_done(
+            12,
+            Ok(json!({"selected": {"provider": "p", "model": "official-route"}})),
+        );
+        let notice = app.notice.as_deref().unwrap();
+        assert!(notice.contains("official-route"));
+        assert!(!notice.contains("requested-route"));
+    }
+
+    #[test]
+    fn prefill_is_refused_while_editing_a_queued_item() {
+        let mut app = controls_state(controls_state_value());
+        queue_event(&mut app, "queued text");
+        app.begin_queue_edit();
+        assert!(app.editing_queue().is_some());
+        app.panel.open(PanelMode::Commands);
+        // /goal is not in this state; add an argument-taking command.
+        let mut state = controls_state_value();
+        state["commands"] = json!([
+            {"name": "goal", "description": "Set a goal", "inputHint": "<goal>"}
+        ]);
+        app.controls.apply_state(&state).unwrap();
+        app.panel.open(PanelMode::Commands);
+        app.activate_panel_row();
+        assert!(app.error.as_deref().unwrap().contains("正在编辑队列项"));
+        assert_eq!(app.drafts.current().text(), "queued text");
+        assert!(app.editing_queue().is_some());
+    }
+
+    #[test]
+    fn the_status_line_marks_a_failed_control_read_as_stale() {
+        let mut app = controls_state(controls_state_value());
+        app.controls.note_state_failure("projection unreadable");
+        let line = app.status_line();
+        assert!(line.contains("权限 workspace-write"));
+        assert!(line.contains("可能过期"));
+        assert!(line.starts_with(&app.display_cwd()));
+    }
+
+    #[test]
+    fn a_writer_held_permission_rejection_is_explained() {
+        let mut app = controls_state(controls_state_value());
+        app.pending.insert(
+            13,
+            Pending::ControlsSetPermission {
+                preset: "danger-full-access".into(),
+            },
+        );
+        app.handle_request_done(
+            13,
+            Err(RequestError {
+                kind: RequestErrorKind::Rpc,
+                code: Some(1019),
+                message: "session \"root\" is already owned by an active write handle".into(),
+            }),
+        );
+        assert!(app.error.as_deref().unwrap().contains("本窗口不接管"));
     }
 
     #[test]
@@ -2952,6 +3926,7 @@ mod tests {
             7,
             Err(RequestError {
                 kind: RequestErrorKind::Rpc,
+                code: None,
                 message: "cancelled".into(),
             }),
         );
@@ -3217,6 +4192,7 @@ mod tests {
             7,
             Err(RequestError {
                 kind: RequestErrorKind::Rpc,
+                code: None,
                 message: "skill path is unreadable".into(),
             }),
         );

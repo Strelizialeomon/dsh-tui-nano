@@ -5,11 +5,12 @@
 //! be exercised in a real terminal before the reading layer exists.
 
 use nano_attachments::{AttachmentState, CandidateKind};
+use nano_controls::{PanelMode, PanelRow};
 use nano_conversation::{ConversationItem, MessageKind, PreviewView, ToolPreview, ToolStatus};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::app::{App, Connection};
@@ -67,22 +68,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     draw_input(frame, app, layout[4]);
     draw_status(frame, app, layout[5], area.width);
+    if app.panel.is_open() {
+        draw_panel(frame, app, area);
+    }
 }
 
 fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
-    let cwd = app
-        .cli
-        .cwd
-        .as_ref()
-        .and_then(|path| path.file_name())
-        .map(|name| name.to_string_lossy().to_string())
-        .or_else(|| {
-            std::env::current_dir().ok().and_then(|path| {
-                path.file_name()
-                    .map(|name| name.to_string_lossy().to_string())
-            })
-        })
-        .unwrap_or_else(|| ".".to_string());
     let status_color = match app.connection {
         Connection::Ready => match app.model.status() {
             nano_conversation::ConversationStatus::Running => Color::Yellow,
@@ -93,8 +84,6 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     };
     let mut spans = vec![
         Span::styled(" nano ", Style::default().fg(Color::Black).bg(Color::Cyan)),
-        Span::raw(format!(" {cwd} ")),
-        Span::raw("· "),
         Span::styled(app.connection.label(), Style::default().fg(status_color)),
         Span::raw(" · "),
         Span::styled(
@@ -610,7 +599,7 @@ fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
     let visible: Vec<Line<'static>> = lines.into_iter().skip(offset).take(viewport).collect();
     frame.render_widget(block, area);
     frame.render_widget(Paragraph::new(Text::from(visible)), inner);
-    if app.scene.focus().input_focused() && viewport > 0 {
+    if app.scene.focus().input_focused() && !app.panel.is_open() && viewport > 0 {
         let row = cursor_row
             .saturating_sub(offset)
             .min(viewport.saturating_sub(1));
@@ -686,7 +675,7 @@ fn draw_completion(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_status(frame: &mut Frame, app: &App, area: Rect, width: u16) {
-    let hint = app.status_hint();
+    let hint = app.status_line();
     let style = if app.error.is_some() {
         Style::default().fg(Color::Red)
     } else {
@@ -694,6 +683,197 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect, width: u16) {
     };
     let text = truncate(&hint, width as usize);
     frame.render_widget(Paragraph::new(Line::from(Span::styled(text, style))), area);
+}
+
+/// Draw the command palette or one selection pane over the conversation.
+fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
+    let rows = app.panel.rows(&app.controls);
+    app.panel.clamp(rows.len());
+    let selected_index = app.panel.selected();
+    let width = ((area.width as u32 * 3 / 4).clamp(40, 96)).min(area.width as u32) as u16;
+    let inner_width = width.saturating_sub(4).max(1) as usize;
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    push_wrapped(
+        &mut lines,
+        &panel_header(app),
+        inner_width,
+        Style::default().fg(Color::DarkGray),
+    );
+    let mut selected_line = 0;
+    if rows.is_empty() {
+        push_wrapped(
+            &mut lines,
+            &empty_panel_reason(app),
+            inner_width,
+            Style::default().fg(Color::Yellow),
+        );
+    } else {
+        let mut previous_group: Option<String> = None;
+        for (index, row) in rows.iter().enumerate() {
+            if let Some(group) = row.group.as_deref() {
+                if previous_group.as_deref() != Some(group) {
+                    lines.push(Line::from(Span::styled(
+                        group.to_string(),
+                        Style::default()
+                            .fg(Color::DarkGray)
+                            .add_modifier(Modifier::BOLD),
+                    )));
+                    previous_group = Some(group.to_string());
+                }
+            }
+            let selected = index == selected_index;
+            if selected {
+                selected_line = lines.len();
+            }
+            lines.push(panel_row_line(row, selected, inner_width));
+            if selected {
+                if let Some(detail) = &row.detail {
+                    for segment in wrap_segments(&detail.replace('\r', ""), inner_width) {
+                        lines.push(Line::from(Span::styled(
+                            segment.text,
+                            Style::default().fg(Color::DarkGray),
+                        )));
+                    }
+                }
+            }
+        }
+    }
+    lines.push(Line::from(Span::styled(
+        "↑↓ 选择 · Enter 确认 · Esc 返回 · 输入筛选",
+        Style::default().fg(Color::DarkGray),
+    )));
+    let height = (lines.len() as u16 + 2)
+        .min(area.height.saturating_sub(2))
+        .max(3);
+    let rect = centered(area, width, height);
+    frame.render_widget(Clear, rect);
+    let title = format!(" {} · 查询：{} ", app.panel.mode().title(), app.panel.query());
+    let block = Block::default().borders(Borders::ALL).title(title);
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+    let viewport = inner.height as usize;
+    let offset = selected_line.saturating_sub(viewport.saturating_sub(2));
+    let visible: Vec<Line<'static>> = lines.into_iter().skip(offset).take(viewport).collect();
+    frame.render_widget(Paragraph::new(Text::from(visible)), inner);
+}
+
+/// One-line header describing the current official value for this pane.
+fn panel_header(app: &App) -> String {
+    match app.panel.mode() {
+        PanelMode::Models | PanelMode::Efforts { .. } => {
+            let stale = if app.controls.catalog_stale() {
+                " · 目录可能过期"
+            } else if app.controls.state_error().is_some() {
+                " · 状态可能过期"
+            } else {
+                ""
+            };
+            format!(
+                "当前：{} · 强度 {}{stale}",
+                app.controls.model_label(),
+                app.controls.effort_label()
+            )
+        }
+        PanelMode::Permissions => {
+            let permission = app.controls.permission();
+            let default = if permission.catalog.default_preset.is_empty() {
+                String::new()
+            } else {
+                format!(" · 新会话默认 {}", permission.catalog.default_preset)
+            };
+            let stale = if app.controls.state_error().is_some() {
+                " · 状态可能过期"
+            } else {
+                ""
+            };
+            format!("当前：{}{default}{stale}", app.controls.permission_label())
+        }
+        PanelMode::Commands => "官方命令优先于同名技能；不可用命令显示原因".to_string(),
+    }
+}
+
+/// Explicit reason for an empty pane.
+fn empty_panel_reason(app: &App) -> String {
+    match app.panel.mode() {
+        PanelMode::Commands => {
+            if !app.controls.commands_available() {
+                "官方命令服务未组合：没有可执行命令".to_string()
+            } else if let Some(error) = app.controls.state_error() {
+                format!("控制状态读取失败：{error}（命令列表未知）")
+            } else if app.panel.query().is_empty() {
+                "没有可用命令".to_string()
+            } else {
+                format!("没有匹配「{}」的命令", app.panel.query())
+            }
+        }
+        PanelMode::Models => {
+            if let Some(error) = app.controls.catalog_error() {
+                format!("模型目录读取失败：{error}（上次值保留，可能过期）")
+            } else if !app.controls.catalog_attempted() {
+                "模型目录尚未加载".to_string()
+            } else {
+                format!("官方模型目录为空（或没有匹配「{}」）", app.panel.query())
+            }
+        }
+        PanelMode::Efforts { .. } => "该模型没有可用的强度目录（目录可能未加载）".to_string(),
+        PanelMode::Permissions => {
+            if let Some(error) = app.controls.state_error() {
+                format!("控制状态读取失败：{error}（保留上次值，可能过期）")
+            } else if app.controls.permission().available == Some(false) {
+                "官方权限服务未组合".to_string()
+            } else if !app.controls.permission().loaded {
+                "权限状态尚未读取".to_string()
+            } else if app.panel.query().is_empty() {
+                "官方权限预设为空".to_string()
+            } else {
+                format!("没有匹配「{}」的权限预设", app.panel.query())
+            }
+        }
+    }
+}
+
+/// One row: marker, label, current flag, and either the inline detail or the
+/// unavailability reason.
+fn panel_row_line(row: &PanelRow, selected: bool, width: usize) -> Line<'static> {
+    let marker = if selected { "▶ " } else { "  " };
+    let current = if row.current { "（当前）" } else { "" };
+    let mut text = format!("{marker}{}{current}", row.label);
+    if let Some(reason) = &row.disabled {
+        text.push_str(" · ");
+        text.push_str(reason);
+    } else if !selected {
+        if let Some(detail) = &row.detail {
+            text.push_str("  ");
+            text.push_str(detail);
+        }
+    }
+    let style = if row.disabled.is_some() {
+        Style::default().fg(Color::DarkGray)
+    } else if selected {
+        Style::default().fg(Color::Black).bg(Color::Cyan)
+    } else {
+        Style::default()
+    };
+    Line::from(Span::styled(truncate(&text, width), style))
+}
+
+/// Center a rectangle inside the frame area.
+fn centered(area: Rect, width: u16, height: u16) -> Rect {
+    let width = width.min(area.width);
+    let height = height.min(area.height);
+    Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + (area.height - height) / 2,
+        width,
+        height,
+    }
+}
+
+/// Push display-wrapped lines with one style.
+fn push_wrapped(lines: &mut Vec<Line<'static>>, text: &str, width: usize, style: Style) {
+    for segment in wrap_segments(&text.replace('\r', ""), width.max(1)) {
+        lines.push(Line::from(Span::styled(segment.text, style)));
+    }
 }
 
 /// Input lines after display-cell wrapping, with `\r` hidden.
@@ -842,10 +1022,26 @@ fn wrap_block(
 }
 
 fn truncate(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
+    // `max` is a display-cell budget, not a character count: CJK labels must
+    // not overflow or lose their tail because each glyph takes two cells.
+    let total: usize = text.chars().map(display_width).sum();
+    if total <= max {
         return text.to_string();
     }
-    let mut value: String = text.chars().take(max.saturating_sub(1)).collect();
+    if max == 0 {
+        return String::new();
+    }
+    let budget = max.saturating_sub(1);
+    let mut value = String::new();
+    let mut width = 0;
+    for character in text.chars() {
+        let character_width = display_width(character);
+        if width + character_width > budget {
+            break;
+        }
+        value.push(character);
+        width += character_width;
+    }
     value.push('…');
     value
 }
@@ -884,6 +1080,15 @@ mod tests {
             assert!(line.is_char_boundary(segment.end));
             assert_eq!(&line[segment.start..segment.end], segment.text);
         }
+    }
+
+    #[test]
+    fn truncation_uses_display_cells_not_character_count() {
+        let truncated = truncate("你好世界", 5);
+        assert_eq!(truncated, "你好…");
+        let width: usize = truncated.chars().map(display_width).sum();
+        assert!(width <= 5);
+        assert_eq!(truncate("abc", 3), "abc");
     }
 
     #[test]

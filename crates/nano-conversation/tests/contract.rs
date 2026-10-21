@@ -75,6 +75,8 @@ fn every_event_kind_is_covered_by_the_contract_shape() {
                 "conversation.status",
                 "conversation.inbox",
                 "conversation.stream",
+                "controls.model",
+                "controls.permission",
                 "skills.changed",
                 "instructions.changed"
             ]
@@ -82,8 +84,8 @@ fn every_event_kind_is_covered_by_the_contract_shape() {
             "unexpected event kind {kind}"
         );
     }
-    // S02 owns four live/durable kinds; S05 owns the two refresh signals.
-    assert_eq!(kinds.len(), 6);
+    // S02 owns four live/durable kinds; S04 and S05 each add two.
+    assert_eq!(kinds.len(), 8);
     for kind in ["skills.changed", "instructions.changed"] {
         let event = contract["eventKinds"]
             .as_array()
@@ -92,5 +94,14 @@ fn every_event_kind_is_covered_by_the_contract_shape() {
             .find(|event| event["kind"] == kind)
             .unwrap();
         assert_eq!(event["owner"], "S05");
+    }
+    for kind in ["controls.model", "controls.permission"] {
+        let event = contract["eventKinds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|event| event["kind"] == kind)
+            .unwrap();
+        assert_eq!(event["owner"], "S04");
     }
 }

@@ -1,4 +1,4 @@
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.02s
      Running tests/integration.rs (target/debug/deps/integration-96183ea9b146e080)
 
 running 14 tests
@@ -17,5 +17,5 @@ test transport_eof_runs_host_cleanup ... ok
 test unknown_cleanup_step_is_reported_and_claim_retained ... ok
 test writer_held_is_reported_without_switching_sessions ... ok
 
-test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 26.21s
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 28.73s
 

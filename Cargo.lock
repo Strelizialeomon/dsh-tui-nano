@@ -279,6 +279,7 @@ version = "0.1.0"
 dependencies = [
  "crossterm",
  "nano-attachments",
+ "nano-controls",
  "nano-conversation",
  "nano-runtime",
  "nano-skills",
@@ -293,6 +294,14 @@ version = "0.1.0"
 dependencies = [
  "nano-conversation",
  "nano-runtime",
+ "serde_json",
+]
+
+[[package]]
+name = "nano-controls"
+version = "0.1.0"
+dependencies = [
+ "serde",
  "serde_json",
 ]
 

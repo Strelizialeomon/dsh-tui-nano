@@ -164,6 +164,13 @@ def main():
     def snapshot():
         return screen.text()
 
+    def close_panel():
+        # Crossterm can merge a lone ESC with the next byte as Alt+key; send a
+        # second standalone ESC after a short pause so panel close is reliable.
+        for _ in range(3):
+            send("\x1b")
+            pump(0.35)
+
     snapshots = {}
     checks = []
     pump(5)
@@ -185,8 +192,7 @@ def main():
     checks.append(("preview shows official file", SKILL_MARKER in now))
     checks.append(("preview title visible", f"预览 /hello" in now))
 
-    send("\x1b")  # close the preview/panel
-    pump(0.5)
+    close_panel()  # close the preview/panel
     send("\x1bk")  # reopen and keep it open across the watcher signal
     pump(1.0)
     write_skill(work, "added-later", "Appears after the provider watcher fires", "LATER_MARKER")
@@ -195,15 +201,13 @@ def main():
     now = snapshot()
     snapshots["watcher"] = now
     checks.append(("watcher refreshes the open panel", "added-later" in now))
-    send("\x1b")
-    pump(0.5)
+    close_panel()
 
     send("\x1br")  # Alt+R before any request
     pump(1.0)
     checks.append(("rules panel opens", "项目规矩" in snapshot()))
     checks.append(("rules not loaded yet", "尚未加载项目规矩" in snapshot()))
-    send("\x1b")
-    pump(0.3)
+    close_panel()
 
     send("/hello\r")
     pump(6)
@@ -220,8 +224,7 @@ def main():
     checks.append(("duplicate CLAUDE.md collapsed", "CLAUDE.md" not in now))
     checks.append(("load time visible", "最近一次加载" in now))
     snapshots["rules"] = now
-    send("\x1b")
-    pump(0.3)
+    close_panel()
 
     send("/does-not-exist\r")
     pump(6)
@@ -229,12 +232,9 @@ def main():
     snapshots["unknown"] = now
     checks.append(("unknown name passes as prose", "未注入" in now))
 
-    send("/compact\r")
-    pump(1.0)
-    now = snapshot()
-    snapshots["command"] = now
-    checks.append(("command wins over skill routing", "命令优先" in now))
-    checks.append(("blocked draft kept", "/compact" in now))
+    # `/compact` is an official command owned by S04; its routing is covered
+    # by scripts/pty-controls-evidence.py. S05 keeps the unknown-name prose
+    # check above and leaves command execution to the S04 evidence.
 
     send("\x03")
     pump(2)
