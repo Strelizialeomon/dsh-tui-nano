@@ -2,8 +2,8 @@
 
 ## 已执行
 
-- `cargo test`：nano-app 34 项、nano-conversation 51 项 + 契约 5 项、nano-runtime 18 项 + 契约 10 项、nano-skills 18 项 + 契约 5 项全绿；见 `tests.txt`。
-- `node --test bridge/test/*.test.mjs`：81 项通过，含 S05 桥接 15 项与协议夹具。
+- `cargo test`：nano-app 40 项、nano-conversation 52 项 + 契约 5 项、nano-runtime 18 项 + 契约 10 项、nano-skills 20 项 + 契约 5 项全绿；见 `tests.txt`。
+- `node --test bridge/test/*.test.mjs`：84 项通过，含 S05 桥接 18 项与协议夹具。
 - `NANO_E2E=1 node --test bridge/test/integration/*.test.mjs`：3 项通过。新增的 S05 真实宿主测试用真实 dsh profile、真实技能目录、真实 `AGENTS.md`/`CLAUDE.md`/`AGENTS.local.md` 与真实 `agent-instructions` 消息验证发现、预览、watcher 刷新、删除、`/hello` 官方注入和规矩来源；见 `tests.txt`。
 - `cargo test -p nano-runtime --test integration -- --ignored --test-threads=1 --skip shutdown_budget_is_bounded_when_cleanup_hangs`：14 项 S01 真实宿主回归通过；见 `s01-regressions.txt`。
 - `python3 scripts/pty-evidence-s05.py`：真实 PTY（120×40）驱动真实 `nano` 二进制；见 `pty.txt`。全部 23 项检查通过，覆盖：
@@ -28,6 +28,28 @@
 - `$DSH_AGENTS_HOME/AGENTS.md`：共享全局链夹具。
 
 PTY 与真实宿主测试都把官方 DeepSeek 路由指向本机 Messages 兼容 mock（固定 SSE `ok`），因此真实 pre-step、技能注入、指令加载都实际执行，但没有真实模型费用，也没有使用用户凭据。
+
+## 重审后的修订（2026-10-21）
+
+用户点档「重审」后，两路只读审核的结论原样贴在 PR #21。代码侧已修：
+
+- 不完整的官方目录不再覆盖上次可用目录；只有完整观察才替换，首次不完整观察仍展示部分候选。
+- S05 面板不再被无关宿主事件弹栈关闭；空 inbox 只关闭队列焦点。
+- 断线重建订阅补上 `skills.changed`/`instructions.changed`，初始与重建共用 `SUBSCRIPTION_KINDS`。
+- 预览 RPC/解析错误保留预览块并显示错误；迟到/异地址预览被拒绝；目录刷新后失效的旧预览被清除。
+- 技能列表窗口按实际换行高度计算，长路径不再把选中项或预览挤出屏幕。
+- `skills.snapshot` 与模型侧一致传 `scope: agent`，cwd 走官方 `workingDirectory.ensure(agent)`，并加 20s 边界。
+- 预算提示不再被 UI 静默截到 600 字符；只接受官方渲染的首行预算提示，规则正文伪造的同名前缀被忽略；新基线重置投影截断标记。
+- 规矩面板滚动有上界；`//compact` 不再被当成 `compact` 命令。
+- PTY 证据加强：预览检查预览标题；watcher 在面板保持打开时验证目录刷新；不再因重开面板而假绿。
+
+仍未在代码里解决、需要单独改规格或公开 API 不提供通道的项：
+
+- 增量新增的浅层规矩来源按到达顺序追加，不是完整官方链顺序；面板已如实标注“基线按官方加载顺序；增量按官方消息到达顺序追加”。
+- `watch:false` 的“不会自动刷新”标注没有公开 API 可读 provider 配置，未实现。
+- 权限/I/O/根标记失败的官方错误没有公开事件通道进入面板；官方回合失败本身仍显示在对话记录。
+- 规格 §4“超出读取上限显示错误”与 §9“显示截断”的措辞冲突；实现按 §9。
+- 规格 §9 尚未列实现自定的 512 来源 / 8192 提示上限；§10 仍保留旧句“上述验收均未执行”。
 
 ## 未执行（不得勾选）
 

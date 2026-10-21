@@ -22,8 +22,22 @@ pub struct SkillPreview {
 }
 
 impl SkillPreview {
-    /// Read one preview from the wire result.
-    pub fn parse(value: &Value) -> Result<Self, SkillError> {
+    /// Read one preview from the wire result. The address must name the root
+    /// session that asked for the preview; a stale or foreign response is
+    /// rejected instead of displayed in this window.
+    pub fn parse(value: &Value, expected_root: &str) -> Result<Self, SkillError> {
+        let address = value
+            .get("address")
+            .ok_or_else(|| SkillError("preview needs an address".into()))?;
+        let root = address
+            .get("rootSessionId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| SkillError("preview address needs rootSessionId".into()))?;
+        if root != expected_root {
+            return Err(SkillError(format!(
+                "preview belongs to root session {root}, not {expected_root}"
+            )));
+        }
         let name = required_string(value, "name")?;
         let path = required_string(value, "path")?;
         let text = value
@@ -89,15 +103,18 @@ mod tests {
 
     #[test]
     fn a_preview_parses_and_reports_truncation() {
-        let preview = SkillPreview::parse(&json!({
-            "address": {"rootSessionId": "root"},
-            "name": "hello",
-            "path": "/tmp/hello/SKILL.md",
-            "text": "hello",
-            "truncated": true,
-            "bytes": 65536,
-            "limit": 65536,
-        }))
+        let preview = SkillPreview::parse(
+            &json!({
+                "address": {"rootSessionId": "root"},
+                "name": "hello",
+                "path": "/tmp/hello/SKILL.md",
+                "text": "hello",
+                "truncated": true,
+                "bytes": 65536,
+                "limit": 65536,
+            }),
+            "root",
+        )
         .unwrap();
         assert_eq!(preview.name, "hello");
         assert!(preview.truncated);
@@ -107,15 +124,18 @@ mod tests {
 
     #[test]
     fn an_empty_file_is_distinguishable_from_a_failed_read() {
-        let preview = SkillPreview::parse(&json!({
-            "address": {"rootSessionId": "root"},
-            "name": "empty",
-            "path": "/tmp/empty/SKILL.md",
-            "text": "",
-            "truncated": false,
-            "bytes": 0,
-            "limit": 65536,
-        }))
+        let preview = SkillPreview::parse(
+            &json!({
+                "address": {"rootSessionId": "root"},
+                "name": "empty",
+                "path": "/tmp/empty/SKILL.md",
+                "text": "",
+                "truncated": false,
+                "bytes": 0,
+                "limit": 65536,
+            }),
+            "root",
+        )
         .unwrap();
         assert!(preview.empty());
         assert!(preview.truncation_label().is_none());
@@ -123,6 +143,24 @@ mod tests {
 
     #[test]
     fn missing_fields_are_rejected() {
-        assert!(SkillPreview::parse(&json!({"name": "hello"})).is_err());
+        assert!(SkillPreview::parse(&json!({"name": "hello"}), "root").is_err());
+    }
+
+    #[test]
+    fn a_foreign_address_is_rejected() {
+        let error = SkillPreview::parse(
+            &json!({
+                "address": {"rootSessionId": "other"},
+                "name": "hello",
+                "path": "/tmp/hello/SKILL.md",
+                "text": "hello",
+                "truncated": false,
+                "bytes": 5,
+                "limit": 65536,
+            }),
+            "root",
+        )
+        .unwrap_err();
+        assert!(error.0.contains("belongs to root session"));
     }
 }

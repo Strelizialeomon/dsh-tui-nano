@@ -187,18 +187,21 @@ fn draw_skills_panel(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     let preview_open = app.skill_preview_target.is_some();
+    let header_rows = lines.len();
     let preview_rows = if preview_open {
-        (inner.height as usize).saturating_sub(lines.len() + 2) / 2
+        (inner.height as usize).saturating_sub(header_rows) / 2
     } else {
         0
     };
     let list_rows = (inner.height as usize)
-        .saturating_sub(lines.len())
+        .saturating_sub(header_rows)
         .saturating_sub(preview_rows);
-    let entry_rows = (list_rows / 2).max(1);
+
+    // Render each entry as its own block so the window follows real wrapped
+    // heights instead of assuming one title line plus one detail line.
     let entries = app.skills.entries();
-    let start = window_start(app.skill_selection, entries.len(), entry_rows);
-    for (index, entry) in entries.iter().enumerate().skip(start).take(entry_rows) {
+    let mut blocks: Vec<Vec<Line<'static>>> = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.iter().enumerate() {
         let selected = index == app.skill_selection;
         let marker = if selected { "▸ " } else { "  " };
         let mut spans = vec![
@@ -230,7 +233,7 @@ fn draw_skills_panel(frame: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(Color::Magenta),
             ));
         }
-        lines.push(Line::from(spans));
+        let mut block = vec![Line::from(spans)];
         let mut detail = Vec::new();
         if let Some(when) = &entry.when_to_use {
             detail.push(format!("适用：{when}"));
@@ -242,12 +245,30 @@ fn draw_skills_panel(frame: &mut Frame, app: &App, area: Rect) {
         }
         detail.push(format!("来源：{} / {}", entry.source, entry.provider));
         wrap_block(
-            &mut lines,
+            &mut block,
             &format!("    {}", detail.join(" · ")),
             width,
-            width * 2,
+            usize::MAX,
             Color::DarkGray,
         );
+        blocks.push(block);
+    }
+
+    if list_rows > 0 && !blocks.is_empty() {
+        let selected = app.skill_selection.min(blocks.len() - 1);
+        let heights: Vec<usize> = blocks.iter().map(Vec::len).collect();
+        let start = visible_block_start(&heights, selected, list_rows);
+        let mut drawn = 0;
+        for (index, block) in blocks.iter().enumerate().skip(start) {
+            if drawn + block.len() > list_rows && index != selected {
+                break;
+            }
+            drawn += block.len();
+            lines.extend(block.iter().cloned());
+            if drawn >= list_rows {
+                break;
+            }
+        }
     }
 
     if preview_open {
@@ -255,6 +276,7 @@ fn draw_skills_panel(frame: &mut Frame, app: &App, area: Rect) {
             lines.push(Line::from(""));
         }
         draw_skill_preview(&mut lines, app, width);
+        lines.truncate(inner.height as usize);
     }
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
@@ -304,7 +326,7 @@ fn draw_skill_preview(lines: &mut Vec<Line<'static>>, app: &App, width: usize) {
 }
 
 /// Workspace-instruction sources, load time, and the official budget notice.
-fn draw_instructions_panel(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_instructions_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(Span::styled(" 项目规矩 ", Style::default().fg(Color::Cyan)));
@@ -348,7 +370,10 @@ fn draw_instructions_panel(frame: &mut Frame, app: &App, area: Rect) {
         );
     }
     if let Some(notice) = &app.instructions.budget_notice {
-        wrap_block(&mut lines, notice, width, 600, Color::Yellow);
+        // The bridge already bounds this at 8192 code points and sets
+        // `truncated`; rendering the whole bound value avoids a second silent
+        // cut without a marker.
+        wrap_block(&mut lines, notice, width, 8_192, Color::Yellow);
     }
     if app.instructions.truncated {
         lines.push(Line::from(Span::styled(
@@ -356,8 +381,13 @@ fn draw_instructions_panel(frame: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(Color::Yellow),
         )));
     }
+    let order_hint = if app.instructions.baseline {
+        "基线按官方加载顺序显示；同名内容已合并。"
+    } else {
+        "基线按官方加载顺序；增量来源按官方消息到达顺序追加；同名内容已合并。"
+    };
     lines.push(Line::from(Span::styled(
-        "按官方加载顺序显示；同名内容已合并。",
+        order_hint,
         Style::default().fg(Color::DarkGray),
     )));
     for source in &app.instructions.sources {
@@ -370,19 +400,31 @@ fn draw_instructions_panel(frame: &mut Frame, app: &App, area: Rect) {
             Span::raw(source.path.clone()),
         ]));
     }
-    let offset = app
-        .instructions_scroll
-        .min(lines.len().saturating_sub(inner.height as usize));
+    let max_scroll = lines.len().saturating_sub(inner.height as usize);
+    app.instructions_max_scroll = max_scroll;
+    let offset = app.instructions_scroll.min(max_scroll);
     let visible: Vec<Line<'static>> = lines.into_iter().skip(offset).collect();
     frame.render_widget(Paragraph::new(Text::from(visible)), inner);
 }
 
-/// First row of a bounded window that keeps `selection` visible.
-fn window_start(selection: usize, len: usize, rows: usize) -> usize {
-    if len <= rows || rows == 0 {
+/// First block of a window that keeps the selected block visible, using the
+/// real wrapped height of each block.
+fn visible_block_start(heights: &[usize], selected: usize, rows: usize) -> usize {
+    if heights.is_empty() {
         return 0;
     }
-    selection.saturating_sub(rows - 1).min(len - rows)
+    let selected = selected.min(heights.len() - 1);
+    let mut start = selected;
+    let mut used = heights[selected];
+    while start > 0 {
+        let height = heights[start - 1];
+        if used + height > rows {
+            break;
+        }
+        start -= 1;
+        used += height;
+    }
+    start
 }
 
 fn push_item(lines: &mut Vec<Line<'static>>, item: &ConversationItem, width: usize) {
@@ -712,6 +754,15 @@ fn truncate(text: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_window_keeps_the_selected_block_visible() {
+        let heights = [3usize; 12];
+        assert_eq!(visible_block_start(&heights, 0, 9), 0);
+        assert_eq!(visible_block_start(&heights, 11, 9), 9);
+        assert_eq!(visible_block_start(&heights, 5, 100), 0);
+        assert_eq!(visible_block_start(&[], 0, 9), 0);
+    }
 
     #[test]
     fn wrapping_never_splits_wide_characters() {

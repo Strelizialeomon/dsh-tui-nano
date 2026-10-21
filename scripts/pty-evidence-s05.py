@@ -21,12 +21,15 @@ import shutil
 import struct
 import subprocess
 import sys
+import sys
 import tempfile
 import termios
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+sys.dont_write_bytecode = True
 
 ROWS, COLS = 40, 120
 SKILL_MARKER = "S05_SKILL_BODY_MARKER"
@@ -180,17 +183,18 @@ def main():
     now = snapshot()
     snapshots["preview"] = now
     checks.append(("preview shows official file", SKILL_MARKER in now))
-    checks.append(("preview path visible", "SKILL.md" in now))
+    checks.append(("preview title visible", f"预览 /hello" in now))
 
-    send("\x1b")  # close panel
+    send("\x1b")  # close the preview/panel
     pump(0.5)
+    send("\x1bk")  # reopen and keep it open across the watcher signal
+    pump(1.0)
     write_skill(work, "added-later", "Appears after the provider watcher fires", "LATER_MARKER")
     time.sleep(2.0)
-    send("\x1bk")
-    pump(1.2)
+    pump(2.0)
     now = snapshot()
     snapshots["watcher"] = now
-    checks.append(("watcher refreshes catalog", "added-later" in now))
+    checks.append(("watcher refreshes the open panel", "added-later" in now))
     send("\x1b")
     pump(0.5)
 

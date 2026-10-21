@@ -183,6 +183,8 @@ pub struct App {
     pub instructions: InstructionState,
     /// Scroll offset in the instructions panel, in lines.
     pub instructions_scroll: usize,
+    /// Largest useful instructions scroll offset, measured at draw time.
+    pub instructions_max_scroll: usize,
     /// Submitted `/name` facts until the official injection decision.
     pub invocation: InvocationTracker,
 }
@@ -238,6 +240,7 @@ impl App {
             skills_refresh_queued: false,
             instructions: InstructionState::new(),
             instructions_scroll: 0,
+            instructions_max_scroll: 0,
             invocation: InvocationTracker::new(),
         }
     }
@@ -465,8 +468,8 @@ impl App {
                 }
                 if params.kind == "skills.changed" {
                     // The official registry invalidated its catalog; only the
-                    // signal is consumed, the catalog is refetched.
-                    self.skills_refresh_queued = true;
+                    // signal is consumed. `refresh_skills` coalesces a signal
+                    // that arrives while one request is already in flight.
                     self.refresh_skills();
                 }
                 if params.kind == "instructions.changed" {
@@ -483,7 +486,12 @@ impl App {
                     self.stop_pending = false;
                     self.notice = Some("官方已确认停止".to_string());
                 }
-                if self.model.inbox().is_empty() && !self.scene.focus().input_focused() {
+                // Only the queue dock is dismissed by an empty inbox. S05
+                // panels share the focus stack but are explicit overlays; a
+                // stream chunk or a catalog invalidation must not close them.
+                if self.model.inbox().is_empty()
+                    && self.scene.focus().top() == Some(&FocusId::queue())
+                {
                     self.scene.focus_mut().pop();
                 }
                 if changed {
@@ -740,6 +748,7 @@ impl App {
                     }
                 }
                 self.clamp_skill_selection();
+                self.reconcile_skill_preview();
                 if self.skills_refresh_queued {
                     self.skills_refresh_queued = false;
                     self.refresh_skills();
@@ -751,19 +760,20 @@ impl App {
                     return;
                 }
                 match result {
-                    Ok(value) => match SkillPreview::parse(&value) {
-                        Ok(preview) => {
-                            self.skill_preview = Some(preview);
-                            self.skill_preview_error = None;
+                    Ok(value) => {
+                        let root = self.model.address().root_session_id.clone();
+                        match SkillPreview::parse(&value, &root) {
+                            Ok(preview) => {
+                                self.skill_preview = Some(preview);
+                                self.skill_preview_error = None;
+                            }
+                            Err(error) => {
+                                self.skill_preview_error = Some(format!("预览无效：{error}"));
+                            }
                         }
-                        Err(error) => {
-                            self.skill_preview_error = Some(format!("预览无效：{error}"));
-                            self.skill_preview_target = None;
-                        }
-                    },
+                    }
                     Err(error) => {
                         self.skill_preview_error = Some(error.message);
-                        self.skill_preview_target = None;
                     }
                 }
             }
@@ -1015,6 +1025,7 @@ impl App {
     pub fn open_instructions_panel(&mut self) {
         self.scene.focus_mut().push(instructions_focus());
         self.instructions_scroll = 0;
+        self.instructions_max_scroll = 0;
         self.refresh_instructions();
     }
 
@@ -1038,6 +1049,31 @@ impl App {
         let last = self.skills.entries().len().saturating_sub(1);
         if self.skill_selection > last {
             self.skill_selection = last;
+        }
+    }
+
+    /// Drop an open preview whose skill disappeared or whose official path
+    /// changed. A catalog refresh must not leave an old body under a new
+    /// catalog (S05 §6.6).
+    fn reconcile_skill_preview(&mut self) {
+        let Some(target) = self.skill_preview_target.clone() else {
+            return;
+        };
+        let current = self
+            .skills
+            .find(&target)
+            .and_then(|entry| entry.path.clone());
+        match &self.skill_preview {
+            Some(preview) => {
+                if current.as_deref() != Some(preview.path.as_str()) {
+                    self.clear_skill_preview();
+                }
+            }
+            None => {
+                if current.is_none() && self.skill_preview_error.is_none() {
+                    self.clear_skill_preview();
+                }
+            }
         }
     }
 
@@ -1093,7 +1129,10 @@ impl App {
                 true
             }
             KeyCode::Down => {
-                self.instructions_scroll = self.instructions_scroll.saturating_add(1);
+                self.instructions_scroll = self
+                    .instructions_scroll
+                    .saturating_add(1)
+                    .min(self.instructions_max_scroll);
                 true
             }
             KeyCode::PageUp => {
@@ -1101,7 +1140,10 @@ impl App {
                 true
             }
             KeyCode::PageDown => {
-                self.instructions_scroll = self.instructions_scroll.saturating_add(10);
+                self.instructions_scroll = self
+                    .instructions_scroll
+                    .saturating_add(10)
+                    .min(self.instructions_max_scroll);
                 true
             }
             _ => false,
@@ -1465,12 +1507,9 @@ impl App {
         let Some(link) = &self.link else {
             return;
         };
-        let (params, replay_truncated) = self.model.resubscribe_params(&[
-            "session.event",
-            "conversation.status",
-            "conversation.inbox",
-            "conversation.stream",
-        ]);
+        let (params, replay_truncated) = self
+            .model
+            .resubscribe_params(&crate::link::SUBSCRIPTION_KINDS);
         if replay_truncated {
             self.notice = Some("重连回放窗口超过上限；从较新的 seq 开始重建".to_string());
         }
@@ -2012,6 +2051,91 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_preview_keeps_the_error_visible() {
+        let mut app = app();
+        app.ready = true;
+        install_catalog(&mut app, json!([skill_entry("hello", false)]), json!([]));
+        app.open_skills_panel();
+        app.skill_preview_target = Some("hello".into());
+        app.pending.insert(
+            7,
+            Pending::SkillPreview {
+                name: "hello".into(),
+            },
+        );
+        app.handle_request_done(
+            7,
+            Err(RequestError {
+                kind: RequestErrorKind::Rpc,
+                message: "skill path is unreadable".into(),
+            }),
+        );
+        assert!(app.skill_preview_target.is_some());
+        assert!(app
+            .skill_preview_error
+            .as_deref()
+            .unwrap()
+            .contains("unreadable"));
+    }
+
+    #[test]
+    fn a_foreign_preview_response_is_rejected() {
+        let mut app = app();
+        app.ready = true;
+        app.skill_preview_target = Some("hello".into());
+        app.pending.insert(
+            8,
+            Pending::SkillPreview {
+                name: "hello".into(),
+            },
+        );
+        app.handle_request_done(
+            8,
+            Ok(json!({
+                "address": {"rootSessionId": "other"},
+                "name": "hello",
+                "path": "/tmp/hello/SKILL.md",
+                "text": "body",
+                "truncated": false,
+                "bytes": 4,
+                "limit": 65536,
+            })),
+        );
+        assert!(app.skill_preview.is_none());
+        assert!(app
+            .skill_preview_error
+            .as_deref()
+            .unwrap()
+            .contains("belongs to root session"));
+    }
+
+    #[test]
+    fn a_catalog_refresh_drops_a_removed_preview() {
+        let mut app = app();
+        install_catalog(&mut app, json!([skill_entry("hello", false)]), json!([]));
+        app.skill_preview_target = Some("hello".into());
+        app.skill_preview = Some(
+            SkillPreview::parse(
+                &json!({
+                    "address": {"rootSessionId": "root"},
+                    "name": "hello",
+                    "path": "/tmp/hello/SKILL.md",
+                    "text": "body",
+                    "truncated": false,
+                    "bytes": 4,
+                    "limit": 65536,
+                }),
+                "root",
+            )
+            .unwrap(),
+        );
+        install_catalog(&mut app, json!([skill_entry("other", false)]), json!([]));
+        app.reconcile_skill_preview();
+        assert!(app.skill_preview_target.is_none());
+        assert!(app.skill_preview.is_none());
+    }
+
+    #[test]
     fn a_pathless_skill_is_still_submitted_literally() {
         let mut app = app();
         app.ready = true;
@@ -2075,11 +2199,38 @@ mod tests {
     fn page_keys_scroll_the_rules_panel_instead_of_the_feed() {
         let mut app = app();
         app.open_instructions_panel();
+        app.instructions_max_scroll = 100;
         let before = app.scroll_back;
         app.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
         assert_eq!(app.instructions_scroll, 10);
         assert_eq!(app.scroll_back, before);
         assert!(app.instructions_panel_open());
+    }
+
+    #[test]
+    fn subscription_kinds_cover_every_contracted_event_kind() {
+        let mut ours = crate::link::SUBSCRIPTION_KINDS.to_vec();
+        ours.sort_unstable();
+        let mut expected = nano_runtime::EVENT_KINDS.to_vec();
+        expected.sort_unstable();
+        assert_eq!(ours, expected);
+    }
+
+    #[test]
+    fn a_stream_event_does_not_close_the_skills_panel() {
+        let mut app = app();
+        app.open_skills_panel();
+        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::Event(
+            nano_runtime::protocol::EventParams {
+                runtime_id: "rt".into(),
+                generation: 1,
+                subscription_id: "sub-1".into(),
+                sequence: 1,
+                kind: "conversation.status".into(),
+                payload: json!({"address": {"rootSessionId": "root"}, "status": "idle"}),
+            },
+        )));
+        assert!(app.skills_panel_open());
     }
 
     #[test]

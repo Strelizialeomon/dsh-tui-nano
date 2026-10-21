@@ -46,7 +46,7 @@ fn skill_list_fixture_folds_into_the_catalog() {
 fn preview_fixture_parses_and_exposes_the_limit() {
     let contract = contract();
     let result = &contract["fixtures"]["skillPreviewResult"]["result"];
-    let preview = SkillPreview::parse(result).unwrap();
+    let preview = SkillPreview::parse(result, "session-fixture").unwrap();
     assert_eq!(preview.name, "hello-skill");
     assert_eq!(preview.text, "# hello-skill\n");
     assert!(!preview.truncated);

@@ -95,9 +95,12 @@ impl SkillCatalog {
 
     /// Apply one successful `nano.skills.list` result.
     ///
-    /// A successful list is authoritative: skills removed from the official
-    /// catalog disappear here, while an incomplete observation keeps the
-    /// entries it did report and stays marked as possibly incomplete.
+    /// A complete list is authoritative: skills removed from the official
+    /// catalog disappear here. An incomplete observation is not: once a
+    /// catalog has loaded, the last usable entries stay visible and the
+    /// catalog is only marked as possibly incomplete. A first observation may
+    /// still publish its partial candidates, because there is nothing better
+    /// to show.
     pub fn apply_list(&mut self, value: &Value, expected_root: &str) -> Result<(), SkillError> {
         let address = value
             .get("address")
@@ -118,9 +121,16 @@ impl SkillCatalog {
         for skill in skills {
             entries.push(SkillEntry::parse(skill)?);
         }
-        self.entries = entries;
-        self.commands = commands;
-        self.complete = complete;
+        if complete || !self.loaded {
+            self.entries = entries;
+            self.commands = commands;
+            self.complete = complete;
+        } else {
+            // The official registry reported an incomplete observation. Keep
+            // the last usable catalog; a provider failure must never look like
+            // "all skills were deleted". A later complete list replaces it.
+            self.complete = false;
+        }
         self.loaded = true;
         self.stale_reason = None;
         Ok(())
@@ -300,6 +310,41 @@ mod tests {
             .unwrap();
         assert!(catalog.may_be_incomplete());
         assert_eq!(catalog.entries().len(), 1);
+    }
+
+    #[test]
+    fn an_incomplete_refresh_keeps_the_last_usable_catalog() {
+        let mut catalog = SkillCatalog::new();
+        catalog
+            .apply_list(
+                &list_value(
+                    json!([entry("hello", false), entry("other", false)]),
+                    json!(["compact"]),
+                    true,
+                ),
+                "root",
+            )
+            .unwrap();
+        catalog
+            .apply_list(&list_value(json!([]), json!([]), false), "root")
+            .unwrap();
+        assert_eq!(
+            catalog.entries().len(),
+            2,
+            "a failed provider is not a mass deletion"
+        );
+        assert_eq!(catalog.commands(), ["compact"]);
+        assert!(catalog.may_be_incomplete());
+        catalog
+            .apply_list(
+                &list_value(json!([entry("fresh", false)]), json!(["model"]), true),
+                "root",
+            )
+            .unwrap();
+        assert_eq!(catalog.entries().len(), 1);
+        assert_eq!(catalog.resolve("fresh"), NameResolution::Skill);
+        assert_eq!(catalog.resolve("hello"), NameResolution::Unknown);
+        assert!(!catalog.may_be_incomplete());
     }
 
     #[test]

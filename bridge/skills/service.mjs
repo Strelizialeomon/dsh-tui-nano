@@ -16,6 +16,9 @@ export const MAX_INSTRUCTION_SOURCES = 512
 /** Maximum code points of a budget notice kept in one projection. */
 export const MAX_BUDGET_NOTICE_CHARS = 8192
 
+/** Bound one official catalog observation so a hung provider cannot block refreshes forever. */
+export const SKILL_DISCOVERY_TIMEOUT_MS = 20_000
+
 /**
  * One skills service per host generation, bound to the root Agent and cwd.
  */
@@ -108,7 +111,7 @@ export class SkillsService {
     }
     let snapshot
     try {
-      snapshot = await skills.snapshot({ cwd: this.cwd })
+      snapshot = await skills.snapshot(await this.lookupOptions())
     } catch (error) {
       throw new RpcError(
         'jsonrpc/internal-error',
@@ -164,7 +167,7 @@ export class SkillsService {
     }
     let snapshot
     try {
-      snapshot = await skills.snapshot({ cwd: this.cwd })
+      snapshot = await skills.snapshot(await this.lookupOptions())
     } catch (error) {
       throw new RpcError(
         'jsonrpc/internal-error',
@@ -252,7 +255,10 @@ export class SkillsService {
     const source = message?.source
     if (source === undefined || source === null || source.kind !== 'agent-instructions') return false
     const baseline = source.baseline === true
-    if (baseline) this.instructions.sources.clear()
+    if (baseline) {
+      this.instructions.sources.clear()
+      this.instructions.truncated = false
+    }
     for (const change of Array.isArray(source.changes) ? source.changes : []) {
       if (change === null || typeof change !== 'object') continue
       if (typeof change.path !== 'string' || change.path === '') continue
@@ -291,6 +297,29 @@ export class SkillsService {
         .join('')
       this.instructions.truncated = true
     }
+  }
+
+  /**
+   * Official lookup options: the Agent is the viewing scope and the official
+   * working-directory service supplies cwd, matching the model-side catalog.
+   * The timeout bounds one observation; the Rust request has its own bound.
+   */
+  async lookupOptions() {
+    const options = { scope: this.agent, signal: AbortSignal.timeout(SKILL_DISCOVERY_TIMEOUT_MS) }
+    const working = this.ctx.get('workingDirectory')
+    if (working !== undefined && typeof working.ensure === 'function') {
+      try {
+        options.cwd = await working.ensure(this.agent)
+      } catch (error) {
+        throw new RpcError(
+          'jsonrpc/internal-error',
+          `could not resolve the official working directory: ${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
+    } else {
+      options.cwd = this.cwd
+    }
+    return options
   }
 
   /** Command names visible to this Agent, for command-first adjudication. */
@@ -338,10 +367,17 @@ export class SkillsService {
  */
 export function budgetNoticeOf(text) {
   const marker = 'Workspace instruction budget '
-  const index = text.indexOf(marker)
-  if (index < 0) return undefined
-  const end = text.indexOf('\n', index)
-  return (end < 0 ? text.slice(index) : text.slice(index, end)).trim()
+  // The official renderer puts the marker on its own first content line,
+  // immediately after `<system-reminder>`. A project rule may contain the same
+  // prose later; that must not masquerade as the loader's budget notice.
+  const open = text.indexOf('<system-reminder>')
+  if (open < 0) return undefined
+  const lineStart = text.indexOf('\n', open)
+  if (lineStart < 0) return undefined
+  const start = lineStart + 1
+  const end = text.indexOf('\n', start)
+  const line = (end < 0 ? text.slice(start) : text.slice(start, end)).trim()
+  return line.startsWith(marker) ? line : undefined
 }
 
 /** Concatenate text blocks exactly as rendered. */
