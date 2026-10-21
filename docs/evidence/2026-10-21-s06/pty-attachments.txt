@@ -97,7 +97,7 @@
 
  文件补全（1 项）· ↑↓ 选择 · Enter/Tab 插入 · Esc 关闭 ─────────────────────────────────────────────────────────────────
 ▶ src/main.rs
-┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+Backspace 移除附件 ───────────────────────────────────┐
+┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除附件 · Ctrl+J 换行 · Ctrl+┐
 │@mai                                                                                                                  │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 work · 权限 workspace-write · Enter 发送 · Alt+Enter 插话 · @ 引用文件 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除…
@@ -137,7 +137,7 @@ work · 权限 workspace-write · Enter 发送 · Alt+Enter 插话 · @ 引用�
 
 
 
-┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+Backspace 移除附件 ───────────────────────────────────┐
+┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除附件 · Ctrl+J 换行 · Ctrl+┐
 │  [图片] pixel.png · 70 B · 1×1 · 已就绪                                                                              │
 │@src/main.rs                                                                                                          │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
@@ -177,7 +177,7 @@ work · 权限 workspace-write · 附件「pixel.png」已就绪
 
 
 
-┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+Backspace 移除附件 ───────────────────────────────────┐
+┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除附件 · Ctrl+J 换行 · Ctrl+┐
 │  [文件] notes.txt · 11 B · 已就绪                                                                                    │
 │  [图片] pixel.png · 70 B · 1×1 · 已就绪                                                                              │
 │@src/main.rs                                                                                                          │
@@ -192,7 +192,7 @@ work · 权限 workspace-write · 已调整附件顺序（只影响本次列表�
 | harness | 怎么读到 |
 |---|---|
 | Claude Code | `~/.claude/CLAUDE.md` 用 `@` 把它导入 |
-| Codex | `~/.codex/AGENTS.md` 是指向本文件的符号链接，启动时自动读取 |
+| Codex | `~/.codex/AGENTS.md` 是指向本文件的符号链接，启动时自[9读取 |
 | kimi | 原生读 `~/.agents/AGENTS.md` |
 
 **要改规矩，只改这一份**——各工具下次加载全局指令时读取同一份正文；已有会话需重新启动以确保加载新内容。
@@ -200,10 +200,10 @@ work · 权限 workspace-write · 已调整附件顺序（只影响本次列表�
 上下文
 Current runtime context. This snapshot supersedes earlier runtime-context snapshots.
 
-Current working directory: "/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-pty-s06-0q3fgv82/work".
+Current working directory: "/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-pty-s06-lp4p6g96/work".
 
 Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files unde
-r the session workspace: "/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-pty-s06-0q3fgv82/work". Some pla
+r the session workspace: "/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-pty-s06-lp4p6g96/work". Some pla
 tform temporary areas may also be writable.
 
 Approval policy: ask. Operations that require approval may ask through the configured answerers; without an availa
@@ -220,7 +220,7 @@ Use for registry errors or exact raw payloads. Not for public API catalogs or Op
 回合 （失败）
 llm-deepseek: no API key for provider route "deepseek-official"; store DEEPSEEK_API_KEY through the credentials service
 (the web Models page writes it), or export DEEPSEEK_API_KEY in the launching environment
-┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+Backspace 移除附件 ───────────────────────────────────┐
+┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除附件 · Ctrl+J 换行 · Ctrl+┐
 │                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 work · 权限 workspace-write · 已接收

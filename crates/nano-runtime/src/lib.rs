@@ -81,7 +81,7 @@ pub const LIFECYCLE_TRANSITIONS: [(&str, &str); 15] = [
 ];
 
 /// Error code names shared with the bridge contract.
-pub const ERROR_CODE_NAMES: [(&str, i64); 40] = [
+pub const ERROR_CODE_NAMES: [(&str, i64); 42] = [
     ("jsonrpc/parse-error", -32700),
     ("jsonrpc/invalid-request", -32600),
     ("jsonrpc/method-not-found", -32601),
@@ -113,19 +113,21 @@ pub const ERROR_CODE_NAMES: [(&str, i64); 40] = [
     ("nano/controls/permission-rejected", 1024),
     ("nano/controls/command-failed", 1025),
     ("nano/controls/unavailable", 1026),
-    ("nano/attachments/receipt-unknown", 1028),
-    ("nano/attachments/receipt-committed", 1029),
-    ("nano/attachments/receipt-incomplete", 1030),
-    ("nano/attachments/chunk-sequence", 1031),
-    ("nano/attachments/image-invalid", 1032),
-    ("nano/attachments/model-no-images", 1033),
-    ("nano/attachments/limit", 1034),
-    ("nano/attachments/file-failed", 1035),
-    ("nano/file-references/failed", 1036),
+    ("nano/shell/exec-failed", 1027),
+    ("nano/jobs/not-found", 1028),
+    ("nano/attachments/receipt-unknown", 1029),
+    ("nano/attachments/receipt-committed", 1030),
+    ("nano/attachments/receipt-incomplete", 1031),
+    ("nano/attachments/chunk-sequence", 1032),
+    ("nano/attachments/image-invalid", 1033),
+    ("nano/attachments/model-no-images", 1034),
+    ("nano/attachments/limit", 1035),
+    ("nano/attachments/file-failed", 1036),
+    ("nano/file-references/failed", 1037),
 ];
 
 /// Method names implemented by this generation.
-pub const IMPLEMENTED_METHODS: [&str; 27] = [
+pub const IMPLEMENTED_METHODS: [&str; 31] = [
     "nano.hello",
     "nano.startupError",
     "nano.shutdown",
@@ -153,10 +155,14 @@ pub const IMPLEMENTED_METHODS: [&str; 27] = [
     "nano.controls.selectModel",
     "nano.controls.setPermission",
     "nano.controls.executeCommand",
+    "nano.shell.exec",
+    "nano.jobs.snapshot",
+    "nano.jobs.follow",
+    "nano.jobs.kill",
 ];
 
 /// Event kinds this client accepts.
-pub const EVENT_KINDS: [&str; 8] = [
+pub const EVENT_KINDS: [&str; 10] = [
     "session.event",
     "conversation.status",
     "conversation.inbox",
@@ -165,6 +171,8 @@ pub const EVENT_KINDS: [&str; 8] = [
     "instructions.changed",
     "controls.model",
     "controls.permission",
+    "jobs.event",
+    "jobs.output",
 ];
 
 /// Shutdown report step names, in report order.

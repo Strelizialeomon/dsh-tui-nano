@@ -11,7 +11,8 @@ use std::time::Duration;
 use nano_runtime::paths::new_runtime_id;
 use nano_runtime::protocol::Address;
 use nano_runtime::{
-    Hello, Host, HostError, HostEvent, HostOptions, SessionMode, MAX_REPLAY_EVENTS,
+    CapabilityStatus, Hello, Host, HostError, HostEvent, HostOptions, SessionMode,
+    MAX_REPLAY_EVENTS,
 };
 use serde_json::Value;
 
@@ -84,6 +85,9 @@ pub struct RequestHandle {
     pub protocol_id: String,
 }
 
+/// Wait bound for `nano.shell.exec`: the executor deadline (60s) plus room for
+/// preparation and termination.
+pub const SHELL_REQUEST_TIMEOUT: Duration = Duration::from_secs(75);
 /// Shared handle to the host worker threads.
 pub struct HostLink {
     /// Incoming link events.
@@ -131,9 +135,9 @@ impl HostLink {
                 root_session_id: hello.root_session_id.clone(),
                 child_session_id: None,
             };
-            let kinds = SUBSCRIPTION_KINDS
-                .iter()
-                .map(|kind| kind.to_string())
+            let kinds = subscription_kinds(&hello)
+                .into_iter()
+                .map(str::to_string)
                 .collect();
             let _subscription = match startup_host.subscribe(address, Some(kinds), Some(from_seq)) {
                 Ok(subscription) => subscription,
@@ -197,6 +201,28 @@ impl HostLink {
         Ok(RequestHandle { id, protocol_id })
     }
 
+    /// Send one request with a caller-chosen wait bound. Used by the manual
+    /// shell lane, whose executor deadline is longer than the ordinary request
+    /// timeout.
+    pub fn request_with_timeout(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<u64, String> {
+        let id = self.counter.fetch_add(1, Ordering::SeqCst);
+        let host = self.host.clone();
+        let events = self.event_tx.clone();
+        let method = method.to_string();
+        std::thread::spawn(move || {
+            let result = host
+                .request_with_timeout(&method, params, timeout)
+                .map_err(classify_request_error);
+            let _ = events.send(LinkEvent::RequestDone { id, result });
+        });
+        Ok(id)
+    }
+
     /// Ask the host to cancel one in-flight request by protocol id.
     pub fn cancel_request(&self, protocol_id: &str) -> Result<u64, String> {
         self.request(
@@ -219,6 +245,27 @@ impl HostLink {
 
 fn describe_host_error(error: &HostError) -> String {
     format!("{error}")
+}
+
+/// Whether the composed host reports the official job registry as usable.
+pub fn jobs_supported(hello: &Hello) -> bool {
+    hello
+        .capabilities
+        .get("jobs")
+        .is_some_and(|capability| capability.status == CapabilityStatus::Supported)
+}
+
+/// The subscription used at handshake and after a rebuild. The stable kinds
+/// come from the shared list; job events are only requested when the composed
+/// host reports the capability, so an older bridge fails soft instead of
+/// refusing the whole subscription.
+pub fn subscription_kinds(hello: &Hello) -> Vec<&'static str> {
+    let mut kinds = SUBSCRIPTION_KINDS.to_vec();
+    if jobs_supported(hello) {
+        kinds.push("jobs.event");
+        kinds.push("jobs.output");
+    }
+    kinds
 }
 
 /// Classify a request failure without losing the fact that it may have been

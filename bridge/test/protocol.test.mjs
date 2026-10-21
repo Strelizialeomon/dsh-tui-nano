@@ -32,7 +32,7 @@ import {
 test('implemented methods match the contract', () => {
   assert.deepEqual([...IMPLEMENTED_METHODS].sort(), [...CONTRACT_IMPLEMENTED.keys()].sort())
   for (const [name, method] of CONTRACT_IMPLEMENTED) {
-    assert.ok(['S01', 'S02', 'S04', 'S05', 'S06'].includes(method.owner), `${name} owner`)
+    assert.ok(['S01', 'S02', 'S04', 'S05', 'S06', 'S08'].includes(method.owner), `${name} owner`)
     if (method.kind === 'request') {
       assert.ok(IMPLEMENTED_REQUEST_METHODS.includes(name), `${name} must be dispatched as a request`)
     } else {
@@ -83,6 +83,8 @@ test('event kinds match', () => {
     'instructions.changed',
     'controls.model',
     'controls.permission',
+    'jobs.event',
+    'jobs.output',
   ])
 })
 
@@ -153,6 +155,19 @@ test('conversation fixtures parse on the bridge side', () => {
   const validated = validateEvent(event.params, { runtimeId: 'rt-fixture', generation: 1 })
   assert.equal(validated.kind, 'conversation.status')
   assert.equal(validated.payload.status, 'running')
+})
+
+test('shell and jobs fixtures parse on the bridge side', () => {
+  const shell = parseFrameLine(JSON.stringify(CONTRACT.fixtures.shellExec))
+  assert.equal(shell.type, 'request')
+  assert.equal(shell.method, 'nano.shell.exec')
+  assert.equal(shell.params.command, 'printf hello')
+  const jobs = parseFrameLine(JSON.stringify(CONTRACT.fixtures.jobsEvent))
+  assert.equal(jobs.type, 'notification')
+  const validated = validateEvent(jobs.params, { runtimeId: 'rt-fixture', generation: 1 })
+  assert.equal(validated.kind, 'jobs.event')
+  assert.equal(validated.payload.type, 'settled')
+  assert.equal(validated.payload.job.status, 'completed')
 })
 
 test('skill and instruction fixtures parse on the bridge side', () => {

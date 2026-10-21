@@ -1,12 +1,13 @@
-✔ attachment staging, ordered admission, discovery, and resume (2891.884708ms)
-✔ malformed frame is reported, subscription replays, shutdown is clean (1517.530208ms)
-✔ conversation surface submits, dedupes, and keeps official identity (2106.096709ms)
-✔ real host discovers, previews, invalidates, and injects skills (1840.320583ms)
-ℹ tests 4
+✔ attachment staging, ordered admission, discovery, and resume (2450.443542ms)
+✔ malformed frame is reported, subscription replays, shutdown is clean (1472.216334ms)
+✔ manual shell execution injects bash context and job observation is non-consuming (1365.205208ms)
+✔ conversation surface submits, dedupes, and keeps official identity (1874.6135ms)
+✔ real host discovers, previews, invalidates, and injects skills (1951.814208ms)
+ℹ tests 5
 ℹ suites 0
-ℹ pass 4
+ℹ pass 5
 ℹ fail 0
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 3656.546334
+ℹ duration_ms 4745.355041

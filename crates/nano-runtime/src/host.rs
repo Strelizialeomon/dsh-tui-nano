@@ -498,6 +498,21 @@ impl Host {
             .unwrap_or(Duration::from_secs(30))
     }
 
+    /// Send one request with a caller-chosen wait bound. A manual shell command
+    /// is bounded by the executor deadline, which is longer than the ordinary
+    /// request timeout, so waiting on it needs its own budget.
+    /// @param method - JSON-RPC method name.
+    /// @param params - request params.
+    /// @param timeout - maximum wait before reporting an unknown outcome.
+    pub fn request_with_timeout(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, HostError> {
+        self.request_internal(method, params, timeout, false)
+    }
+
     /// Receive the next host event.
     pub fn next_event(&self, timeout: Option<Duration>) -> Result<HostEvent, HostError> {
         let receiver = self.inner.inbox.lock().expect("inbox mutex poisoned");
