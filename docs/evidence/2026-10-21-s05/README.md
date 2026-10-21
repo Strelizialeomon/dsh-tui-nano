@@ -4,7 +4,7 @@
 
 - `cargo test`：nano-app 40 项、nano-conversation 52 项 + 契约 5 项、nano-runtime 18 项 + 契约 10 项、nano-skills 20 项 + 契约 5 项全绿；见 `tests.txt`。
 - `node --test bridge/test/*.test.mjs`：84 项通过，含 S05 桥接 18 项与协议夹具。
-- `NANO_E2E=1 node --test bridge/test/integration/*.test.mjs`：3 项通过。新增的 S05 真实宿主测试用真实 dsh profile、真实技能目录、真实 `AGENTS.md`/`CLAUDE.md`/`AGENTS.local.md` 与真实 `agent-instructions` 消息验证发现、预览、watcher 刷新、删除、`/hello` 官方注入和规矩来源；见 `tests.txt`。
+- `NANO_E2E=1 node --test bridge/test/integration/*.test.mjs`：6 项通过。S05 真实宿主测试用真实 dsh profile、真实技能目录、真实 `AGENTS.md`/`CLAUDE.md`/`AGENTS.local.md` 与真实 `agent-instructions` 消息验证发现、预览、watcher 刷新、删除、`/hello` 官方注入和规矩来源；补证据文件另验证嵌套规矩、`--resume` 基线与两类加载失败；见 `tests.txt`。
 - `cargo test -p nano-runtime --test integration -- --ignored --test-threads=1 --skip shutdown_budget_is_bounded_when_cleanup_hangs`：14 项 S01 真实宿主回归通过；见 `s01-regressions.txt`。
 - `python3 scripts/pty-evidence-s05.py`：真实 PTY（120×40）驱动真实 `nano` 二进制；见 `pty.txt`。全部 23 项检查通过，覆盖：
   - 技能面板列出官方目录（`hello`、`user-only`，仅用户可调用标记、描述、官方路径）。
@@ -51,13 +51,19 @@ PTY 与真实宿主测试都把官方 DeepSeek 路由指向本机 Messages 兼�
 - `watch:false` 没有公开 API 可读 provider 配置，S05 不提供自动标注。
 - 权限/I/O/根标记失败的官方错误没有公开事件通道进入面板；官方回合失败本身仍显示在对话记录。
 
+## 补证据（2026-10-21，`skills-followup.test.mjs`）
+
+用本地 Messages mock 让真实官方 pre-step / 工具执行跑起来，无真实模型费用：
+
+- **嵌套规矩**：真实 `read` 工具读取 `sub/AGENTS.md`；下一次 pre-step 后 `instructions.changed` 出现 `sub/AGENTS.md`，并等到工具后的真实模型请求正文包含 `NESTED_RULE`（session-title 辅助请求按首条消息区分，不计入）。
+- **恢复校正基线**：同一会话 `sessionMode: resume` 重启后先读到 durable 来源；修改 `AGENTS.md` 再发请求，官方注入 `AGENTS.md` 的 `replace` 变更，恢复后的模型请求正文包含 `CHANGED_RULE`。
+- **根标记失败**：`.git` 自引用符号链接触发 ELOOP；官方 pre-step 直接失败（模型请求 0 次），回合错误可见，来源为空。
+- **文件级权限失败**：`AGENTS.md` 权限 000、同目录 `AGENTS.local.md` 可读、项目外祖先也有 `AGENTS.md`；回合正常完成，来源恰为 `AGENTS.local.md`（正控证明发现路径生效），`SECRET_RULE` 与 `ANCESTOR_RULE` 均未进入请求，不选祖先目录、不伪造来源。
+
 ## 未执行（不得勾选）
 
 - **真实远程技能 provider**：本份只用官方 filesystem provider。远程 provider 的发现失败、重试与 `complete=false` 只由桥接单元测试覆盖，未接真实远程服务。
-- **读写文件后新增嵌套规矩**：需要真实模型发出 `read`/`write`/`edit` 工具调用后由官方 loader 发现；本份没有跑真实工具调用，只由桥接单元测试覆盖 durable 消息折叠与基线替换。
-- **会话恢复后的规矩基线校正**：桥接单元测试覆盖「构造时折叠已有 durable `agent-instructions` 消息」，没有单独录一次真实 `--resume` 的规矩面板。
 - **工作目录变化后的重载**：切换会话/工作目录属于 S07；S05 只由单元测试覆盖「新的完整基线替换旧来源集合」，没有真实窗口级切换证据。
-- **权限 / I/O / 根标记失败**：由官方 loader 抛错；本份验证了「没有消息就不伪造来源」，没有注入这三类真实失败。
 - **真实模型消费与注入成本**：mock 只验证官方注入确实发生；未跑带真实凭据的模型回合。
 
 ## 边界数字
