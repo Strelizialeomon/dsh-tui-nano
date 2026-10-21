@@ -4,3 +4,4 @@ target/
 dist/
 *.log
 .claude/worktrees/
+__pycache__/

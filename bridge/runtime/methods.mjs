@@ -20,6 +20,9 @@ export const IMPLEMENTED_REQUEST_METHODS = Object.freeze([
   'nano.schedule.update',
   'nano.schedule.delete',
   'nano.schedule.history',
+  'nano.skills.list',
+  'nano.skills.preview',
+  'nano.instructions.snapshot',
 ])
 
 /** Notifications this host can emit. */

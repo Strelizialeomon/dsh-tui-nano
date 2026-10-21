@@ -2,8 +2,8 @@
 
 ## 已执行
 
-- `cargo test --workspace`：11 个测试目标全绿；nano-schedule 25 项（表单、CAS、无改动 update、历史标志、折叠分组、失败夹具）、nano-app 29 项、nano-conversation 51+5 项、nano-runtime 18+10+2 项，15 项真实宿主回归仍为 ignored。原始输出见 `rust-tests.txt`。
-- `node --test bridge/test/*.test.mjs`：79 项通过。调度 13 项见 `bridge/test/schedule.test.mjs`：0600/0700 租约、同 pid 幂等、活锁拒绝且不删锁、死 pid 回收、损坏锁 30 秒门槛、只释放自己的锁、原子发布无临时文件、**两进程并发回收同一死锁只有一个 owner**、RPC 委托、跨根地址拒绝、官方错误码透传、history 游标、写失败夹具。见 `bridge-tests.txt`。
+- `cargo test --workspace`：12 个测试目标全绿；nano-schedule 25 项（表单、CAS、无改动 update、历史标志、折叠分组、失败夹具）、nano-app 44 项（含调度覆盖层与失败路径）、nano-conversation 52+5 项、nano-runtime 18+10+2 项、nano-skills 20+5 项，15 项真实宿主回归仍为 ignored。原始输出见 `rust-tests.txt`。
+- `node --test bridge/test/*.test.mjs`：98 项通过（合并 origin/main 的 S05 后全量重跑）。调度 13 项见 `bridge/test/schedule.test.mjs`：0600/0700 租约、同 pid 幂等、活锁拒绝且不删锁、死 pid 回收、损坏锁 30 秒门槛、只释放自己的锁、原子发布无临时文件、**两进程并发回收同一死锁只有一个 owner**、RPC 委托、跨根地址拒绝、官方错误码透传、history 游标、写失败夹具。见 `bridge-tests.txt`。
 - `NANO_E2E=1 node --test bridge/test/integration/host.test.mjs`：2 项通过，确认新增调度启动没有破坏 S01/S02 的真实宿主、订阅回放和干净关停。见 `host-e2e.txt`。
 - `NANO_E2E=1 node --test bridge/test/integration/schedule.test.mjs`：6 项真实宿主用例全部通过，见 `e2e-schedule.txt`：
   1. 六种选择器经官方 `ctx.schedule.create` 创建；空标题、空指令返回 `invalid_prompt`，非法 IANA 时区返回 `invalid_time_zone`，非法 cron 返回 `invalid_rule`，都带官方可读原因；`catalog` 同时返回活跃/已结束，`list` 在一次性任务结束后不再包含它；`history` 空页的两个裁剪标志分开返回，`limit: 0` 返回 `invalid_rule`；带预期记录的修改成功，第二次用旧记录提交返回 `schedule_conflict` 且未覆盖已提交标题；删除后 `history` 返回 `schedule_not_found`，再次删除返回 `deleted:false`。

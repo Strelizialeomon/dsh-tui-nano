@@ -1,84 +1,100 @@
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.03s
-     Running unittests src/main.rs (target/debug/deps/nano-47ebdeb3bd695f03)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running unittests src/main.rs (target/debug/deps/nano-c5dd2fead222c5cc)
 
-running 29 tests
+running 44 tests
 test app::tests::a_definitive_schedule_rejection_is_reported_as_failure ... ok
-test app::tests::a_prompt_without_a_ready_host_is_rejected_and_kept ... ok
+test app::tests::a_foreign_preview_response_is_rejected ... ok
 test app::tests::a_failed_stream_schedules_a_rebuild_without_dropping_the_connection ... ok
-test app::tests::a_snapshot_idle_clears_a_stuck_stop ... ok
-test app::tests::alt_e_loads_a_queued_item_and_escape_restores_the_original_draft ... ok
+test app::tests::a_prompt_without_a_ready_host_is_rejected_and_kept ... ok
 test app::tests::a_failed_submission_keeps_both_the_failed_text_and_new_input ... ok
+test app::tests::a_local_rejection_restores_the_draft ... ok
+test app::tests::a_failed_preview_keeps_the_error_visible ... ok
+test app::tests::a_prepared_submission_clears_the_input_and_keeps_an_echo ... ok
+test app::tests::a_pathless_skill_is_still_submitted_literally ... ok
+test app::tests::a_catalog_refresh_drops_a_removed_preview ... ok
+test app::tests::a_same_name_command_blocks_the_skill_submission ... ok
+test app::tests::a_snapshot_idle_clears_a_stuck_stop ... ok
+test app::tests::a_stream_event_does_not_close_the_skills_panel ... ok
 test app::tests::a_too_large_submission_is_rejected_before_it_reaches_the_host ... ok
 test app::tests::an_empty_inbox_drops_queue_focus ... ok
-test app::tests::a_prepared_submission_clears_the_input_and_keeps_an_echo ... ok
-test app::tests::a_local_rejection_restores_the_draft ... ok
+test app::tests::alt_e_loads_a_queued_item_and_escape_restores_the_original_draft ... ok
+test app::tests::a_turn_end_without_injection_reports_not_injected ... ok
+test app::tests::alt_r_opens_the_instruction_sources_panel ... ok
 test app::tests::an_unknown_schedule_result_is_not_reported_as_failure ... ok
-test app::tests::an_unknown_transport_result_is_not_reported_as_a_failed_send ... ok
-test app::tests::base64_matches_known_vectors ... ok
 test app::tests::an_unsupported_schedule_capability_is_shown_and_blocks_actions ... ok
+test app::tests::alt_k_opens_the_catalog_and_enter_inserts_a_literal_token ... ok
+test app::tests::base64_matches_known_vectors ... ok
+test app::tests::an_unknown_transport_result_is_not_reported_as_a_failed_send ... ok
 test app::tests::bracketed_paste_preserves_the_payload ... ok
 test app::tests::control_g_opens_and_closes_the_schedule_overlay ... ok
 test app::tests::control_u_clears_the_draft ... ok
 test app::tests::enter_on_blank_keeps_the_draft_and_reports_rejection ... ok
+test app::tests::an_unknown_slash_name_is_submitted_literally_and_tracked ... ok
+test app::tests::page_keys_scroll_the_rules_panel_instead_of_the_feed ... ok
 test app::tests::queue_selection_stays_in_range ... ok
-test app::tests::repeated_stream_failures_stop_retrying ... ok
-test app::tests::queue_focus_never_submits_the_hidden_input_draft ... ok
-test app::tests::repeated_alt_e_does_not_overwrite_the_edit_backup ... ok
+test app::tests::an_official_injection_clears_the_pending_skill_fact ... ok
 test app::tests::sending_is_blocked_until_the_official_idle_fact_arrives ... ok
+test app::tests::queue_focus_never_submits_the_hidden_input_draft ... ok
+test app::tests::repeated_stream_failures_stop_retrying ... ok
+test app::tests::repeated_alt_e_does_not_overwrite_the_edit_backup ... ok
 test app::tests::shell_input_is_routed_to_s08_and_not_submitted ... ok
 test app::tests::shift_enter_inserts_a_newline_instead_of_sending ... ok
-test ui::tests::empty_line_has_one_segment ... ok
+test app::tests::subscription_kinds_cover_every_contracted_event_kind ... ok
 test app::tests::stale_agent_events_for_another_address_are_ignored ... ok
-test ui::tests::wrapping_never_splits_wide_characters ... ok
+test app::tests::tab_does_not_close_the_skills_panel ... ok
+test ui::tests::empty_line_has_one_segment ... ok
+test ui::tests::the_window_keeps_the_selected_block_visible ... ok
 test ui::tests::wrapping_keeps_byte_offsets_on_char_boundaries ... ok
+test ui::tests::wrapping_never_splits_wide_characters ... ok
 
-test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 44 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
      Running unittests src/lib.rs (target/debug/deps/nano_conversation-f7c128de439cf10b)
 
-running 51 tests
-test events::tests::address_match_requires_the_exact_conversation ... ok
-test history::tests::a_user_message_that_mentions_bash_tags_is_still_a_user_message ... ok
-test history::tests::history_is_bounded_and_marks_truncation ... ok
+running 52 tests
 test commands::tests::bang_routes_to_shell_without_rewriting ... ok
+test events::tests::address_match_requires_the_exact_conversation ... ok
 test commands::tests::plain_text_is_a_prompt ... ok
 test commands::tests::unregistered_slash_names_do_not_become_prompts ... ok
+test history::tests::a_user_message_that_mentions_bash_tags_is_still_a_user_message ... ok
 test events::tests::unknown_frames_and_kinds_are_ignored_not_guessed ... ok
 test events::tests::parses_status_and_inbox_events ... ok
+test history::tests::history_is_bounded_and_marks_truncation ... ok
 test history::tests::synthetic_bash_is_never_a_user_prompt ... ok
-test history::tests::turn_failures_are_visible_but_completion_is_not ... ok
 test history::tests::tool_call_and_result_pair_by_call_id_in_v4_and_v3_shapes ... ok
+test history::tests::turn_failures_are_visible_but_completion_is_not ... ok
 test history::tests::user_and_assistant_messages_keep_official_identity ... ok
-test input::tests::blank_enter_is_rejected_and_keeps_text ... ok
-test input::tests::bracketed_paste_keeps_newlines_and_carriage_returns ... ok
 test commands::tests::skills_owner_routes_slash_names_to_s05 ... ok
 test commands::tests::registered_commands_keep_owner_and_arguments ... ok
+test commands::tests::a_double_slash_is_not_a_command_name ... ok
+test input::tests::blank_enter_is_rejected_and_keeps_text ... ok
+test input::tests::bracketed_paste_keeps_newlines_and_carriage_returns ... ok
 test input::tests::cursor_movement_handles_cjk_width ... ok
-test ids::tests::request_ids_are_unique_and_prefixed ... ok
 test input::tests::ime_enter_never_sends ... ok
 test input::tests::drafts_are_per_address_and_do_not_leak ... ok
+test ids::tests::request_ids_are_unique_and_prefixed ... ok
 test input::tests::multiline_editing_preserves_text_and_cursor ... ok
 test input::tests::removing_the_visible_draft_leaves_an_empty_one ... ok
 test model::tests::a_child_address_cannot_submit_in_s02 ... ok
 test model::tests::an_event_for_another_address_does_not_change_state ... ok
-test model::tests::an_echo_in_the_official_inbox_is_not_drawn_in_the_feed ... ok
 test input::tests::very_long_single_line_round_trips ... ok
+test model::tests::an_echo_in_the_official_inbox_is_not_drawn_in_the_feed ... ok
 test model::tests::an_idle_turn_marks_an_unlanded_accepted_echo_unknown ... ok
-test model::tests::disconnect_marks_in_flight_submissions_unknown_and_drops_previews ... ok
-test model::tests::resubscribe_marks_a_truncated_replay_window ... ok
 test model::tests::an_unknown_submission_reconciles_from_the_official_inbox ... ok
-test model::tests::ordered_content_keeps_block_order_and_rejects_unready_parts ... ok
+test model::tests::disconnect_marks_in_flight_submissions_unknown_and_drops_previews ... ok
 test model::tests::durable_assistant_message_retires_the_matching_preview ... ok
-test model::tests::resubscribe_never_asks_past_the_baseline ... ok
+test model::tests::ordered_content_keeps_block_order_and_rejects_unready_parts ... ok
+test model::tests::resubscribe_marks_a_truncated_replay_window ... ok
 test model::tests::snapshot_from_another_address_is_refused ... ok
+test model::tests::resubscribe_never_asks_past_the_baseline ... ok
 test preview::tests::a_new_revision_rebuilds_the_attempt ... ok
 test preview::tests::dense_index_gap_marks_preview_incomplete ... ok
+test model::tests::submit_echo_is_retired_by_the_durable_user_message ... ok
 test preview::tests::durable_settlement_retires_previews_for_that_step ... ok
 test preview::tests::preview_bytes_are_bounded ... ok
-test model::tests::submit_echo_is_retired_by_the_durable_user_message ... ok
 test preview::tests::text_deltas_merge_and_end_retires_the_preview ... ok
-test preview::tests::unknown_attempt_chunks_are_ignored ... ok
 test preview::tests::tool_argument_bytes_count_against_the_total_budget ... ok
+test preview::tests::unknown_attempt_chunks_are_ignored ... ok
 test queue::tests::attachments_mark_an_item_uneditable ... ok
 test queue::tests::parses_both_pending_lists_and_identity ... ok
 test scene::tests::focus_stack_routes_only_to_the_top ... ok
@@ -89,16 +105,16 @@ test submissions::tests::an_accepted_echo_is_retired_by_the_durable_message ... 
 test submissions::tests::an_accepted_message_that_never_lands_becomes_unknown_at_idle ... ok
 test submissions::tests::reconciliation_uses_the_official_history_not_a_resend ... ok
 
-test result: ok. 51 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 52 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
      Running tests/contract.rs (target/debug/deps/contract-d59cde89ab36d397)
 
 running 5 tests
+test submit_fixture_has_the_required_request_shape ... ok
 test every_event_kind_is_covered_by_the_contract_shape ... ok
-test submission_limit_matches_the_contract ... ok
 test conversation_event_fixture_parses ... ok
 test session_event_fixture_parses ... ok
-test submit_fixture_has_the_required_request_shape ... ok
+test submission_limit_matches_the_contract ... ok
 
 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
@@ -109,38 +125,38 @@ test lifecycle::tests::every_contract_edge_is_allowed ... ok
 test lifecycle::tests::no_extra_edges ... ok
 test frame::tests::rejects_oversize_frame ... ok
 test lifecycle::tests::rejects_undefined_transitions ... ok
-test protocol::tests::accepts_a_valid_hello ... ok
-test frame::tests::rejects_unterminated_frame ... ok
-test frame::tests::handles_utf8_across_chunks ... ok
 test protocol::tests::event_rejects_unknown_kind_and_wrong_generation ... ok
+test frame::tests::handles_utf8_across_chunks ... ok
+test protocol::tests::accepts_a_valid_hello ... ok
 test frame::tests::rejects_invalid_utf8 ... ok
-test frame::tests::rejects_empty_frame ... ok
 test frame::tests::reads_multiple_frames ... ok
+test frame::tests::rejects_empty_frame ... ok
+test frame::tests::rejects_unterminated_frame ... ok
+test protocol::tests::rejects_unknown_required_capabilities_and_bad_limits ... ok
+test protocol::tests::rejects_wrong_major_and_generation ... ok
 test protocol::tests::fallback_nonce_is_enforced ... ok
 test protocol::tests::parses_responses_and_notifications ... ok
-test protocol::tests::rejects_unknown_required_capabilities_and_bad_limits ... ok
-test ledger::tests::missing_is_none_and_corrupt_is_error ... ok
-test protocol::tests::rejects_wrong_major_and_generation ... ok
 test ledger::tests::reads_owner_and_finds_session ... ok
+test ledger::tests::missing_is_none_and_corrupt_is_error ... ok
 test protocol::tests::oversized_encoded_frame_is_refused ... ok
 
-test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.69s
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
 
      Running tests/contract.rs (target/debug/deps/contract-21fa318daf1a1f24)
 
 running 10 tests
-test limits_match ... ok
 test address_round_trips ... ok
-test capability_names_and_shutdown_steps_match ... ok
 test protocol_version_matches ... ok
-test fixtures_parse_with_rust_types ... ok
+test error_codes_match ... ok
+test startup_codes_and_event_kinds_match ... ok
+test capability_names_and_shutdown_steps_match ... ok
+test lifecycle_matches ... ok
 test request_fixture_matches_shape ... ok
 test implemented_methods_match ... ok
-test startup_codes_and_event_kinds_match ... ok
-test lifecycle_matches ... ok
-test error_codes_match ... ok
+test limits_match ... ok
+test fixtures_parse_with_rust_types ... ok
 
-test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
      Running tests/integration.rs (target/debug/deps/integration-2d092d642fa50042)
 
@@ -169,38 +185,75 @@ running 2 tests
 test missing_bridge_package_is_refused ... ok
 test unsupported_official_version_is_refused ... ok
 
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
 
      Running unittests src/lib.rs (target/debug/deps/nano_schedule-f17e6a7259fc6d53)
 
 running 25 tests
 test model::tests::a_catalog_failure_does_not_retry_itself ... ok
 test form::tests::create_weekly_parses_sorted_unique_days ... ok
-test form::tests::invalid_weekday_is_a_local_error ... ok
-test form::tests::edit_never_cycles_to_relative_delay ... ok
 test form::tests::edit_keeps_timing_until_changed ... ok
-test form::tests::every_create_selector_builds_its_official_shape ... ok
+test form::tests::edit_never_cycles_to_relative_delay ... ok
 test model::tests::any_failure_clears_a_stuck_history_loading ... ok
-test model::tests::a_post_flush_write_failure_is_never_shown_as_success ... ok
 test form::tests::create_builds_one_selector_and_numbers ... ok
+test form::tests::invalid_weekday_is_a_local_error ... ok
 test model::tests::catalog_orders_active_before_ended_and_strips_wrappers ... ok
+test model::tests::a_post_flush_write_failure_is_never_shown_as_success ... ok
+test form::tests::every_create_selector_builds_its_official_shape ... ok
 test model::tests::ended_task_cannot_be_edited ... ok
-test model::tests::conflict_keeps_the_form_and_asks_for_refresh ... ok
 test model::tests::form_escape_returns_to_the_list ... ok
+test model::tests::conflict_keeps_the_form_and_asks_for_refresh ... ok
 test model::tests::ended_tasks_are_collapsed_until_expanded ... ok
 test model::tests::history_flags_stay_separate ... ok
 test model::tests::unsupported_overlay_refuses_every_action_but_close ... ok
-test model::tests::the_list_states_the_archive_consequence ... ok
 test model::tests::selection_survives_a_refresh_by_identity ... ok
-test wire::tests::a_miss_still_carries_its_code ... ok
+test model::tests::the_list_states_the_archive_consequence ... ok
 test model::tests::update_action_carries_the_complete_expected_record ... ok
 test wire::tests::a_validation_result_stays_an_invalid_result ... ok
 test wire::tests::an_equivalent_update_is_a_no_op_not_a_miss ... ok
+test wire::tests::a_miss_still_carries_its_code ... ok
 test wire::tests::history_parse_keeps_the_two_flags_apart ... ok
 test wire::tests::catalog_strips_wrappers_and_keeps_the_complete_record ... ok
 test form::tests::a_large_paste_is_one_batch_insert ... ok
 
 test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/debug/deps/nano_skills-a7b2f2a38e58f842)
+
+running 20 tests
+test catalog::tests::a_foreign_root_or_missing_field_is_rejected ... ok
+test catalog::tests::an_incomplete_official_observation_is_marked_but_kept ... ok
+test catalog::tests::a_failed_refresh_keeps_the_last_good_catalog_and_marks_it_incomplete ... ok
+test catalog::tests::user_invocable_false_entries_do_not_resolve ... ok
+test feature::tests::the_contribution_owns_skill_routing_and_both_panels ... ok
+test instructions::tests::an_absolute_snapshot_replaces_the_source_list ... ok
+test instructions::tests::age_labels_are_relative_to_the_event_time ... ok
+test catalog::tests::a_successful_list_replaces_the_catalog ... ok
+test catalog::tests::an_incomplete_refresh_keeps_the_last_usable_catalog ... ok
+test catalog::tests::commands_win_over_same_name_skills_and_stand_alone ... ok
+test instructions::tests::an_unavailable_snapshot_is_not_an_empty_success ... ok
+test instructions::tests::foreign_roots_and_unknown_actions_are_rejected ... ok
+test invocation::tests::a_durable_user_message_arms_the_tracker_and_injection_settles_it ... ok
+test invocation::tests::a_queued_submission_is_not_cleared_by_an_unrelated_turn_end ... ok
+test invocation::tests::a_turn_end_without_injection_reports_the_prose_fallback ... ok
+test preview::tests::a_foreign_address_is_rejected ... ok
+test invocation::tests::an_injection_for_another_name_is_ignored ... ok
+test preview::tests::a_preview_parses_and_reports_truncation ... ok
+test preview::tests::an_empty_file_is_distinguishable_from_a_failed_read ... ok
+test preview::tests::missing_fields_are_rejected ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/contract.rs (target/debug/deps/contract-c7f1c807d8e7f074)
+
+running 5 tests
+test instruction_event_fixture_folds_into_the_source_projection ... ok
+test skill_list_fixture_folds_into_the_catalog ... ok
+test preview_limit_matches_the_contract ... ok
+test the_method_and_event_owners_are_s05 ... ok
+test preview_fixture_parses_and_exposes_the_limit ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
    Doc-tests nano_conversation
 
@@ -215,6 +268,12 @@ running 0 tests
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
    Doc-tests nano_schedule
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests nano_skills
 
 running 0 tests
 

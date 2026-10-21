@@ -15,6 +15,18 @@ use nano_runtime::{
 };
 use serde_json::Value;
 
+/// Every event kind this window subscribes to, in one place so the initial
+/// subscription and a later rebuild cannot drift apart.
+pub const SUBSCRIPTION_KINDS: [&str; 7] = [
+    "session.event",
+    "conversation.status",
+    "conversation.inbox",
+    "conversation.stream",
+    "skills.changed",
+    "instructions.changed",
+    "schedule.changed",
+];
+
 /// How a request failed, for deciding whether a result is explicitly failed or
 /// merely unknown. Only an RPC error or a local pre-send rejection is a fact;
 /// a transport failure may have delivered the request.
@@ -108,13 +120,10 @@ impl HostLink {
                 root_session_id: hello.root_session_id.clone(),
                 child_session_id: None,
             };
-            let kinds = vec![
-                "session.event".to_string(),
-                "conversation.status".to_string(),
-                "conversation.inbox".to_string(),
-                "conversation.stream".to_string(),
-                "schedule.changed".to_string(),
-            ];
+            let kinds = SUBSCRIPTION_KINDS
+                .iter()
+                .map(|kind| kind.to_string())
+                .collect();
             let _subscription = match startup_host.subscribe(address, Some(kinds), Some(from_seq)) {
                 Ok(subscription) => subscription,
                 Err(error) => {
