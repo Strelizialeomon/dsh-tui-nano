@@ -3,6 +3,7 @@
 薄桥接：在官方 dsh profile 进程内装载，独占 `protocol/` 的 `nano.*` 契约、会话挂载账本和关停顺序。
 
 - `runtime/`：Cordis 插件入口、帧解析、fd 3/4 传输、账本、订阅、关停。
+- `controls/`：控制宿主。命令目录来自官方 `commands` 服务；模型目录调用官方导出的 `buildModelCatalog`（在注入 `llm` 的子上下文里），切换安装官方 `installModelSelection` 并写官方 `model/selection`；权限读取来自官方投影/预设目录，切换固定走官方 `/permission <preset>` 命令（不直接 `permissionPresets.set()`）。实时事件为 `controls.model` 与 `controls.permission`。
 - `skills/`：技能与规矩宿主。`nano.skills.list` 只读官方 `ctx.skills.snapshot()` 并附官方命令名；`nano.skills.preview` 按官方 `path` 有界只读；`nano.instructions.snapshot` 折合官方 `agent-instructions` 持久消息的来源、时间与预算提示。只订阅 `skills/change`/`commands/change` 发刷新信号，不自建 watcher，也不解析指令文件。
 - `conversation/`：对话宿主。`submit` 按官方 `user-rpc` 源写入 `requestId`，`editQueued`/`deleteQueued`/`steerQueued` 修改官方 inbox，`cancel` 固定 `keepInbox: true`，`snapshot` 返回绝对状态；实时事件为 `conversation.status`、`conversation.inbox` 和 `conversation.stream`。inbox 投影在超过事件帧上限时降级为有界预览并标 `truncated`；单次提交上限 32 KiB。
 - `profile/install.mjs`：初始化 `$DSH_HOME/profiles/dsh-tui-nano` 并安装本包（`dsh plugin --profile ... install`）。

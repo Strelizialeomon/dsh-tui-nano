@@ -17,13 +17,15 @@ use serde_json::Value;
 
 /// Every event kind this window subscribes to, in one place so the initial
 /// subscription and a later rebuild cannot drift apart.
-pub const SUBSCRIPTION_KINDS: [&str; 6] = [
+pub const SUBSCRIPTION_KINDS: [&str; 8] = [
     "session.event",
     "conversation.status",
     "conversation.inbox",
     "conversation.stream",
     "skills.changed",
     "instructions.changed",
+    "controls.model",
+    "controls.permission",
 ];
 
 /// How a request failed, for deciding whether a result is explicitly failed or
@@ -44,6 +46,8 @@ pub enum RequestErrorKind {
 pub struct RequestError {
     /// Classification used by the submission state machine.
     pub kind: RequestErrorKind,
+    /// JSON-RPC error code, when the host answered with one.
+    pub code: Option<i64>,
     /// Sanitized description.
     pub message: String,
 }
@@ -220,8 +224,13 @@ fn classify_request_error(error: HostError) -> RequestError {
         }
         HostError::Io(_) | HostError::Spawn(_) => RequestErrorKind::Unknown,
     };
+    let code = match &error {
+        HostError::Rpc(body) => Some(body.code),
+        _ => None,
+    };
     RequestError {
         kind,
+        code,
         message: describe_host_error(&error),
     }
 }

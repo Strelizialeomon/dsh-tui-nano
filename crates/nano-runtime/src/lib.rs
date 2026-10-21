@@ -81,7 +81,7 @@ pub const LIFECYCLE_TRANSITIONS: [(&str, &str); 15] = [
 ];
 
 /// Error code names shared with the bridge contract.
-pub const ERROR_CODE_NAMES: [(&str, i64); 26] = [
+pub const ERROR_CODE_NAMES: [(&str, i64); 31] = [
     ("jsonrpc/parse-error", -32700),
     ("jsonrpc/invalid-request", -32600),
     ("jsonrpc/method-not-found", -32601),
@@ -108,10 +108,15 @@ pub const ERROR_CODE_NAMES: [(&str, i64); 26] = [
     ("nano/skills/not-found", 1019),
     ("nano/skills/no-preview", 1020),
     ("nano/skills/preview-failed", 1021),
+    ("nano/controls/writer-held", 1022),
+    ("nano/controls/model-unavailable", 1023),
+    ("nano/controls/permission-rejected", 1024),
+    ("nano/controls/command-failed", 1025),
+    ("nano/controls/unavailable", 1026),
 ];
 
 /// Method names implemented by this generation.
-pub const IMPLEMENTED_METHODS: [&str; 17] = [
+pub const IMPLEMENTED_METHODS: [&str; 22] = [
     "nano.hello",
     "nano.startupError",
     "nano.shutdown",
@@ -129,16 +134,23 @@ pub const IMPLEMENTED_METHODS: [&str; 17] = [
     "nano.skills.list",
     "nano.skills.preview",
     "nano.instructions.snapshot",
+    "nano.controls.state",
+    "nano.controls.modelCatalog",
+    "nano.controls.selectModel",
+    "nano.controls.setPermission",
+    "nano.controls.executeCommand",
 ];
 
 /// Event kinds this client accepts.
-pub const EVENT_KINDS: [&str; 6] = [
+pub const EVENT_KINDS: [&str; 8] = [
     "session.event",
     "conversation.status",
     "conversation.inbox",
     "conversation.stream",
     "skills.changed",
     "instructions.changed",
+    "controls.model",
+    "controls.permission",
 ];
 
 /// Shutdown report step names, in report order.

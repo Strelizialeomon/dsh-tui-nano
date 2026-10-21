@@ -32,7 +32,7 @@ import {
 test('implemented methods match the contract', () => {
   assert.deepEqual([...IMPLEMENTED_METHODS].sort(), [...CONTRACT_IMPLEMENTED.keys()].sort())
   for (const [name, method] of CONTRACT_IMPLEMENTED) {
-    assert.ok(['S01', 'S02', 'S05'].includes(method.owner), `${name} owner`)
+    assert.ok(['S01', 'S02', 'S04', 'S05'].includes(method.owner), `${name} owner`)
     if (method.kind === 'request') {
       assert.ok(IMPLEMENTED_REQUEST_METHODS.includes(name), `${name} must be dispatched as a request`)
     } else {
@@ -81,6 +81,8 @@ test('event kinds match', () => {
     'conversation.stream',
     'skills.changed',
     'instructions.changed',
+    'controls.model',
+    'controls.permission',
   ])
 })
 
