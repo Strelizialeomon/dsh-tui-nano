@@ -13,6 +13,8 @@ path = "src/main.rs"
 [dependencies]
 nano-runtime = { path = "../nano-runtime" }
 nano-conversation = { path = "../nano-conversation" }
+nano-transcript = { path = "../nano-transcript" }
+nano-decisions = { path = "../nano-decisions" }
 serde_json = "1"
 crossterm = "0.28"
 ratatui = "0.29"

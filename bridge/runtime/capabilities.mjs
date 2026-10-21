@@ -32,21 +32,23 @@ export function buildCapabilities(ctx, config) {
       : { status: 'unsupported', detail: `${serviceKey} is not composed in this profile` }
   }
 
-  // The seams are composed, but S01 registers no answerer. Reporting them as
-  // supported would claim an interaction path that cannot answer; S03 owns the
-  // single answerer for each seam.
-  capabilities.approval = {
-    status: 'unavailable',
-    detail: 'the approval answerer belongs to S03',
+  // S03 composes the single answerer for each seam. When the seam exists, the
+  // card path is real: a missing answerer is no longer a capability gap.
+  capabilities.approval = capabilities.approval ?? {
+    status: 'unsupported',
+    detail: 'approval is not composed in this profile',
   }
-  capabilities.userQuestions = {
-    status: 'unavailable',
-    detail: 'the question answerer belongs to S03',
+  capabilities.userQuestions = capabilities.userQuestions ?? {
+    status: 'unsupported',
+    detail: 'userQuestions is not composed in this profile',
   }
   capabilities['tool-ask-user'] = {
-    status: ctx.get('userQuestions') === undefined ? 'unsupported' : 'unavailable',
+    status: ctx.get('userQuestions') === undefined ? 'unsupported' : 'supported',
     mode: typeof config.askUserMode === 'string' ? config.askUserMode : 'blocking',
-    detail: 'the tool is mounted, but no answerer is registered until S03',
+    detail:
+      ctx.get('userQuestions') === undefined
+        ? 'the tool is not mounted because userQuestions is absent'
+        : 'S03 registers the answerer at host startup',
   }
 
   // S11 and S10 own the schedule and Monitor backends; neither is composed by S01.

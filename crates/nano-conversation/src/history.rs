@@ -53,7 +53,7 @@ pub struct MessageView {
 }
 
 /// Tool call lifecycle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ToolStatus {
     /// The call is recorded but no result has arrived.
     Pending,

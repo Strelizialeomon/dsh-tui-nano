@@ -9,8 +9,11 @@ use nano_conversation::{
     FocusId, InputBuffer, InputEvent, InputOutcome, InputRoute, OrderedContent, SceneId,
     SceneState, SessionAddress, SubmitError,
 };
+use nano_decisions::{answers_to_wire, DecisionAction, DecisionClick, DecisionKey, DecisionsModel};
 use nano_runtime::Hello;
-use serde_json::Value;
+use nano_transcript::{Hit, HitKind, RecordedQuestionState, TranscriptSource, TranscriptView};
+use ratatui::layout::Rect;
+use serde_json::{json, Value};
 
 use crate::cli::Cli;
 use crate::link::{HostLink, LinkEvent, RequestError, RequestErrorKind};
@@ -78,6 +81,15 @@ pub enum Pending {
         /// Official message id being deleted.
         message_id: String,
     },
+    /// Read pending approval/question cards after a reconnect.
+    DecisionsSnapshot,
+    /// One answer to a decision card.
+    Decision {
+        /// The action that was sent; used to roll the card back on failure.
+        action: DecisionAction,
+        /// Short label for status and diagnostics.
+        label: String,
+    },
 }
 
 /// One frame of application state.
@@ -112,10 +124,26 @@ pub struct App {
     pub submit_backups: HashMap<String, String>,
     /// In-flight requests.
     pub pending: HashMap<u64, Pending>,
-    /// Feed lines scrolled back from the bottom.
-    pub scroll_back: usize,
+    /// Reading view (transcript, line budgets, expansion, scroll).
+    pub view: TranscriptView,
+    /// Question and approval cards.
+    pub decisions: DecisionsModel,
+    /// Whether the transcript entries need rebuilding before the next draw.
+    pub transcript_dirty: bool,
     /// Last measured feed viewport height.
     pub feed_height: usize,
+    /// Feed hit targets from the last draw.
+    pub feed_hits: Vec<Option<Hit>>,
+    /// Feed region from the last draw.
+    pub feed_area: Rect,
+    /// Decision card region from the last draw.
+    pub decision_area: Rect,
+    /// Decision click targets from the last draw.
+    pub decision_hits: Vec<Option<DecisionClick>>,
+    /// Pointer press position, used to distinguish a click from a drag.
+    pub mouse_down: Option<(u16, u16)>,
+    /// A drag happened between press and release.
+    pub mouse_dragged: bool,
     /// Quit after the current input pass.
     pub should_quit: bool,
     /// Handshake facts, once ready.
@@ -155,10 +183,14 @@ impl App {
         );
         let mut scene = SceneState::conversation();
         scene.set_address(address.clone());
+        let view = TranscriptView::new(address.clone(), TranscriptSource::Interactive);
+        let decisions = DecisionsModel::new(address.clone());
         Self {
             cli,
             model: ConversationModel::new(address.clone()),
             drafts: DraftStore::new(address),
+            view,
+            decisions,
             registry,
             scene,
             link: None,
@@ -171,8 +203,14 @@ impl App {
             edit_backup: None,
             submit_backups: HashMap::new(),
             pending: HashMap::new(),
-            scroll_back: 0,
             feed_height: 10,
+            feed_hits: Vec::new(),
+            feed_area: Rect::default(),
+            decision_area: Rect::default(),
+            decision_hits: Vec::new(),
+            mouse_down: None,
+            mouse_dragged: false,
+            transcript_dirty: true,
             should_quit: false,
             hello: None,
             replay_truncated,
@@ -206,16 +244,22 @@ impl App {
             self.should_quit = true;
             return true;
         }
+        // A decision card owns the input seat and receives keys first.
+        if self.decisions.top().is_some() {
+            if let Some(mapped) = decision_key(key) {
+                self.clear_transient_status();
+                self.decisions.handle_key(mapped);
+                self.drain_decisions();
+                return true;
+            }
+            return false;
+        }
         if matches!(key.code, KeyCode::PageUp) {
-            self.scroll_back = self
-                .scroll_back
-                .saturating_add(self.feed_height.saturating_sub(1).max(1));
+            self.view.scroll_mut().page_up(self.feed_height);
             return true;
         }
         if matches!(key.code, KeyCode::PageDown) {
-            self.scroll_back = self
-                .scroll_back
-                .saturating_sub(self.feed_height.saturating_sub(1).max(1));
+            self.view.scroll_mut().page_down(self.feed_height);
             return true;
         }
         if matches!(key.code, KeyCode::Tab) {
@@ -242,7 +286,7 @@ impl App {
                     return true;
                 }
                 KeyCode::End => {
-                    self.scroll_back = 0;
+                    self.view.scroll_mut().to_bottom();
                     return true;
                 }
                 _ => {}
@@ -338,12 +382,250 @@ impl App {
 
     /// Insert a bracketed-paste payload exactly as received.
     pub fn handle_paste(&mut self, text: String) -> bool {
+        if self.decisions.top().is_some() {
+            self.clear_transient_status();
+            return self.decisions.paste(&text);
+        }
         if !self.scene.focus().input_focused() {
             return false;
         }
         self.clear_transient_status();
         let outcome = self.drafts.current_mut().handle(&InputEvent::Paste(text));
         outcome != InputOutcome::Ignored
+    }
+
+    /// Apply one pointer event. Returns whether the screen needs a redraw.
+    pub fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> bool {
+        use crossterm::event::{MouseButton, MouseEventKind};
+        match mouse.kind {
+            MouseEventKind::ScrollUp => self.scroll_at(mouse.column, mouse.row, -1),
+            MouseEventKind::ScrollDown => self.scroll_at(mouse.column, mouse.row, 1),
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.mouse_down = Some((mouse.column, mouse.row));
+                self.mouse_dragged = false;
+                false
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                self.mouse_dragged = true;
+                false
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                let down = self.mouse_down.take();
+                let dragged = std::mem::take(&mut self.mouse_dragged);
+                if dragged {
+                    return false;
+                }
+                match down {
+                    Some((column, row)) if column == mouse.column && row == mouse.row => {
+                        self.click_at(column, row)
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    fn scroll_at(&mut self, column: u16, row: u16, direction: isize) -> bool {
+        if self.decision_area.contains((column, row).into()) {
+            self.decisions.scroll(direction);
+            return true;
+        }
+        if self.feed_area.contains((column, row).into()) {
+            return self.view.scroll_mut().wheel(direction, Instant::now());
+        }
+        false
+    }
+
+    fn click_at(&mut self, column: u16, row: u16) -> bool {
+        let point = (column, row);
+        if self.decision_area.contains(point.into()) {
+            let offset = row.saturating_sub(self.decision_area.y) as usize;
+            let Some(Some(click)) = self.decision_hits.get(offset).cloned() else {
+                return false;
+            };
+            self.decisions.click(click);
+            self.drain_decisions();
+            return true;
+        }
+        if self.feed_area.contains(point.into()) {
+            let offset = row.saturating_sub(self.feed_area.y) as usize;
+            let Some(Some(hit)) = self.feed_hits.get(offset).cloned() else {
+                return false;
+            };
+            match hit.kind {
+                HitKind::Toggle => return self.view.toggle(&hit.identity),
+                HitKind::OpenQuestion { call_id } => return self.open_question(&call_id),
+            }
+        }
+        false
+    }
+
+    fn open_question(&mut self, call_id: &str) -> bool {
+        let Some(record) = self.view.question(call_id) else {
+            return false;
+        };
+        let continued = record.state == RecordedQuestionState::Continued;
+        let answerable = record.answerable();
+        let questions: Vec<_> = record.questions;
+        let answers = record.answers;
+        let opened = self.decisions.open_question(
+            call_id.to_string(),
+            questions,
+            answers,
+            answerable,
+            continued,
+        );
+        if opened {
+            self.sync_decision_focus();
+        }
+        opened
+    }
+
+    fn sync_decision_focus(&mut self) {
+        let decision = FocusId::new("decision");
+        if self.decisions.top().is_some() {
+            self.scene.focus_mut().push(decision);
+        } else if self.scene.focus().top() == Some(&decision) {
+            self.scene.focus_mut().reset(FocusId::input());
+            self.decisions.clear_notice();
+        }
+    }
+
+    fn drain_decisions(&mut self) {
+        for action in self.decisions.take_actions() {
+            self.send_decision_action(action);
+        }
+        if let Some(notice) = self.decisions.notice().map(str::to_string) {
+            self.notice = Some(notice);
+        }
+        if let Some(error) = self.decisions.error().map(str::to_string) {
+            self.error = Some(error);
+        }
+        self.sync_decision_focus();
+        self.transcript_dirty = true;
+    }
+
+    fn send_decision_action(&mut self, action: DecisionAction) {
+        let address = self.model.address().wire_value();
+        let (method, params, label) = match &action {
+            DecisionAction::Approval {
+                request_id,
+                outcome,
+            } => (
+                "nano.approval.answer",
+                json!({
+                    "address": address,
+                    "requestId": request_id,
+                    "outcome": outcome.as_str(),
+                }),
+                "审批答复".to_string(),
+            ),
+            DecisionAction::QuestionAnswer {
+                request_id,
+                call_id,
+                answers,
+            } => {
+                let mut params = serde_json::Map::new();
+                params.insert("address".into(), address);
+                if let Some(id) = request_id {
+                    params.insert("requestId".into(), Value::String(id.clone()));
+                }
+                if let Some(id) = call_id {
+                    params.insert("callId".into(), Value::String(id.clone()));
+                }
+                params.insert("answers".into(), answers_to_wire(answers));
+                (
+                    "nano.question.answer",
+                    Value::Object(params),
+                    "答卷".to_string(),
+                )
+            }
+            DecisionAction::QuestionExpire {
+                request_id,
+                call_id,
+            } => {
+                let mut params = serde_json::Map::new();
+                params.insert("address".into(), address);
+                if let Some(id) = request_id {
+                    params.insert("requestId".into(), Value::String(id.clone()));
+                }
+                if let Some(id) = call_id {
+                    params.insert("callId".into(), Value::String(id.clone()));
+                }
+                params.insert("expire".into(), Value::Bool(true));
+                (
+                    "nano.question.answer",
+                    Value::Object(params),
+                    "问卷到期".to_string(),
+                )
+            }
+            DecisionAction::QuestionCancel { request_id } => {
+                let mut params = serde_json::Map::new();
+                params.insert("address".into(), address);
+                if let Some(id) = request_id {
+                    params.insert("requestId".into(), Value::String(id.clone()));
+                }
+                params.insert("cancel".into(), Value::Bool(true));
+                (
+                    "nano.question.answer",
+                    Value::Object(params),
+                    "取消问卷".to_string(),
+                )
+            }
+            DecisionAction::QuestionRequestChanges {
+                request_id,
+                call_id,
+            } => {
+                let mut params = serde_json::Map::new();
+                params.insert("address".into(), address);
+                if let Some(id) = request_id {
+                    params.insert("requestId".into(), Value::String(id.clone()));
+                }
+                if let Some(id) = call_id {
+                    params.insert("callId".into(), Value::String(id.clone()));
+                }
+                params.insert("cancel".into(), Value::Bool(true));
+                (
+                    "nano.question.answer",
+                    Value::Object(params),
+                    "请求修改".to_string(),
+                )
+            }
+        };
+        if !self.ready {
+            self.decisions
+                .action_failed(&action, "宿主未就绪；卡片已保留");
+            self.error = Some("宿主未就绪；卡片已保留".to_string());
+            return;
+        }
+        let Some(link) = &self.link else {
+            self.decisions.action_failed(&action, "宿主连接已关闭");
+            return;
+        };
+        match link.request(method, params) {
+            Ok(id) => {
+                self.pending.insert(id, Pending::Decision { action, label });
+            }
+            Err(message) => {
+                self.decisions.action_failed(&action, message.clone());
+                self.error = Some(format!("{label}发送失败：{message}"));
+            }
+        }
+    }
+
+    /// Read pending decision cards after a reconnect.
+    pub fn refresh_decisions(&mut self) {
+        if !self.ready {
+            return;
+        }
+        let Some(link) = &self.link else {
+            return;
+        };
+        let params = json!({ "address": self.model.address().wire_value() });
+        if let Ok(id) = link.request("nano.decisions.snapshot", params) {
+            self.pending.insert(id, Pending::DecisionsSnapshot);
+        }
     }
 
     /// Apply one link event. Returns whether the screen needs a redraw.
@@ -358,10 +640,12 @@ impl App {
                 self.hello = Some(hello);
                 self.notice = Some("已连接官方会话".to_string());
                 self.refresh_snapshot();
+                self.refresh_decisions();
                 true
             }
             LinkEvent::Host(event) => self.handle_host_event(event),
             LinkEvent::RequestDone { id, result } => {
+                self.transcript_dirty = true;
                 self.handle_request_done(id, result);
                 true
             }
@@ -379,6 +663,9 @@ impl App {
                     format!("{message}；宿主诊断：{}", tail.join(" | "))
                 });
                 self.model.mark_disconnected();
+                self.decisions.clear();
+                self.scene.focus_mut().reset(FocusId::input());
+                self.transcript_dirty = true;
                 true
             }
         }
@@ -388,10 +675,19 @@ impl App {
         use nano_runtime::HostEvent;
         match event {
             HostEvent::Event(params) => {
+                self.transcript_dirty = true;
                 if params.kind == "session.event" {
                     self.resubscribe_attempts = 0;
                 }
-                let changed = self.model.apply_event(&params.kind, &params.payload);
+                let mut changed = self.model.apply_event(&params.kind, &params.payload);
+                if params.kind == "session.event" || params.kind.starts_with("decisions.") {
+                    self.view.apply_event(&params.kind, &params.payload);
+                    self.transcript_dirty = true;
+                }
+                if params.kind.starts_with("decisions.") {
+                    changed |= self.decisions.apply_event(&params.kind, &params.payload);
+                    self.drain_decisions();
+                }
                 if self.stop_pending
                     && params.kind == "conversation.status"
                     && params.payload.get("status").and_then(Value::as_str) == Some("idle")
@@ -399,7 +695,10 @@ impl App {
                     self.stop_pending = false;
                     self.notice = Some("官方已确认停止".to_string());
                 }
-                if self.model.inbox().is_empty() && !self.scene.focus().input_focused() {
+                if self.model.inbox().is_empty()
+                    && !self.scene.focus().input_focused()
+                    && self.decisions.top().is_none()
+                {
                     self.scene.focus_mut().pop();
                 }
                 if changed {
@@ -418,6 +717,7 @@ impl App {
                         ));
                         self.resubscribe_at = Some(Instant::now() + Duration::from_millis(500));
                         self.model.drop_previews();
+                        self.transcript_dirty = true;
                     } else {
                         let root = &self.model.address().root_session_id;
                         self.ready = false;
@@ -426,6 +726,7 @@ impl App {
                             "订阅反复被关闭（可能含超过 S01 事件帧上限的持久事件）；会话 {root}，重启时用 --resume {root}"
                         ));
                         self.model.mark_disconnected();
+                        self.transcript_dirty = true;
                     }
                 }
                 true
@@ -443,18 +744,25 @@ impl App {
                     format!("通信已断开（会话 {root}）")
                 });
                 self.model.mark_disconnected();
+                self.decisions.clear();
+                self.scene.focus_mut().reset(FocusId::input());
+                self.transcript_dirty = true;
                 true
             }
             HostEvent::ProtocolFailure(message) => {
                 self.ready = false;
                 self.connection = Connection::Failed(message.clone());
                 self.error = Some(format!("协议错误：{message}"));
+                self.decisions.clear();
+                self.scene.focus_mut().reset(FocusId::input());
                 true
             }
             HostEvent::StartupError(params) => {
                 self.ready = false;
                 self.connection = Connection::Failed(params.message.clone());
                 self.error = Some(params.message);
+                self.decisions.clear();
+                self.scene.focus_mut().reset(FocusId::input());
                 true
             }
             HostEvent::Hello(_) => false,
@@ -596,7 +904,9 @@ impl App {
                 match result {
                     Ok(_) => {
                         self.notice = Some("订阅已重建；正在对齐官方 baseline".to_string());
+                        self.transcript_dirty = true;
                         self.refresh_snapshot();
+                        self.refresh_decisions();
                     }
                     Err(error) => {
                         let root = self.model.address().root_session_id.clone();
@@ -610,6 +920,65 @@ impl App {
                     }
                 }
             }
+            Pending::DecisionsSnapshot => match result {
+                Ok(value) => {
+                    self.decisions.apply_snapshot(&value);
+                    let address = self.model.address().wire_value();
+                    if let Some(projection) = value.get("projection") {
+                        let payload = json!({
+                            "address": address.clone(),
+                            "active": projection.get("active").cloned().unwrap_or_else(|| json!([])),
+                            "settled": projection.get("settled").cloned().unwrap_or_else(|| json!([])),
+                        });
+                        self.view.apply_event("decisions.projection", &payload);
+                    }
+                    // Restore the enrichment that makes a pending card show
+                    // "审批中" rather than the audit-only "结果未知".
+                    if let Some(approvals) = value.get("approvals").and_then(Value::as_array) {
+                        for approval in approvals {
+                            let mut payload = approval.clone();
+                            if let Some(object) = payload.as_object_mut() {
+                                object.insert("address".into(), address.clone());
+                                object.insert("state".into(), json!("pending"));
+                            }
+                            self.view.apply_event("decisions.approval", &payload);
+                        }
+                    }
+                    if let Some(questions) = value.get("questions").and_then(Value::as_array) {
+                        for question in questions {
+                            if question.get("callId").is_none() {
+                                continue;
+                            }
+                            let mut payload = question.clone();
+                            if let Some(object) = payload.as_object_mut() {
+                                object.insert("address".into(), address.clone());
+                                object.insert("state".into(), json!("pending"));
+                            }
+                            self.view.apply_event("decisions.question", &payload);
+                        }
+                    }
+                    self.transcript_dirty = true;
+                    self.sync_decision_focus();
+                }
+                Err(error) => {
+                    self.notice = Some(format!("读取决策状态失败：{}", error.message));
+                }
+            },
+            Pending::Decision { action, label } => match result {
+                Ok(_) => {
+                    // The bridge publishes the settled/cancelled event.
+                }
+                Err(error) => {
+                    self.decisions
+                        .action_failed(&action, format!("{label}失败：{}", error.message));
+                    self.error = Some(format!("{label}失败：{}", error.message));
+                    if error.message.contains("already settled")
+                        || error.message.contains("unknown")
+                    {
+                        self.refresh_decisions();
+                    }
+                }
+            },
             Pending::ClearStopDelete {
                 generation,
                 message_id,
@@ -710,6 +1079,7 @@ impl App {
         {
             Ok(plan) => {
                 self.drafts.current_mut().take();
+                self.transcript_dirty = true;
                 self.submit_backups
                     .insert(plan.request_id.clone(), text.clone());
                 let Some(link) = &self.link else {
@@ -1021,6 +1391,24 @@ impl App {
         if let Some(notice) = self.model.last_notice() {
             return notice.to_string();
         }
+        if let Some(top) = self.decisions.top() {
+            return match top {
+                nano_decisions::DecisionTop::Approval(_) => {
+                    "审批：↑↓ 切换 · Enter 确认 · 1 选允许 · 2 选拒绝 · Esc 取消（不会允许）"
+                        .to_string()
+                }
+                nano_decisions::DecisionTop::Question(card) => {
+                    if card.state() == nano_decisions::QuestionCardState::ReadOnly {
+                        "问卷回看：↑↓ 滚动 · Esc 关闭".to_string()
+                    } else if card.plan_review().is_some() {
+                        "计划审阅：↑↓ 选择 · Enter 确认 · 1 展开/收起 · Esc 取消".to_string()
+                    } else {
+                        "问卷：↑↓ 移动 · Enter 选择/提交 · 空格勾选 · 数字直选 · Alt+N 跳过 · Alt+T 停止倒计时 · Esc 收起"
+                            .to_string()
+                    }
+                }
+            };
+        }
         if !self.scene.focus().input_focused() {
             return "队列焦点：↑↓ 选择 · Enter 编辑 · d 删除 · s 插话 · x 清空并停止 · Tab 返回"
                 .to_string();
@@ -1036,14 +1424,24 @@ impl App {
 impl App {
     /// Time-based work: rebuild a closed observable subscription.
     pub fn tick(&mut self) -> bool {
+        let now = Instant::now();
+        let mut dirty = false;
+        if self.decisions.tick(now) {
+            self.drain_decisions();
+            dirty = true;
+        }
+        if !self.model.previews().is_empty() {
+            self.transcript_dirty = true;
+            dirty = true;
+        }
         if self.resubscribing {
-            return false;
+            return dirty;
         }
         let Some(at) = self.resubscribe_at else {
-            return false;
+            return dirty;
         };
         if Instant::now() < at {
-            return false;
+            return dirty;
         }
         self.resubscribe_at = None;
         if self.resubscribe_attempts >= 2 {
@@ -1073,6 +1471,9 @@ impl App {
             "conversation.status",
             "conversation.inbox",
             "conversation.stream",
+            "decisions.approval",
+            "decisions.question",
+            "decisions.projection",
         ]);
         if replay_truncated {
             self.notice = Some("重连回放窗口超过上限；从较新的 seq 开始重建".to_string());
@@ -1174,6 +1575,34 @@ impl App {
         } else {
             self.notice = Some("清空请求已逐项发出；以官方 inbox 为准".to_string());
         }
+    }
+}
+
+/// Map one terminal key to the decision-card vocabulary.
+fn decision_key(key: KeyEvent) -> Option<DecisionKey> {
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        return None;
+    }
+    match key.code {
+        KeyCode::Up => Some(DecisionKey::Up),
+        KeyCode::Down => Some(DecisionKey::Down),
+        KeyCode::Left => Some(DecisionKey::Left),
+        KeyCode::Right => Some(DecisionKey::Right),
+        KeyCode::Tab if shift => Some(DecisionKey::BackTab),
+        KeyCode::Tab => Some(DecisionKey::Tab),
+        KeyCode::BackTab => Some(DecisionKey::BackTab),
+        KeyCode::Enter => Some(DecisionKey::Enter),
+        KeyCode::Esc => Some(DecisionKey::Esc),
+        KeyCode::Backspace => Some(DecisionKey::Backspace),
+        KeyCode::PageUp => Some(DecisionKey::PageUp),
+        KeyCode::PageDown => Some(DecisionKey::PageDown),
+        KeyCode::Char(' ') => Some(DecisionKey::Space),
+        KeyCode::Char('n') | KeyCode::Char('N') if alt => Some(DecisionKey::Skip),
+        KeyCode::Char('t') | KeyCode::Char('T') if alt => Some(DecisionKey::MoreTime),
+        KeyCode::Char(character) if !alt => Some(DecisionKey::Char(character)),
+        _ => None,
     }
 }
 
@@ -1313,6 +1742,7 @@ mod tests {
         assert_eq!(echoes.len(), 1);
         assert_eq!(echoes[0].text, "hello");
         assert_eq!(echoes[0].state.label(), "未确认");
+        assert!(app.transcript_dirty);
     }
 
     #[test]
@@ -1516,6 +1946,82 @@ mod tests {
             }),
         );
         assert_eq!(app.drafts.current().text(), "text");
+    }
+
+    #[test]
+    fn an_approval_event_takes_the_input_seat_and_enter_rejects() {
+        let mut app = app();
+        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::Event(
+            nano_runtime::protocol::EventParams {
+                runtime_id: "rt".into(),
+                generation: 1,
+                subscription_id: "sub-1".into(),
+                sequence: 1,
+                kind: "decisions.approval".into(),
+                payload: json!({
+                    "address": {"rootSessionId": "root"},
+                    "state": "pending",
+                    "requestId": "a-1",
+                    "toolName": "bash",
+                    "reason": "sandbox"
+                }),
+            },
+        )));
+        assert!(app.decisions.approval().is_some());
+        assert!(!app.scene.focus().input_focused());
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.decisions.approval().is_some());
+        assert!(app.error.as_deref().unwrap().contains("宿主未就绪"));
+    }
+
+    #[test]
+    fn a_timed_question_takes_the_seat_and_esc_hides_without_answering() {
+        let mut app = app();
+        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::Event(
+            nano_runtime::protocol::EventParams {
+                runtime_id: "rt".into(),
+                generation: 1,
+                subscription_id: "sub-1".into(),
+                sequence: 1,
+                kind: "decisions.question".into(),
+                payload: json!({
+                    "address": {"rootSessionId": "root"},
+                    "state": "pending",
+                    "requestId": "q-1",
+                    "callId": "c-1",
+                    "timed": true,
+                    "remainingMs": 60_000,
+                    "questions": [{"id": "q1", "question": "Pick", "options": [{"label": "A"}]}]
+                }),
+            },
+        )));
+        let card = app.decisions.question().unwrap();
+        assert_eq!(card.call_id(), Some("c-1"));
+        assert!(card.timed().remaining_ms.is_some());
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.decisions.top().is_none());
+        assert!(app.scene.focus().input_focused());
+    }
+
+    #[test]
+    fn decision_events_for_another_address_are_ignored() {
+        let mut app = app();
+        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::Event(
+            nano_runtime::protocol::EventParams {
+                runtime_id: "rt".into(),
+                generation: 1,
+                subscription_id: "sub-1".into(),
+                sequence: 1,
+                kind: "decisions.approval".into(),
+                payload: json!({
+                    "address": {"rootSessionId": "other"},
+                    "state": "pending",
+                    "requestId": "a-1",
+                    "toolName": "bash"
+                }),
+            },
+        )));
+        assert!(app.decisions.top().is_none());
     }
 
     #[test]

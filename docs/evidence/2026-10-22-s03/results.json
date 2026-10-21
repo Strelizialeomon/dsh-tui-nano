@@ -1,0 +1,12 @@
+{
+  "connected": true,
+  "question_card": true,
+  "diff_visible": true,
+  "proof_exists": true,
+  "session1_exit": 0,
+  "approval_connected": false,
+  "approval_card": true,
+  "approval_outcome": false,
+  "outside_exists": false,
+  "session2_exit": 0
+}

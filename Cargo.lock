@@ -279,7 +279,9 @@ version = "0.1.0"
 dependencies = [
  "crossterm",
  "nano-conversation",
+ "nano-decisions",
  "nano-runtime",
+ "nano-transcript",
  "ratatui",
  "serde_json",
  "unicode-width 0.2.0",
@@ -295,6 +297,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nano-decisions"
+version = "0.1.0"
+dependencies = [
+ "nano-conversation",
+ "serde",
+ "serde_json",
+ "unicode-width 0.2.0",
+]
+
+[[package]]
 name = "nano-runtime"
 version = "0.1.0"
 dependencies = [
@@ -304,6 +316,17 @@ dependencies = [
  "serde_json",
  "signal-hook",
  "tempfile",
+]
+
+[[package]]
+name = "nano-transcript"
+version = "0.1.0"
+dependencies = [
+ "nano-conversation",
+ "nano-decisions",
+ "ratatui",
+ "serde_json",
+ "unicode-width 0.2.0",
 ]
 
 [[package]]

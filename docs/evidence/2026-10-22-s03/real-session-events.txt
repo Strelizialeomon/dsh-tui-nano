@@ -1,0 +1,24 @@
+# S03 真实会话事件摘录（已剔除系统指令、运行时上下文和其他注入消息）
+
+- 授权：用户在 S03 实施期明确授权 2 次真实模型会话。
+- 路由：deepseek-official / deepseek-chat；凭据来自用户真实 `~/.dsh`，未复制；profile 安装到 `~/.dsh/profiles/dsh-tui-nano`。
+- 数据根/cwd：临时目录（`/tmp/nano-s03-evidence/...`）。
+
+## session-1
+
+USER {"text": "请严格按顺序执行，不要做其他事。1) 调用 ask_user_question，只问一题：id=surface，question=\"验证方式选哪个？\"，options=[\"聚焦回归（推荐）\",\"完整回归\"]，multi_select=false。2) 等我回答后，用 write 在当前工作目录创建 proof.txt，内容两行：nano s03\\ndiff proof。不要读取文件，不要运行 bash，不要问第二题。"}
+TOOL_CALL {"callId": "call_00_EJlGVTweaMzZWhA0OWsP0042", "name": "ask_user_question", "arguments": "{\"questions\": [{\"id\": \"surface\", \"question\": \"验证方式选哪个？\", \"options\": [{\"label\": \"聚焦回归（推荐）\"}, {\"label\": \"完整回归\"}], \"multi_select\": false}]}"}
+TOOL_RESULT {"callId": "call_00_EJlGVTweaMzZWhA0OWsP0042", "isError": false, "text": "{\"answers\":[{\"id\":\"surface\",\"selected\":[\"聚焦回归（推荐）\"]}]}", "meta": null, "error": null}
+TOOL_CALL {"callId": "call_00_COKHXTXCa1tNR8ga7TiN9308", "name": "write", "arguments": "{\"file_path\": \"/private/tmp/nano-s03-evidence/work-1/proof.txt\", \"content\": \"nano s03\\ndiff proof\\n\"}"}
+TOOL_RESULT {"callId": "call_00_COKHXTXCa1tNR8ga7TiN9308", "isError": false, "text": "<path>/private/tmp/nano-s03-evidence/work-1/proof.txt</path>\n<type>file</type>\n<content>\nCreated file\n</content>", "meta": {"operation": "create", "path": "/private/tmp/nano-s03-evidence/work-1/proof.txt", "diffs": []}, "error": null}
+TURN_END {"turn": 1, "reason": {"kind": "completed"}}
+
+## session-2
+
+USER {"text": "请用 write 工具创建文件 /tmp/nano-s03-evidence/outside.txt，内容为 hello，并在参数里显式包含 sandbox_permissions=\"danger-full-access\" 和 justification=\"S03 approval evidence\"。不要先读文件，不要使用 bash。如果第一次被沙箱拒绝，请按提示重试并等待我的审批。"}
+TOOL_CALL {"callId": "call_00_WscckSOaitXaCPNDUxB61779", "name": "write", "arguments": "{\"file_path\": \"/tmp/nano-s03-evidence/outside.txt\", \"content\": \"hello\\n\", \"justification\": \"S03 approval evidence\", \"sandbox_permissions\": \"danger-full-access\"}"}
+APPROVAL/ASKED {"id": "a8f1a45d-55da-4e1b-9c57-7334f80c7b22", "toolName": "write", "callId": "call_00_WscckSOaitXaCPNDUxB61779", "reason": "escalate sandbox to danger-full-access: S03 approval evidence"}
+APPROVAL/DECIDED {"id": "a8f1a45d-55da-4e1b-9c57-7334f80c7b22", "outcome": "allowed-once"}
+TOOL_RESULT {"callId": "call_00_WscckSOaitXaCPNDUxB61779", "isError": false, "text": "<path>/private/tmp/nano-s03-evidence/outside.txt</path>\n<type>file</type>\n<content>\nCreated file\n</content>", "meta": {"operation": "create", "path": "/private/tmp/nano-s03-evidence/outside.txt", "diffs": []}, "error": null}
+TURN_END {"turn": 1, "reason": {"kind": "completed"}}
+

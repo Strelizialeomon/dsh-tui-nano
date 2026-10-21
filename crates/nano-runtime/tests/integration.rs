@@ -221,9 +221,9 @@ fn handshake_subscribe_shutdown_roundtrip() {
     assert_eq!(hello.versions.bridge, "0.1.0");
     assert!(hello.versions.node.starts_with('v'));
     assert_eq!(hello.capabilities["agent"].status, CapabilityStatus::Supported);
-    assert_eq!(hello.capabilities["approval"].status, CapabilityStatus::Unavailable);
-    assert_eq!(hello.capabilities["userQuestions"].status, CapabilityStatus::Unavailable);
-    assert_eq!(hello.capabilities["tool-ask-user"].status, CapabilityStatus::Unavailable);
+    assert_eq!(hello.capabilities["approval"].status, CapabilityStatus::Supported);
+    assert_eq!(hello.capabilities["userQuestions"].status, CapabilityStatus::Supported);
+    assert_eq!(hello.capabilities["tool-ask-user"].status, CapabilityStatus::Supported);
     assert_eq!(
         hello.capabilities["tool-ask-user"].mode.as_deref(),
         Some("blocking")

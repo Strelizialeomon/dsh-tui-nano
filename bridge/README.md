@@ -4,6 +4,7 @@
 
 - `runtime/`：Cordis 插件入口、帧解析、fd 3/4 传输、账本、订阅、关停。
 - `conversation/`：对话宿主。`submit` 按官方 `user-rpc` 源写入 `requestId`，`editQueued`/`deleteQueued`/`steerQueued` 修改官方 inbox，`cancel` 固定 `keepInbox: true`，`snapshot` 返回绝对状态；实时事件为 `conversation.status`、`conversation.inbox` 和 `conversation.stream`。inbox 投影在超过事件帧上限时降级为有界预览并标 `truncated`；单次提交上限 32 KiB。
+- `decisions/`：S03 的审批与问卷 answerer。`approval/request` 与 `user-questions/request` 各自等待 Rust 的答复，审批只回官方四种 outcome，问卷答案按 `{id, selected, custom?}` 原样回传；限时问卷会 claim 官方 wait 并发布 `remainingMs`，超时以 `ASK_TIMED_OUT` 结束、问题转为 continued；`nano.decisions.snapshot` 在重连后恢复 pending 卡与 `userQuestions` 投影。
 - `profile/install.mjs`：初始化 `$DSH_HOME/profiles/dsh-tui-nano` 并安装本包（`dsh plugin --profile ... install`）。
 - `cordis.patch.yml`：bundle 的固定行集（bridge、`tool-ask-user`、关闭 HMR）。
 

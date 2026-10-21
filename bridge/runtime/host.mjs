@@ -15,6 +15,7 @@ import { BoundedWriter } from './writer.mjs'
 import { claimMount, releaseMount } from './ledger.mjs'
 import { SubscriptionHub } from './events.mjs'
 import { ConversationService } from '../conversation/service.mjs'
+import { DecisionService } from '../decisions/service.mjs'
 import { buildCapabilities } from './capabilities.mjs'
 import { IMPLEMENTED_REQUEST_METHODS } from './methods.mjs'
 
@@ -38,6 +39,7 @@ export function startHost(ctx, config) {
     writer: undefined,
     hub: undefined,
     conversation: undefined,
+    decisions: undefined,
     agentHandle: undefined,
     session: undefined,
     claim: undefined,
@@ -197,6 +199,13 @@ async function runStartup(state, config) {
     nonceRequired: state.transport.nonceRequired,
   })
   state.conversation = new ConversationService({
+    ctx,
+    hub: state.hub,
+    agent: state.agentHandle.agent,
+    session,
+    rootSessionId: state.config.rootSessionId,
+  })
+  state.decisions = new DecisionService({
     ctx,
     hub: state.hub,
     agent: state.agentHandle.agent,
@@ -457,6 +466,18 @@ async function dispatchRequest(state, frame) {
       await sendResult(state, id, state.conversation.snapshot(params))
       return undefined
     }
+    case 'nano.approval.answer': {
+      await sendResult(state, id, state.decisions.answerApproval(params))
+      return undefined
+    }
+    case 'nano.question.answer': {
+      await sendResult(state, id, state.decisions.answerQuestion(params))
+      return undefined
+    }
+    case 'nano.decisions.snapshot': {
+      await sendResult(state, id, state.decisions.snapshot(params))
+      return undefined
+    }
     default: {
       const reserved = RESERVED_METHODS.get(method)
       if (reserved !== undefined) {
@@ -535,6 +556,8 @@ async function runShutdown(state, reason) {
   steps.push({ name: 'accepting', status: 'stopped' })
 
   steps.push(await runStep('subscriptions', deadline, () => {
+    state.decisions?.close()
+    state.decisions = undefined
     state.conversation?.close()
     state.conversation = undefined
     state.hub?.closeAll(reason)
@@ -646,6 +669,14 @@ async function failStartup(state, error) {
   let code = startupError.code
   let message = startupError.message
   const cleanupFailures = []
+  if (state.decisions !== undefined) {
+    try {
+      state.decisions.close()
+      state.decisions = undefined
+    } catch (cleanupError) {
+      cleanupFailures.push(`decisions: ${describe(cleanupError)}`)
+    }
+  }
   if (state.conversation !== undefined) {
     try {
       state.conversation.close()
