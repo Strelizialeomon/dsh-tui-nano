@@ -16,6 +16,7 @@ import { claimMount, releaseMount } from './ledger.mjs'
 import { SubscriptionHub } from './events.mjs'
 import { ConversationService } from '../conversation/service.mjs'
 import { TerminalService } from '../terminal/service.mjs'
+import { DecisionService } from '../decisions/service.mjs'
 import { ScheduleBridge } from '../schedule/service.mjs'
 import { acquireScheduleLease, releaseScheduleLease, ScheduleLeaseError } from '../schedule/lease.mjs'
 import { installScheduleBackend, mountScheduleService, verifyScheduleStorage } from '../schedule/backend.mjs'
@@ -63,6 +64,7 @@ export function startHost(ctx, config) {
     hub: undefined,
     conversation: undefined,
     terminal: undefined,
+    decisions: undefined,
     scheduleBridge: undefined,
     scheduleFiber: undefined,
     scheduleLease: undefined,
@@ -268,6 +270,13 @@ async function runStartup(state, config) {
     session,
     rootSessionId: state.config.rootSessionId,
     attachments: state.attachments,
+  })
+  state.decisions = new DecisionService({
+    ctx,
+    hub: state.hub,
+    agent: state.agentHandle.agent,
+    session,
+    rootSessionId: state.config.rootSessionId,
   })
   state.sessions = new SessionsService({
     ctx,
@@ -740,6 +749,18 @@ async function dispatchRequest(state, frame) {
       await sendResult(state, id, await state.terminal.close(params))
       return undefined
     }
+    case 'nano.approval.answer': {
+      await sendResult(state, id, state.decisions.answerApproval(params))
+      return undefined
+    }
+    case 'nano.question.answer': {
+      await sendResult(state, id, state.decisions.answerQuestion(params))
+      return undefined
+    }
+    case 'nano.decisions.snapshot': {
+      await sendResult(state, id, state.decisions.snapshot(params))
+      return undefined
+    }
     case 'nano.schedule.catalog': {
       await sendResult(state, id, await state.scheduleBridge.catalog(params))
       return undefined
@@ -920,6 +941,8 @@ async function runShutdown(state, reason) {
   steps.push(await runStep('subscriptions', deadline, () => {
     state.controls?.close()
     state.controls = undefined
+    state.decisions?.close()
+    state.decisions = undefined
     state.conversation?.close()
     state.conversation = undefined
     state.attachments?.close()
@@ -1076,6 +1099,14 @@ async function failStartup(state, error) {
       state.controls = undefined
     } catch (cleanupError) {
       cleanupFailures.push(`controls: ${describe(cleanupError)}`)
+    }
+  }
+  if (state.decisions !== undefined) {
+    try {
+      state.decisions.close()
+      state.decisions = undefined
+    } catch (cleanupError) {
+      cleanupFailures.push(`decisions: ${describe(cleanupError)}`)
     }
   }
   if (state.conversation !== undefined) {

@@ -1,0 +1,50 @@
+ nano  work-1 · 已连接 · 空闲 · seq 33 · 队列 0
+- `progress-init`: 给一个项目建"进度图"骨架——在目标项目落起手 progress.yaml，并注册进 progress-map 的查看器。新项目起手
+或给老项目补进度图时用。先定项目 id/展示名/数据来源(私有走 relay、公开走 raw)，可选探测 spike/ADR 约定。核心右尺寸[3不预
+建还没有的东西、已有的不覆盖。
+- `progress-update`: 刷新一个项目的进度图——在目标项目目录里跑 gather 抓客观信号(commit/PR/issue)，由在场 agent 按 SYNC
+规则判断哪条路走通/走死/在进行，翻译成 docs/progress.yaml 增改，人审 diff 后提交。业务方说"同[6进度/刷新进度图"或刚推进
+了某条岔路时用。
+- `redesign-existing-projects`: Upgrades existing websites and apps to premium quality. Audits current design, identifie
+s generic AI patterns, and applies high-end design standards without breaking functionality. Works with any CSS framewor
+k or vanilla CSS.
+- `spec-flow`: 复杂活的两段流[1：需求确认、spec、PR 过闸、合并后开 issue；认领 issue、实施、过闸合并回填。要设计、动多个
+端或值得留依据的需求，开工前调用；「请你做 #N」从实施期进，每份交付物合并前均由用户选审核档位，agent 不自派。也处[1「把H
+spec-flow 应用到本项目」「更新本项目的 spec-flow 接入」及语义变体，可附带 ADR 等采用意图；未知描述问清。
+- `stitch-design-taste`: Semantic Design System Skill for Google Stitch. Generates agent-friendly DESIGN.md files that e
+nforce premium, anti-generic UI standards — strict typography, calibrated color, asymmetric layouts, perpetual micro-mot
+ion, and hardware-accelerated performance.
+</available_skills>
+
+If the user names a skill, or the task clearly matches a skill's description, call the `skill` tool with the exact skill
+ name before taking task actions. Load all applicable skills, then follow their full instructions. This catalog contains
+ summaries only; do not infer or follow a skill's instructions until it has been loaded.
+A user may also invoke a skill directly; its <skill_content> block then appears in this conversation. Follow it, and do
+not call the `skill` tool again for that skill.
+</system-reminder>                                                                                          3
+
+思考 1.4s · 收起
+助手
+[tool-call]                        [28;37
+
+问卷 已回答 · 1 题 · 点击查看
+    验证方式选哪个？ → 聚焦回归（推荐）
+                                                                                                 i
+思考 258ms · 收起
+助手        [34;14H
+[tool-call]                                                            [35;7
+
+文件 /private/tmp/nano-s03-evidence/work-1/proof.txt  +2
+  已应用
+     + nano s03
+     + diff proof
+
+助手
+已按你选的「聚焦回归（推荐）」完成，proof.txt 已在当前工作目录创建，内容为两行[43;80Hs03`、`diff proof`。
+
+下一步：等你确认或给新指令。
+
+┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） ─────────────────────────────────────────┐
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行 · Esc 停止 · Ctrl+Y 复制原文 · Ctrl+C 退[50;88H出

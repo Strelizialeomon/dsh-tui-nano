@@ -150,7 +150,7 @@ function serviceWith(controller, writer = new FakeWriter()) {
 test('missing controller reports unsupported capability through errors', () => {
   const { service } = serviceWith(undefined)
   assert.equal(service.available, false)
-  assert.throws(() => service.environment(), (error) => error.code === 1045)
+  assert.throws(() => service.environment(), (error) => error.code === 1049)
 })
 
 test('create is idempotent for the same open identity', async () => {
@@ -167,7 +167,7 @@ test('terminal limit errors map to the Nano error table', async () => {
   const { service } = serviceWith(new FakeController({ createError: error }))
   await assert.rejects(
     service.create({ terminalId: 'term-1', cols: 80, rows: 24 }),
-    (rejected) => rejected.code === 1046 && rejected.data.limit === 8,
+    (rejected) => rejected.code === 1050 && rejected.data.limit === 8,
   )
 })
 
@@ -323,7 +323,7 @@ test('an unknown terminal state is rejected instead of being treated as running'
   const { service } = serviceWith(controller)
   await assert.rejects(
     service.create({ terminalId: 'term-1', cols: 80, rows: 24 }),
-    (error) => error.code === 1052 && /unknown terminal state/u.test(error.message),
+    (error) => error.code === 1056 && /unknown terminal state/u.test(error.message),
   )
 })
 

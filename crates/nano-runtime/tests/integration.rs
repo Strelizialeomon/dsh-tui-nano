@@ -236,15 +236,15 @@ fn handshake_subscribe_shutdown_roundtrip() {
     );
     assert_eq!(
         hello.capabilities["approval"].status,
-        CapabilityStatus::Unavailable
+        CapabilityStatus::Supported
     );
     assert_eq!(
         hello.capabilities["userQuestions"].status,
-        CapabilityStatus::Unavailable
+        CapabilityStatus::Supported
     );
     assert_eq!(
         hello.capabilities["tool-ask-user"].status,
-        CapabilityStatus::Unavailable
+        CapabilityStatus::Supported
     );
     assert_eq!(
         hello.capabilities["tool-ask-user"].mode.as_deref(),
@@ -262,6 +262,10 @@ fn handshake_subscribe_shutdown_roundtrip() {
         hello.capabilities["terminal"].status,
         CapabilityStatus::Supported
     );
+    assert_eq!(
+        hello.capabilities["schedule"].status,
+        CapabilityStatus::Supported
+    );
 
     let owners = fixture.session_owners(&session);
     assert_eq!(owners, vec![host.pid()]);
@@ -277,13 +281,6 @@ fn handshake_subscribe_shutdown_roundtrip() {
         .cancel_request("req-does-not-exist")
         .expect("cancel request");
     assert!(!cancelled.cancelled);
-    match host.request(
-        "nano.approval.answer",
-        json!({ "requestId": "approval-1", "outcome": "rejected" }),
-    ) {
-        Err(HostError::Rpc(error)) => assert_eq!(error.code, 1008),
-        other => panic!("reserved method did not report unsupported: {other:?}"),
-    }
     match host.request("nano.mystery", json!({})) {
         Err(HostError::Rpc(error)) => assert_eq!(error.code, -32601),
         other => panic!("unknown method did not report method-not-found: {other:?}"),
@@ -1057,7 +1054,7 @@ fn terminal_create_input_resize_reattach_close() {
                 closed = Some(value);
                 break;
             }
-            Err(HostError::Rpc(error)) if error.code == 1052 => {
+            Err(HostError::Rpc(error)) if error.code == 1056 => {
                 std::thread::sleep(Duration::from_millis(200));
             }
             Err(error) => panic!("unexpected close error: {error:?}"),
@@ -1321,7 +1318,7 @@ fn terminals_are_scoped_to_their_root_session_host() {
                 closed = Some(value);
                 break;
             }
-            Err(HostError::Rpc(error)) if error.code == 1052 => {
+            Err(HostError::Rpc(error)) if error.code == 1056 => {
                 std::thread::sleep(Duration::from_millis(200));
             }
             Err(error) => panic!("unexpected close error: {error:?}"),

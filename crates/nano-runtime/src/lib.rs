@@ -81,7 +81,7 @@ pub const LIFECYCLE_TRANSITIONS: [(&str, &str); 15] = [
 ];
 
 /// Error code names shared with the bridge contract.
-pub const ERROR_CODE_NAMES: [(&str, i64); 57] = [
+pub const ERROR_CODE_NAMES: [(&str, i64); 61] = [
     ("jsonrpc/parse-error", -32700),
     ("jsonrpc/invalid-request", -32600),
     ("jsonrpc/method-not-found", -32601),
@@ -131,18 +131,22 @@ pub const ERROR_CODE_NAMES: [(&str, i64); 57] = [
     ("nano/file-references/failed", 1042),
     ("nano/schedule/unavailable", 1043),
     ("nano/schedule/error", 1044),
-    ("nano/terminal/unavailable", 1045),
-    ("nano/terminal/limit-reached", 1046),
-    ("nano/terminal/control-unavailable", 1047),
-    ("nano/terminal/not-found", 1048),
-    ("nano/terminal/input", 1049),
-    ("nano/terminal/input-full", 1050),
-    ("nano/terminal/closed-id", 1051),
-    ("nano/terminal/failed", 1052),
+    ("nano/decisions/unknown-request", 1045),
+    ("nano/decisions/answer-invalid", 1046),
+    ("nano/decisions/reply-queued", 1047),
+    ("nano/decisions/answer-failed", 1048),
+    ("nano/terminal/unavailable", 1049),
+    ("nano/terminal/limit-reached", 1050),
+    ("nano/terminal/control-unavailable", 1051),
+    ("nano/terminal/not-found", 1052),
+    ("nano/terminal/input", 1053),
+    ("nano/terminal/input-full", 1054),
+    ("nano/terminal/closed-id", 1055),
+    ("nano/terminal/failed", 1056),
 ];
 
 /// Method names implemented by this generation.
-pub const IMPLEMENTED_METHODS: [&str; 58] = [
+pub const IMPLEMENTED_METHODS: [&str; 61] = [
     "nano.hello",
     "nano.startupError",
     "nano.shutdown",
@@ -185,6 +189,9 @@ pub const IMPLEMENTED_METHODS: [&str; 58] = [
     "nano.jobs.snapshot",
     "nano.jobs.follow",
     "nano.jobs.kill",
+    "nano.approval.answer",
+    "nano.question.answer",
+    "nano.decisions.snapshot",
     "nano.terminal.environment",
     "nano.terminal.shells",
     "nano.terminal.list",
@@ -211,7 +218,7 @@ pub const TERMINAL_NOTIFICATION_METHODS: [&str; 4] = [
 ];
 
 /// Event kinds this client accepts.
-pub const EVENT_KINDS: [&str; 12] = [
+pub const EVENT_KINDS: [&str; 15] = [
     "session.event",
     "conversation.status",
     "conversation.inbox",
@@ -224,6 +231,9 @@ pub const EVENT_KINDS: [&str; 12] = [
     "instructions.changed",
     "jobs.event",
     "jobs.output",
+    "decisions.approval",
+    "decisions.question",
+    "decisions.projection",
 ];
 
 /// Shutdown report step names, in report order.

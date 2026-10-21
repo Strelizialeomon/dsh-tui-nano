@@ -20,6 +20,7 @@ use nano_conversation::{
     FeatureRegistry, FocusId, InputBuffer, InputEvent, InputOutcome, InputRoute, SceneId,
     SceneState, SessionAddress, SubmitError,
 };
+use nano_decisions::{answers_to_wire, DecisionAction, DecisionClick, DecisionKey, DecisionsModel};
 use nano_jobs::{BashRecord, JobsModel, SHELL_NOTICE};
 use nano_runtime::{CapabilityStatus, Hello, SessionMode};
 use nano_schedule::{ScheduleAction, ScheduleModel};
@@ -34,6 +35,7 @@ use nano_terminal::{
     is_close_key, is_toggle_key, Command as TerminalCommand, Failure, RequestKind, TerminalState,
     TerminalStore,
 };
+use nano_transcript::{Hit, HitKind, RecordedQuestionState, TranscriptSource, TranscriptView};
 use ratatui::layout::Rect;
 use serde_json::{json, Value};
 
@@ -202,6 +204,15 @@ pub enum Pending {
         /// Name used in status messages.
         name: String,
     },
+    /// Read pending approval/question cards after a reconnect.
+    DecisionsSnapshot,
+    /// One answer to a decision card.
+    Decision {
+        /// The action that was sent; used to roll the card back on failure.
+        action: DecisionAction,
+        /// Short label for status and diagnostics.
+        label: String,
+    },
     /// Read the schedule catalog.
     ScheduleCatalog,
     /// Create one schedule task.
@@ -365,10 +376,26 @@ pub struct App {
     pub submit_backups: HashMap<String, SubmittedDraft>,
     /// In-flight requests.
     pub pending: HashMap<u64, Pending>,
-    /// Feed lines scrolled back from the bottom.
-    pub scroll_back: usize,
     /// Last measured feed viewport height.
     pub feed_height: usize,
+    /// Reading view (transcript, line budgets, expansion, scroll).
+    pub view: TranscriptView,
+    /// Question and approval cards.
+    pub decisions: DecisionsModel,
+    /// Whether the transcript entries need rebuilding before the next draw.
+    pub transcript_dirty: bool,
+    /// Feed hit targets from the last draw.
+    pub feed_hits: Vec<Option<Hit>>,
+    /// Feed region from the last draw.
+    pub feed_area: Rect,
+    /// Decision card region from the last draw.
+    pub decision_area: Rect,
+    /// Decision click targets from the last draw.
+    pub decision_hits: Vec<Option<DecisionClick>>,
+    /// Pointer press position, used to distinguish a click from a drag.
+    pub mouse_down: Option<(u16, u16)>,
+    /// A drag happened between press and release.
+    pub mouse_dragged: bool,
     /// Quit after the current input pass.
     pub should_quit: bool,
     /// Handshake facts, once ready.
@@ -511,7 +538,7 @@ impl App {
             cli,
             model: ConversationModel::new(address.clone()),
             drafts: DraftStore::new(address.clone()),
-            attachments: AttachmentDraftStore::new(address),
+            attachments: AttachmentDraftStore::new(address.clone()),
             registry,
             scene,
             link: None,
@@ -524,8 +551,16 @@ impl App {
             edit_backup: None,
             submit_backups: HashMap::new(),
             pending: HashMap::new(),
-            scroll_back: 0,
             feed_height: 10,
+            view: TranscriptView::new(address.clone(), TranscriptSource::Interactive),
+            decisions: DecisionsModel::new(address.clone()),
+            transcript_dirty: true,
+            feed_hits: Vec::new(),
+            feed_area: Rect::default(),
+            decision_area: Rect::default(),
+            decision_hits: Vec::new(),
+            mouse_down: None,
+            mouse_dragged: false,
             should_quit: false,
             hello: None,
             replay_truncated,
@@ -1123,16 +1158,21 @@ impl App {
                 _ => {}
             }
         }
+        if self.decisions.top().is_some() {
+            if let Some(mapped) = decision_key(key) {
+                self.clear_transient_status();
+                self.decisions.handle_key(mapped);
+                self.drain_decisions();
+                return true;
+            }
+            return false;
+        }
         if matches!(key.code, KeyCode::PageUp) {
-            self.scroll_back = self
-                .scroll_back
-                .saturating_add(self.feed_height.saturating_sub(1).max(1));
+            self.view.scroll_mut().page_up(self.feed_height);
             return true;
         }
         if matches!(key.code, KeyCode::PageDown) {
-            self.scroll_back = self
-                .scroll_back
-                .saturating_sub(self.feed_height.saturating_sub(1).max(1));
+            self.view.scroll_mut().page_down(self.feed_height);
             return true;
         }
         if self.picker.is_some() {
@@ -1200,7 +1240,7 @@ impl App {
                     return true;
                 }
                 KeyCode::End => {
-                    self.scroll_back = 0;
+                    self.view.scroll_mut().to_bottom();
                     return true;
                 }
                 _ => {}
@@ -1348,6 +1388,10 @@ impl App {
             self.dispatch_terminal(commands);
             return true;
         }
+        if self.decision_owns_seat() {
+            self.clear_transient_status();
+            return self.decisions.paste(&text);
+        }
         if self.schedule.open {
             if let Some(form) = self.schedule.form.as_mut() {
                 if let Some(field) = form.focused_text() {
@@ -1380,21 +1424,6 @@ impl App {
             self.refresh_completion();
         }
         outcome != InputOutcome::Ignored
-    }
-
-    /// Route one mouse event to the terminal when it is the active scene.
-    pub fn handle_mouse(&mut self, event: crossterm::event::MouseEvent) -> bool {
-        if !self.terminal_active() {
-            return false;
-        }
-        let area = self.terminal_screen_area;
-        let commands = self
-            .terminal
-            .as_mut()
-            .map(|terminal| terminal.handle_mouse(event, area))
-            .unwrap_or_default();
-        self.dispatch_terminal(commands);
-        true
     }
 
     /// Apply one link event. Returns whether the screen needs a redraw.
@@ -1446,6 +1475,8 @@ impl App {
                     self.notice = Some("已连接官方会话".to_string());
                 }
                 self.refresh_snapshot();
+                self.refresh_decisions();
+                self.transcript_dirty = true;
                 self.refresh_context();
                 self.refresh_jobs_snapshot();
                 self.refresh_controls_state();
@@ -1540,8 +1571,18 @@ impl App {
         use nano_runtime::HostEvent;
         match event {
             HostEvent::Event(params) => {
+                self.transcript_dirty = true;
+                if params.kind == "session.event" || params.kind.starts_with("decisions.") {
+                    self.view.apply_event(&params.kind, &params.payload);
+                }
+                let mut decision_changed = false;
+                if params.kind.starts_with("decisions.") {
+                    decision_changed = self.decisions.apply_event(&params.kind, &params.payload);
+                    self.drain_decisions();
+                }
                 if params.kind == "sessions.context" {
-                    return self.apply_context_value(&params.payload);
+                    let changed = self.apply_context_value(&params.payload);
+                    return changed || decision_changed;
                 }
                 if params.kind == "session.event" {
                     self.resubscribe_attempts = 0;
@@ -1878,18 +1919,88 @@ impl App {
                     }
                 }
             }
-            Pending::Terminal { kind, epoch } => {
-                let result = result.map_err(|error| Failure {
-                    definite: !matches!(error.kind, RequestErrorKind::Unknown),
-                    message: error.message,
-                });
-                let commands = self
-                    .terminal
-                    .as_mut()
-                    .map(|terminal| terminal.on_response_epoch(epoch, kind, result))
-                    .unwrap_or_default();
-                self.dispatch_terminal(commands);
-            }
+            Pending::DecisionsSnapshot => match result {
+                Ok(value) => {
+                    self.decisions.apply_snapshot(&value);
+                    let address = self.model.address().wire_value();
+                    if let Some(projection) = value.get("projection") {
+                        let payload = json!({
+                            "address": address.clone(),
+                            "active": projection.get("active").cloned().unwrap_or_else(|| json!([])),
+                            "settled": projection.get("settled").cloned().unwrap_or_else(|| json!([])),
+                        });
+                        self.view.apply_event("decisions.projection", &payload);
+                    }
+                    if let Some(approvals) = value.get("approvals").and_then(Value::as_array) {
+                        for approval in approvals {
+                            let mut payload = approval.clone();
+                            if let Some(object) = payload.as_object_mut() {
+                                object.insert("address".into(), address.clone());
+                                object.insert("state".into(), json!("pending"));
+                            }
+                            self.view.apply_event("decisions.approval", &payload);
+                        }
+                    }
+                    if let Some(questions) = value.get("questions").and_then(Value::as_array) {
+                        for question in questions {
+                            if question.get("callId").is_none() {
+                                continue;
+                            }
+                            let mut payload = question.clone();
+                            if let Some(object) = payload.as_object_mut() {
+                                object.insert("address".into(), address.clone());
+                                object.insert("state".into(), json!("pending"));
+                            }
+                            self.view.apply_event("decisions.question", &payload);
+                        }
+                    }
+                    self.transcript_dirty = true;
+                    self.sync_decision_focus();
+                }
+                Err(error) => {
+                    self.notice = Some(format!("读取决策状态失败：{}", error.message));
+                }
+            },
+            Pending::Decision { action, label } => match result {
+                Ok(value) => {
+                    let accepted = value
+                        .get("accepted")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(true);
+                    let mode = value.get("mode").and_then(Value::as_str);
+                    let reason = value.get("reason").and_then(Value::as_str);
+                    let not_accepted = !accepted
+                        || matches!(
+                            reason,
+                            Some("not-continued")
+                                | Some("already-continued")
+                                | Some("no-live-wait")
+                        );
+                    if not_accepted {
+                        let detail = reason.unwrap_or("请求已失效");
+                        self.decisions
+                            .answer_not_accepted(&action, format!("{label}未被接受：{detail}"));
+                        self.error = Some(format!("{label}未被接受：{detail}"));
+                        if reason == Some("no-live-wait") {
+                            self.refresh_decisions();
+                        }
+                    } else if mode == Some("continued")
+                        && matches!(action, DecisionAction::QuestionExpire { .. })
+                    {
+                        self.decisions.mark_question_continued(&action);
+                    }
+                }
+                Err(error) => {
+                    self.decisions
+                        .action_failed(&action, format!("{label}失败：{}", error.message));
+                    self.error = Some(format!("{label}失败：{}", error.message));
+                    if error.message.contains("already settled")
+                        || error.message.contains("unknown")
+                    {
+                        self.refresh_decisions();
+                    }
+                }
+            },
             Pending::ClearStopDelete {
                 generation,
                 message_id,
@@ -2098,6 +2209,18 @@ impl App {
                         self.refresh_snapshot();
                     }
                 }
+            }
+            Pending::Terminal { kind, epoch } => {
+                let result = result.map_err(|error| Failure {
+                    definite: !matches!(error.kind, RequestErrorKind::Unknown),
+                    message: error.message,
+                });
+                let commands = self
+                    .terminal
+                    .as_mut()
+                    .map(|terminal| terminal.on_response_epoch(epoch, kind, result))
+                    .unwrap_or_default();
+                self.dispatch_terminal(commands);
             }
             Pending::CompactCancel => match result {
                 Ok(value) => {
@@ -2702,6 +2825,9 @@ impl App {
             let commands = terminal.disconnect("宿主已断开；终端进程状态未知");
             self.dispatch_terminal(commands);
         }
+        self.decisions.clear();
+        self.scene.focus_mut().reset(FocusId::input());
+        self.transcript_dirty = true;
         self.jobs.clear();
         self.jobs_snapshot_pending = false;
         self.following.clear();
@@ -3763,6 +3889,263 @@ impl App {
 
     /// Send the draft to the terminal clipboard with OSC 52. The payload is the
     /// original buffer bytes, not the display-normalized text.
+
+    /// Whether a decision card currently owns the input seat.
+    pub fn decision_owns_seat(&self) -> bool {
+        self.decisions.top().is_some()
+            && !self.picker.is_some()
+            && self.shell_confirm.is_none()
+            && !self.panel.is_open()
+            && !self.jobs_open
+            && !self.sessions_panel.open
+            && !self.skills_panel_open()
+            && !self.instructions_panel_open()
+            && !self.schedule.open
+            && self.schedule.busy.is_none()
+    }
+
+    /// Apply one pointer event. Returns whether the screen needs a redraw.
+    pub fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> bool {
+        if self.terminal_active() {
+            let area = self.terminal_screen_area;
+            let commands = self
+                .terminal
+                .as_mut()
+                .map(|terminal| terminal.handle_mouse(mouse, area))
+                .unwrap_or_default();
+            self.dispatch_terminal(commands);
+            return true;
+        }
+        use crossterm::event::{MouseButton, MouseEventKind};
+        match mouse.kind {
+            MouseEventKind::ScrollUp => self.scroll_at(mouse.column, mouse.row, -1),
+            MouseEventKind::ScrollDown => self.scroll_at(mouse.column, mouse.row, 1),
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.mouse_down = Some((mouse.column, mouse.row));
+                self.mouse_dragged = false;
+                false
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                self.mouse_dragged = true;
+                false
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                let down = self.mouse_down.take();
+                let dragged = std::mem::take(&mut self.mouse_dragged);
+                if dragged {
+                    return false;
+                }
+                match down {
+                    Some((column, row)) if column == mouse.column && row == mouse.row => {
+                        self.click_at(column, row)
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    fn scroll_at(&mut self, column: u16, row: u16, direction: isize) -> bool {
+        if self.decision_area.contains((column, row).into()) {
+            self.decisions.scroll(direction);
+            return true;
+        }
+        if self.feed_area.contains((column, row).into()) {
+            return self.view.scroll_mut().wheel(direction, Instant::now());
+        }
+        false
+    }
+
+    fn click_at(&mut self, column: u16, row: u16) -> bool {
+        let point = (column, row);
+        if self.decision_area.contains(point.into()) {
+            let offset = row.saturating_sub(self.decision_area.y) as usize;
+            let Some(Some(click)) = self.decision_hits.get(offset).cloned() else {
+                return false;
+            };
+            self.decisions.click(click);
+            self.drain_decisions();
+            return true;
+        }
+        if self.feed_area.contains(point.into()) {
+            let offset = row.saturating_sub(self.feed_area.y) as usize;
+            let Some(Some(hit)) = self.feed_hits.get(offset).cloned() else {
+                return false;
+            };
+            match hit.kind {
+                HitKind::Toggle => return self.view.toggle(&hit.identity),
+                HitKind::OpenQuestion { call_id } => return self.open_question(&call_id),
+            }
+        }
+        false
+    }
+
+    fn open_question(&mut self, call_id: &str) -> bool {
+        let Some(record) = self.view.question(call_id) else {
+            return false;
+        };
+        let continued = record.state == RecordedQuestionState::Continued;
+        let answerable = record.answerable();
+        let opened = self.decisions.open_question(
+            call_id.to_string(),
+            record.questions,
+            record.answers,
+            answerable,
+            continued,
+        );
+        if opened {
+            self.sync_decision_focus();
+        }
+        opened
+    }
+
+    fn sync_decision_focus(&mut self) {
+        let decision = FocusId::new("decision");
+        if self.decisions.top().is_some() {
+            self.scene.focus_mut().push(decision);
+        } else if self.scene.focus().top() == Some(&decision) {
+            self.scene.focus_mut().reset(FocusId::input());
+            self.decisions.clear_notice();
+        }
+    }
+
+    fn drain_decisions(&mut self) {
+        for action in self.decisions.take_actions() {
+            self.send_decision_action(action);
+        }
+        if let Some(notice) = self.decisions.notice().map(str::to_string) {
+            self.notice = Some(notice);
+        }
+        if let Some(error) = self.decisions.error().map(str::to_string) {
+            self.error = Some(error);
+        }
+        self.sync_decision_focus();
+        self.transcript_dirty = true;
+    }
+
+    fn send_decision_action(&mut self, action: DecisionAction) {
+        let address = self.address_value();
+        let (method, params, label) = match &action {
+            DecisionAction::Approval {
+                request_id,
+                outcome,
+            } => (
+                "nano.approval.answer",
+                json!({
+                    "address": address,
+                    "requestId": request_id,
+                    "outcome": outcome.as_str(),
+                }),
+                "审批答复".to_string(),
+            ),
+            DecisionAction::QuestionAnswer {
+                request_id,
+                call_id,
+                answers,
+            } => {
+                let mut params = serde_json::Map::new();
+                params.insert("address".into(), address);
+                if let Some(id) = request_id {
+                    params.insert("requestId".into(), Value::String(id.clone()));
+                }
+                if let Some(id) = call_id {
+                    params.insert("callId".into(), Value::String(id.clone()));
+                }
+                params.insert("answers".into(), answers_to_wire(answers));
+                (
+                    "nano.question.answer",
+                    Value::Object(params),
+                    "答卷".to_string(),
+                )
+            }
+            DecisionAction::QuestionExpire {
+                request_id,
+                call_id,
+            } => {
+                let mut params = serde_json::Map::new();
+                params.insert("address".into(), address);
+                if let Some(id) = request_id {
+                    params.insert("requestId".into(), Value::String(id.clone()));
+                }
+                if let Some(id) = call_id {
+                    params.insert("callId".into(), Value::String(id.clone()));
+                }
+                params.insert("expire".into(), Value::Bool(true));
+                (
+                    "nano.question.answer",
+                    Value::Object(params),
+                    "问卷到期".to_string(),
+                )
+            }
+            DecisionAction::QuestionCancel { request_id } => {
+                let mut params = serde_json::Map::new();
+                params.insert("address".into(), address);
+                if let Some(id) = request_id {
+                    params.insert("requestId".into(), Value::String(id.clone()));
+                }
+                params.insert("cancel".into(), Value::Bool(true));
+                (
+                    "nano.question.answer",
+                    Value::Object(params),
+                    "取消问卷".to_string(),
+                )
+            }
+            DecisionAction::QuestionRequestChanges {
+                request_id,
+                call_id,
+            } => {
+                let mut params = serde_json::Map::new();
+                params.insert("address".into(), address);
+                if let Some(id) = request_id {
+                    params.insert("requestId".into(), Value::String(id.clone()));
+                }
+                if let Some(id) = call_id {
+                    params.insert("callId".into(), Value::String(id.clone()));
+                }
+                params.insert("cancel".into(), Value::Bool(true));
+                (
+                    "nano.question.answer",
+                    Value::Object(params),
+                    "请求修改".to_string(),
+                )
+            }
+        };
+        if !self.ready {
+            self.decisions
+                .action_failed(&action, "宿主未就绪；卡片已保留");
+            self.error = Some("宿主未就绪；卡片已保留".to_string());
+            return;
+        }
+        let Some(link) = &self.link else {
+            self.decisions.action_failed(&action, "宿主连接已关闭");
+            return;
+        };
+        match link.request(method, params) {
+            Ok(id) => {
+                self.pending.insert(id, Pending::Decision { action, label });
+            }
+            Err(message) => {
+                self.decisions.action_failed(&action, message.clone());
+                self.error = Some(format!("{label}发送失败：{message}"));
+            }
+        }
+    }
+
+    /// Read pending decision cards after a reconnect.
+    pub fn refresh_decisions(&mut self) {
+        if !self.ready {
+            return;
+        }
+        let Some(link) = &self.link else {
+            return;
+        };
+        let params = json!({ "address": self.address_value() });
+        if let Ok(id) = link.request("nano.decisions.snapshot", params) {
+            self.pending.insert(id, Pending::DecisionsSnapshot);
+        }
+    }
+
     pub fn copy_draft(&mut self) {
         let text = self.drafts.current().text();
         if text.is_empty() {
@@ -4379,6 +4762,25 @@ impl App {
             }
             return "任务面板 · ↑↓ 选择 · Enter 详情 · k 停止 · r 刷新 · Esc 关闭".to_string();
         }
+        if self.decision_owns_seat() {
+            return match self.decisions.top() {
+                Some(nano_decisions::DecisionTop::Approval(_)) => {
+                    "审批：↑↓ 切换 · Enter 确认 · 1 选允许 · 2 选拒绝 · Esc 取消（不会允许）"
+                        .to_string()
+                }
+                Some(nano_decisions::DecisionTop::Question(card)) => {
+                    if card.state() == nano_decisions::QuestionCardState::ReadOnly {
+                        "问卷回看：↑↓ 滚动 · Esc 关闭".to_string()
+                    } else if card.plan_review().is_some() {
+                        "计划审阅：↑↓ 选择 · Enter 确认 · 1 展开/收起 · Esc 取消".to_string()
+                    } else {
+                        "问卷：↑↓ 移动 · Enter 选择/提交 · 空格勾选 · 数字直选 · Alt+N 跳过 · Alt+T 停止倒计时 · Esc 收起"
+                            .to_string()
+                    }
+                }
+                None => String::new(),
+            };
+        }
         if !self.scene.focus().input_focused() {
             if self.skills_panel_open() {
                 return "技能面板：↑↓ 选择 · Enter 填入 /name · P 预览 · Esc 关闭".to_string();
@@ -4735,7 +5137,7 @@ impl App {
         self.compact_in_flight = false;
         self.compact_request_id = None;
         self.compact_maybe_running = false;
-        self.scroll_back = 0;
+        self.view.scroll_mut().to_bottom();
         self.replay_truncated = false;
         self.sessions_panel.close();
     }
@@ -4841,6 +5243,7 @@ impl App {
 
     /// Time-based work: restart-worker events and closed-subscription rebuilds.
     pub fn tick(&mut self) -> bool {
+        let now = Instant::now();
         let mut changed = self.poll_restart_events();
         if self.terminal_active() {
             let commands = self
@@ -4852,6 +5255,17 @@ impl App {
                 self.dispatch_terminal(commands);
                 changed = true;
             }
+        }
+        if self.decisions.tick(now) {
+            self.drain_decisions();
+            changed = true;
+        }
+        if !self.model.previews().is_empty() {
+            self.transcript_dirty = true;
+            changed = true;
+        }
+        if self.view.scroll().recent_wheel(now) {
+            return changed;
         }
         changed |= self.tick_resubscribe();
         changed
@@ -5098,6 +5512,34 @@ fn base64(bytes: &[u8]) -> String {
         }
     }
     output
+}
+
+/// Map one terminal key to the decision-card vocabulary.
+fn decision_key(key: KeyEvent) -> Option<DecisionKey> {
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        return None;
+    }
+    match key.code {
+        KeyCode::Up => Some(DecisionKey::Up),
+        KeyCode::Down => Some(DecisionKey::Down),
+        KeyCode::Left => Some(DecisionKey::Left),
+        KeyCode::Right => Some(DecisionKey::Right),
+        KeyCode::Tab if shift => Some(DecisionKey::BackTab),
+        KeyCode::Tab => Some(DecisionKey::Tab),
+        KeyCode::BackTab => Some(DecisionKey::BackTab),
+        KeyCode::Enter => Some(DecisionKey::Enter),
+        KeyCode::Esc => Some(DecisionKey::Esc),
+        KeyCode::Backspace => Some(DecisionKey::Backspace),
+        KeyCode::PageUp => Some(DecisionKey::PageUp),
+        KeyCode::PageDown => Some(DecisionKey::PageDown),
+        KeyCode::Char(' ') => Some(DecisionKey::Space),
+        KeyCode::Char('n') | KeyCode::Char('N') if alt => Some(DecisionKey::Skip),
+        KeyCode::Char('t') | KeyCode::Char('T') if alt => Some(DecisionKey::MoreTime),
+        KeyCode::Char(character) if !alt => Some(DecisionKey::Char(character)),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -6703,10 +7145,10 @@ mod tests {
         let mut app = app();
         app.open_instructions_panel();
         app.instructions_max_scroll = 100;
-        let before = app.scroll_back;
+        let before = app.view.scroll().back();
         app.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
         assert_eq!(app.instructions_scroll, 10);
-        assert_eq!(app.scroll_back, before);
+        assert_eq!(app.view.scroll().back(), before);
         assert!(app.instructions_panel_open());
     }
 
@@ -7145,6 +7587,81 @@ mod tests {
         assert!(app.sessions_panel.rows.is_empty());
         assert_eq!(app.sessions_panel.selected, 0);
     }
+    #[test]
+    fn an_approval_event_takes_the_input_seat_and_enter_rejects() {
+        let mut app = app();
+        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::Event(
+            nano_runtime::protocol::EventParams {
+                runtime_id: "rt".into(),
+                generation: 1,
+                subscription_id: "sub-1".into(),
+                sequence: 1,
+                kind: "decisions.approval".into(),
+                payload: json!({
+                    "address": {"rootSessionId": "root"},
+                    "state": "pending",
+                    "requestId": "a-1",
+                    "toolName": "bash",
+                    "reason": "sandbox"
+                }),
+            },
+        )));
+        assert!(app.decisions.approval().is_some());
+        assert!(!app.scene.focus().input_focused());
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.decisions.approval().is_some());
+        assert!(app.error.as_deref().unwrap().contains("宿主未就绪"));
+    }
+
+    #[test]
+    fn a_timed_question_takes_the_seat_and_esc_hides_without_answering() {
+        let mut app = app();
+        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::Event(
+            nano_runtime::protocol::EventParams {
+                runtime_id: "rt".into(),
+                generation: 1,
+                subscription_id: "sub-1".into(),
+                sequence: 1,
+                kind: "decisions.question".into(),
+                payload: json!({
+                    "address": {"rootSessionId": "root"},
+                    "state": "pending",
+                    "requestId": "q-1",
+                    "callId": "c-1",
+                    "timed": true,
+                    "remainingMs": 60_000,
+                    "questions": [{"id": "q1", "question": "Pick", "options": [{"label": "A"}]}]
+                }),
+            },
+        )));
+        let card = app.decisions.question().unwrap();
+        assert_eq!(card.call_id(), Some("c-1"));
+        assert!(card.timed().remaining_ms.is_some());
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.decisions.top().is_none());
+        assert!(app.scene.focus().input_focused());
+    }
+
+    #[test]
+    fn decision_events_for_another_address_are_ignored() {
+        let mut app = app();
+        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::Event(
+            nano_runtime::protocol::EventParams {
+                runtime_id: "rt".into(),
+                generation: 1,
+                subscription_id: "sub-1".into(),
+                sequence: 1,
+                kind: "decisions.approval".into(),
+                payload: json!({
+                    "address": {"rootSessionId": "other"},
+                    "state": "pending",
+                    "requestId": "a-1",
+                    "toolName": "bash"
+                }),
+            },
+        )));
+        assert!(app.decisions.top().is_none());
+    }
 }
 
 #[cfg(test)]
@@ -7173,7 +7690,6 @@ mod terminal_tests {
         let toggle = KeyEvent::new(KeyCode::F(12), KeyModifiers::NONE);
         assert!(app.handle_key(toggle));
         assert!(app.terminal_active());
-        // Ctrl+C belongs to the shell while the terminal scene is active.
         assert!(app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)));
         assert!(!app.should_quit);
         assert!(app.handle_key(toggle));

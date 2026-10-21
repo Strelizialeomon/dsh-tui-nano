@@ -1,0 +1,50 @@
+ nano  work · 已连接 · 空闲 · seq 35 · 队列 0
+你
+运行 bash 命令 sleep 20; echo nano-queue-test，不要做其他事，命令结束前不要回复。
+
+上下文 · 点击展开
+<system-reminder>
+  … 还有 227 行 · 点击展开
+
+上下文 · 点击展开
+Current runtime context. This snapshot supersedes earlier runtime-context snapshots.
+  … 还有 9 行 · 点击展开
+
+上下文 · 点击展开
+<system-reminder>
+  … 还有 297 行 · 点击展开
+
+命令 失败 · Run sleep then echo
+› sleep 20; echo nano-queue-test
+  Error: tool call aborted
+  退出码未知
+
+回合
+回合已取消
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） ─────────────────────────────────────────┐
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+已连接官方会话

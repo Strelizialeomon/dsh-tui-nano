@@ -15,7 +15,8 @@
     "./profile/install": "./profile/install.mjs",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json",
-    "./controls": "./controls/service.mjs"
+    "./controls": "./controls/service.mjs",
+    "./decisions": "./decisions/service.mjs"
   },
   "files": [
     "runtime/**/*.mjs",
@@ -30,7 +31,8 @@
     "sessions/**/*.mjs",
     "profile/**/*.mjs",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "decisions/**/*.mjs"
   ],
   "dependencies": {
     "@dsh-tui-nano/protocol": "file:../protocol",
