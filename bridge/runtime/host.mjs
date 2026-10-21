@@ -241,12 +241,14 @@ async function runStartup(state, config) {
     session,
     rootSessionId: state.config.rootSessionId,
   })
+  const controlsOfficial = await loadControlsOfficial()
   state.controls = new ControlsService({
     ctx,
     hub: state.hub,
     agent: state.agentHandle.agent,
     session,
     rootSessionId: state.config.rootSessionId,
+    official: controlsOfficial,
   })
   state.skills = new SkillsService({
     ctx,
@@ -336,6 +338,38 @@ function validateConfig(config) {
     }
   }
   return { ...config }
+}
+
+/**
+ * Load the official helpers the controls host installs directly. The import
+ * lives here, not in `controls/service.mjs`, so the bridge can be imported by
+ * unit tests without the profile's installed official packages. A missing
+ * package is a startup failure, never a silently disabled control path.
+ * @returns {Promise<{installModelSelection: Function, buildModelCatalog: Function}>} official helpers.
+ */
+async function loadControlsOfficial() {
+  try {
+    const [agent, controller] = await Promise.all([
+      import('@deepseek-ai/dsh-agent'),
+      import('@deepseek-ai/dsh-api-session-controller'),
+    ])
+    if (
+      typeof agent.installModelSelection !== 'function' ||
+      typeof controller.buildModelCatalog !== 'function'
+    ) {
+      throw new Error('the installed official packages do not export the expected helpers')
+    }
+    return {
+      installModelSelection: agent.installModelSelection,
+      buildModelCatalog: controller.buildModelCatalog,
+    }
+  } catch (error) {
+    throw new StartupError(
+      'startup-failed',
+      `could not load the official model-selection helpers: ${describe(error)}`,
+      { cause: error },
+    )
+  }
 }
 
 /** Build the optional initial Agent route from the runtime patch. */

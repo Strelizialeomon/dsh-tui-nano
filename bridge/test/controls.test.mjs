@@ -8,6 +8,26 @@ import assert from 'node:assert/strict'
 
 import { ControlsService } from '../controls/service.mjs'
 
+// The profile installs these official packages; a bare checkout does not.
+// Tests that require the official helper behavior skip instead of turning the
+// suite red, while the real-host integration suite still exercises them.
+let official = {}
+try {
+  const [agentModule, controllerModule] = await Promise.all([
+    import('@deepseek-ai/dsh-agent'),
+    import('@deepseek-ai/dsh-api-session-controller'),
+  ])
+  official = {
+    installModelSelection: agentModule.installModelSelection,
+    buildModelCatalog: controllerModule.buildModelCatalog,
+  }
+} catch {
+  official = {}
+}
+const hasOfficialHooks = typeof official.installModelSelection === 'function'
+const hasOfficialCatalog = typeof official.buildModelCatalog === 'function'
+const OFFICIAL_SKIP = 'official bridge dependencies are not installed'
+
 const ROOT = 'session-root'
 const ADDRESS = { rootSessionId: ROOT }
 
@@ -67,14 +87,21 @@ function fakeSession({ header, events = [] } = {}) {
   }
 }
 
-function serviceFor(services = {}, { header, events } = {}) {
+function serviceFor(services = {}, { header, events, official: override } = {}) {
   const ctx = fakeContext(services)
   const session = fakeSession({ header, events })
   const agentContext = fakeAgentContext()
   const agent = { id: ROOT, ctx: agentContext }
   const published = []
   const hub = { publish: (kind, payload) => published.push({ kind, payload }) }
-  const service = new ControlsService({ ctx, hub, agent, session, rootSessionId: ROOT })
+  const service = new ControlsService({
+    ctx,
+    hub,
+    agent,
+    session,
+    rootSessionId: ROOT,
+    official: override ?? official,
+  })
   return { ctx, session, agent, agentContext, published, service }
 }
 
@@ -278,7 +305,10 @@ test('unavailable models keep the official model-unavailable code', async () => 
   )
 })
 
-test('the CLI fallback validates, appends model/selection, and installs the official hooks', async () => {
+test(
+  'the CLI fallback validates, appends model/selection, and installs the official hooks',
+  { skip: hasOfficialHooks ? false : OFFICIAL_SKIP },
+  async () => {
   const saved = []
   const { session, agentContext, service } = serviceFor({
     llm: {
@@ -348,7 +378,10 @@ test('the CLI fallback refuses a model outside the official registry', async () 
   assert.deepEqual(session.appended, [])
 })
 
-test('modelCatalog falls back to the official LLM registry with isolated failures', async () => {
+test(
+  'modelCatalog falls back to the official LLM registry with isolated failures',
+  { skip: hasOfficialCatalog ? false : OFFICIAL_SKIP },
+  async () => {
   const { service } = serviceFor({
     llm: {
       listProviders: () => [
@@ -515,7 +548,10 @@ test('adapter-default efforts are not reported as an explicit selection', () => 
   assert.deepEqual(service.modelState().lastUsed, { provider: 'p', model: 'm' })
 })
 
-test('a provider/model change inserts the official model-change notice', async () => {
+test(
+  'a provider/model change inserts the official model-change notice',
+  { skip: hasOfficialHooks ? false : OFFICIAL_SKIP },
+  async () => {
   const { agentContext, service } = serviceFor()
   service.selection.assembled = { provider: 'p', model: 'new' }
   const handler = agentContext.handlers.get('agent/pre-step')[0]
@@ -535,7 +571,10 @@ test('a provider/model change inserts the official model-change notice', async (
   assert.equal(decision.messages[0].source.kind, 'model-selection')
 })
 
-test('a pure effort change does not add a model-change notice', async () => {
+test(
+  'a pure effort change does not add a model-change notice',
+  { skip: hasOfficialHooks ? false : OFFICIAL_SKIP },
+  async () => {
   const { agentContext, service } = serviceFor()
   service.selection.assembled = { provider: 'p', model: 'm', reasoningEffort: 'high' }
   const handler = agentContext.handlers.get('agent/pre-step')[0]
@@ -551,7 +590,10 @@ test('a pure effort change does not add a model-change notice', async () => {
   assert.equal(decision.messages.length, 0)
 })
 
-test('selection hooks are disposed when the service closes', () => {
+test(
+  'selection hooks are disposed when the service closes',
+  { skip: hasOfficialHooks ? false : OFFICIAL_SKIP },
+  () => {
   const { agentContext, service } = serviceFor()
   assert.equal(agentContext.handlers.size, 3)
   service.close()
