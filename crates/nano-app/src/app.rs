@@ -1792,6 +1792,38 @@ mod tests {
     }
 
     #[test]
+    fn an_unknown_schedule_result_is_not_reported_as_failure() {
+        let mut app = app();
+        app.schedule.open_view(None);
+        app.schedule.busy = Some("正在创建…".into());
+        app.report_schedule_failure(
+            "创建",
+            RequestError {
+                kind: RequestErrorKind::Unknown,
+                message: "transport closed".into(),
+            },
+        );
+        let error = app.schedule.error.as_deref().unwrap();
+        assert!(error.contains("结果未知"));
+        assert!(!error.contains("创建失败"));
+        assert!(app.schedule.busy.is_none());
+    }
+
+    #[test]
+    fn a_definitive_schedule_rejection_is_reported_as_failure() {
+        let mut app = app();
+        app.schedule.open_view(None);
+        app.report_schedule_failure(
+            "创建",
+            RequestError {
+                kind: RequestErrorKind::Rpc,
+                message: "invalid_rule: bad cron".into(),
+            },
+        );
+        assert!(app.schedule.error.as_deref().unwrap().contains("创建失败"));
+    }
+
+    #[test]
     fn control_g_opens_and_closes_the_schedule_overlay() {
         let mut app = app();
         assert!(app.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL)));
