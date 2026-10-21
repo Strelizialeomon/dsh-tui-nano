@@ -88,6 +88,8 @@ impl Cli {
             provider: self.provider.clone(),
             model: self.model.clone(),
             reasoning_effort: self.effort.clone(),
+            terminal_unattended_timeout_ms: None,
+            terminal_activity_poll_interval_ms: None,
         }
     }
 
@@ -165,4 +167,6 @@ nano — 极简 DeepSeek Harness 终端界面
   Esc 停止当前回合（保留队列）；Ctrl+Y 复制草稿原文（OSC 52）；Ctrl+C 退出
   Alt+↑/↓ 选择队列项；Alt+E 编辑；Alt+D 删除；Alt+S 转为插话；Alt+X 清空并停止
   PageUp/PageDown 翻阅记录；Ctrl+End 回到底部
+  F12 进入/返回交互终端；终端内 F11 关闭、F10 重新附着、F9 选择 shell
+  终端内 F8 复制所选文本（OSC 52；鼠标松开也会自动复制）
 ";

@@ -8,6 +8,13 @@
     - id: nano-bridge
       name: '@dsh-tui-nano/bridge'
 
+    # S09 mounts the official user-terminal service. It is deliberately not
+    # exposed to the Agent tool table or Monitor; only the S09 UI calls it.
+    # dsh-base already provides subprocess, sandboxPolicy, workingDirectory and
+    # typert, which the controller injects.
+    - id: terminal-controller
+      name: '@deepseek-ai/dsh-api-terminal-controller'
+
     # The question seam (ctx.userQuestions) is in dsh-base; this tool is the
     # model-facing half. S03 registers the answerer. The shipped default is the
     # blocking schema; timed mode is an S03 decision, not an S01 default.

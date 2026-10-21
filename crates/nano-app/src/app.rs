@@ -10,6 +10,11 @@ use nano_conversation::{
     SceneState, SessionAddress, SubmitError,
 };
 use nano_runtime::Hello;
+use nano_terminal::{
+    is_close_key, is_toggle_key, Command as TerminalCommand, Failure, RequestKind, TerminalState,
+    TerminalStore,
+};
+use ratatui::layout::Rect;
 use serde_json::Value;
 
 use crate::cli::Cli;
@@ -78,6 +83,8 @@ pub enum Pending {
         /// Official message id being deleted.
         message_id: String,
     },
+    /// One S09 terminal request.
+    Terminal(RequestKind),
 }
 
 /// One frame of application state.
@@ -143,6 +150,10 @@ pub struct App {
     /// After a truncated queue projection, reopen this item's editor once a
     /// full snapshot arrives.
     pub edit_after_snapshot: Option<String>,
+    /// S09 terminal feature, created when the host link exposes its data root.
+    pub terminal: Option<TerminalState>,
+    /// Screen area used by terminal mouse coordinates, set by the draw pass.
+    pub terminal_screen_area: Rect,
 }
 
 impl App {
@@ -152,6 +163,9 @@ impl App {
         let mut registry = FeatureRegistry::new();
         registry.register(
             FeatureContribution::new("conversation", SceneId::conversation()).with_key("enter"),
+        );
+        registry.register(
+            FeatureContribution::new("terminal", SceneId::new("terminal")).with_key("f12"),
         );
         let mut scene = SceneState::conversation();
         scene.set_address(address.clone());
@@ -186,18 +200,126 @@ impl App {
             clear_stop_failed: false,
             clear_after_snapshot: false,
             edit_after_snapshot: None,
+            terminal: None,
+            terminal_screen_area: Rect::new(0, 0, 0, 0),
         }
     }
 
-    /// Attach the host link.
+    /// Attach the host link and open the terminal identity store under the
+    /// resolved Nano data root.
     pub fn attach_link(&mut self, link: HostLink) {
+        let data_root = link.data_root();
+        let root_session_id = self.model.address().root_session_id.clone();
+        self.terminal = Some(match TerminalStore::open(&data_root, &root_session_id) {
+            Ok(store) => TerminalState::new(store, (80, 24)),
+            Err(error) => TerminalState::unavailable(error, (80, 24)),
+        });
         self.link = Some(link);
+    }
+
+    /// Whether the terminal scene is the active main scene.
+    pub fn terminal_active(&self) -> bool {
+        self.scene.active() == &SceneId::new("terminal")
+    }
+
+    /// Apply terminal side effects in issue order.
+    fn dispatch_terminal(&mut self, commands: Vec<TerminalCommand>) {
+        let mut commands: std::collections::VecDeque<TerminalCommand> = commands.into();
+        while let Some(command) = commands.pop_front() {
+            match command {
+                TerminalCommand::Request {
+                    kind,
+                    method,
+                    params,
+                } => match self.link.as_ref().map(|link| link.request(method, params)) {
+                    Some(Ok(id)) => {
+                        self.pending.insert(id, Pending::Terminal(kind));
+                    }
+                    Some(Err(message)) => {
+                        if let Some(terminal) = self.terminal.as_mut() {
+                            commands
+                                .extend(terminal.on_response(kind, Err(Failure::unknown(message))));
+                        }
+                    }
+                    None => {
+                        if let Some(terminal) = self.terminal.as_mut() {
+                            commands.extend(
+                                terminal.on_response(kind, Err(Failure::unknown("宿主未就绪"))),
+                            );
+                        }
+                    }
+                },
+                TerminalCommand::Notify { method, params } => {
+                    if let Some(link) = &self.link {
+                        if let Err(message) = link.notify(method, params) {
+                            self.error = Some(format!("终端通信失败：{message}"));
+                            if let Some(terminal) = self.terminal.as_mut() {
+                                commands.extend(terminal.disconnect("宿主通信已断开"));
+                            }
+                        }
+                    }
+                }
+                TerminalCommand::Clipboard(text) => {
+                    write_clipboard(&text);
+                }
+                TerminalCommand::Status { error, message } => {
+                    if error {
+                        self.error = Some(message);
+                    } else {
+                        self.notice = Some(message);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Toggle into the terminal scene and start its attach flow.
+    pub fn open_terminal(&mut self) {
+        self.scene.switch(SceneId::new("terminal"));
+        let commands = self
+            .terminal
+            .as_mut()
+            .map(TerminalState::open)
+            .unwrap_or_default();
+        self.dispatch_terminal(commands);
+    }
+
+    /// Leave the terminal scene without stopping the process.
+    pub fn hide_terminal(&mut self) {
+        self.scene.switch(SceneId::conversation());
     }
 
     /// Apply one key. Returns whether the screen needs a redraw.
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
         if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
             return false;
+        }
+        if self.terminal_active() {
+            if is_toggle_key(&key) {
+                self.hide_terminal();
+                return true;
+            }
+            if is_close_key(&key) {
+                let commands = self
+                    .terminal
+                    .as_mut()
+                    .map(TerminalState::close_terminal)
+                    .unwrap_or_default();
+                self.dispatch_terminal(commands);
+                return true;
+            }
+            self.clear_transient_status();
+            let commands = self
+                .terminal
+                .as_mut()
+                .map(|terminal| terminal.handle_key(key))
+                .unwrap_or_default();
+            self.dispatch_terminal(commands);
+            return true;
+        }
+        if is_toggle_key(&key) {
+            self.open_terminal();
+            return true;
         }
         self.clear_transient_status();
         if key.modifiers.contains(KeyModifiers::CONTROL)
@@ -338,12 +460,36 @@ impl App {
 
     /// Insert a bracketed-paste payload exactly as received.
     pub fn handle_paste(&mut self, text: String) -> bool {
+        if self.terminal_active() {
+            let commands = self
+                .terminal
+                .as_mut()
+                .map(|terminal| terminal.handle_paste(text))
+                .unwrap_or_default();
+            self.dispatch_terminal(commands);
+            return true;
+        }
         if !self.scene.focus().input_focused() {
             return false;
         }
         self.clear_transient_status();
         let outcome = self.drafts.current_mut().handle(&InputEvent::Paste(text));
         outcome != InputOutcome::Ignored
+    }
+
+    /// Route one mouse event to the terminal when it is the active scene.
+    pub fn handle_mouse(&mut self, event: crossterm::event::MouseEvent) -> bool {
+        if !self.terminal_active() {
+            return false;
+        }
+        let area = self.terminal_screen_area;
+        let commands = self
+            .terminal
+            .as_mut()
+            .map(|terminal| terminal.handle_mouse(event, area))
+            .unwrap_or_default();
+        self.dispatch_terminal(commands);
+        true
     }
 
     /// Apply one link event. Returns whether the screen needs a redraw.
@@ -378,6 +524,10 @@ impl App {
                 } else {
                     format!("{message}；宿主诊断：{}", tail.join(" | "))
                 });
+                if let Some(terminal) = self.terminal.as_mut() {
+                    let commands = terminal.disconnect("宿主启动失败；终端未附着");
+                    self.dispatch_terminal(commands);
+                }
                 self.model.mark_disconnected();
                 true
             }
@@ -406,6 +556,15 @@ impl App {
                     self.clamp_queue_selection();
                 }
                 changed
+            }
+            HostEvent::TerminalNotification { method, params } => {
+                let commands = self
+                    .terminal
+                    .as_mut()
+                    .map(|terminal| terminal.on_notification(&method, &params))
+                    .unwrap_or_default();
+                self.dispatch_terminal(commands);
+                true
             }
             HostEvent::StreamEnded(params) => {
                 if params.outcome == nano_runtime::protocol::StreamOutcome::Failed {
@@ -437,11 +596,16 @@ impl App {
                 self.resubscribe_at = None;
                 self.resubscribing = false;
                 let root = &self.model.address().root_session_id;
-                self.error = Some(if lost {
+                let message = if lost {
                     format!("宿主进程已退出（会话 {root}）；重启时用 --resume {root}")
                 } else {
                     format!("通信已断开（会话 {root}）")
-                });
+                };
+                if let Some(terminal) = self.terminal.as_mut() {
+                    let commands = terminal.disconnect("宿主通信已断开；终端进程状态未知");
+                    self.dispatch_terminal(commands);
+                }
+                self.error = Some(message);
                 self.model.mark_disconnected();
                 true
             }
@@ -449,6 +613,10 @@ impl App {
                 self.ready = false;
                 self.connection = Connection::Failed(message.clone());
                 self.error = Some(format!("协议错误：{message}"));
+                if let Some(terminal) = self.terminal.as_mut() {
+                    let commands = terminal.disconnect("协议错误；终端进程状态未知");
+                    self.dispatch_terminal(commands);
+                }
                 true
             }
             HostEvent::StartupError(params) => {
@@ -609,6 +777,18 @@ impl App {
                         self.model.mark_disconnected();
                     }
                 }
+            }
+            Pending::Terminal(kind) => {
+                let result = result.map_err(|error| Failure {
+                    definite: !matches!(error.kind, RequestErrorKind::Unknown),
+                    message: error.message,
+                });
+                let commands = self
+                    .terminal
+                    .as_mut()
+                    .map(|terminal| terminal.on_response(kind, result))
+                    .unwrap_or_default();
+                self.dispatch_terminal(commands);
             }
             Pending::ClearStopDelete {
                 generation,
@@ -1036,14 +1216,26 @@ impl App {
 impl App {
     /// Time-based work: rebuild a closed observable subscription.
     pub fn tick(&mut self) -> bool {
+        let mut changed = false;
+        if self.terminal_active() {
+            let commands = self
+                .terminal
+                .as_mut()
+                .map(TerminalState::tick)
+                .unwrap_or_default();
+            if !commands.is_empty() {
+                self.dispatch_terminal(commands);
+                changed = true;
+            }
+        }
         if self.resubscribing {
-            return false;
+            return changed;
         }
         let Some(at) = self.resubscribe_at else {
-            return false;
+            return changed;
         };
         if Instant::now() < at {
-            return false;
+            return changed;
         }
         self.resubscribe_at = None;
         if self.resubscribe_attempts >= 2 {
@@ -1178,6 +1370,16 @@ impl App {
 }
 
 /// Minimal standard base64 for the OSC 52 clipboard payload.
+/// Put selected terminal text on the clipboard through OSC 52. This does not
+/// send any key to the process and works in Ghostty without an extra crate.
+fn write_clipboard(text: &str) {
+    use std::io::Write;
+    let encoded = base64(text.as_bytes());
+    let mut stdout = std::io::stdout();
+    let _ = write!(stdout, "\x1b]52;c;{encoded}\x07");
+    let _ = stdout.flush();
+}
+
 fn base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
@@ -1527,5 +1729,44 @@ mod tests {
         });
         assert!(!app.model.apply_event("conversation.inbox", &payload));
         assert!(app.model.inbox().is_empty());
+    }
+
+    fn terminal_app() -> App {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "nano-app-terminal-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let store = nano_terminal::TerminalStore::open(&root, "root").expect("terminal store");
+        let mut app = app();
+        app.terminal = Some(nano_terminal::TerminalState::new(store, (80, 24)));
+        app
+    }
+
+    #[test]
+    fn terminal_scene_toggles_and_owns_the_keyboard() {
+        let mut app = terminal_app();
+        let toggle = KeyEvent::new(KeyCode::F(12), KeyModifiers::NONE);
+        assert!(app.handle_key(toggle));
+        assert!(app.terminal_active());
+        // Ctrl+C belongs to the shell while the terminal scene is active.
+        assert!(app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)));
+        assert!(!app.should_quit);
+        assert!(app.handle_key(toggle));
+        assert!(!app.terminal_active());
+    }
+
+    #[test]
+    fn terminal_paste_does_not_touch_the_conversation_draft() {
+        let mut app = terminal_app();
+        app.open_terminal();
+        app.handle_paste("ls -la".to_string());
+        assert_eq!(app.drafts.current().text(), "");
+        app.hide_terminal();
+        app.handle_paste("hello".to_string());
+        assert_eq!(app.drafts.current().text(), "hello");
     }
 }

@@ -14,6 +14,16 @@ export const IMPLEMENTED_REQUEST_METHODS = Object.freeze([
   'nano.conversation.steerQueued',
   'nano.conversation.cancel',
   'nano.conversation.snapshot',
+  'nano.terminal.environment',
+  'nano.terminal.shells',
+  'nano.terminal.list',
+  'nano.terminal.create',
+  'nano.terminal.retain',
+  'nano.terminal.release',
+  'nano.terminal.attach',
+  'nano.terminal.detach',
+  'nano.terminal.rename',
+  'nano.terminal.close',
 ])
 
 /** Notifications this host can emit. */
@@ -22,10 +32,21 @@ export const IMPLEMENTED_NOTIFICATION_METHODS = Object.freeze([
   'nano.startupError',
   'nano.event',
   'nano.streamEnded',
+  'nano.terminal.output',
+  'nano.terminal.state',
+  'nano.terminal.ack',
+  'nano.terminal.ended',
+])
+
+/** Client-to-host notifications. */
+export const IMPLEMENTED_CLIENT_NOTIFICATION_METHODS = Object.freeze([
+  'nano.terminal.input',
+  'nano.terminal.resize',
 ])
 
 /** Every implemented method name. */
 export const IMPLEMENTED_METHODS = Object.freeze([
   ...IMPLEMENTED_REQUEST_METHODS,
   ...IMPLEMENTED_NOTIFICATION_METHODS,
+  ...IMPLEMENTED_CLIENT_NOTIFICATION_METHODS,
 ])

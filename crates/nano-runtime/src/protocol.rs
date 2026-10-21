@@ -129,18 +129,26 @@ pub struct Hello {
 
 impl Hello {
     /// Validate a handshake against the contract and this client's expectations.
-    pub fn validate(&self, expected_runtime_id: &str, expected_generation: u64) -> Result<(), ProtocolError> {
+    pub fn validate(
+        &self,
+        expected_runtime_id: &str,
+        expected_generation: u64,
+    ) -> Result<(), ProtocolError> {
         if self.protocol.major != PROTOCOL_MAJOR {
             return Err(ProtocolError::UnsupportedMajor(self.protocol.major));
         }
         if self.runtime_id.is_empty() {
-            return Err(ProtocolError::InvalidFrame("hello.runtimeId is empty".into()));
+            return Err(ProtocolError::InvalidFrame(
+                "hello.runtimeId is empty".into(),
+            ));
         }
         if self.runtime_id != expected_runtime_id {
             return Err(ProtocolError::RuntimeMismatch);
         }
         if self.generation == 0 {
-            return Err(ProtocolError::InvalidFrame("hello.generation must be positive".into()));
+            return Err(ProtocolError::InvalidFrame(
+                "hello.generation must be positive".into(),
+            ));
         }
         if self.generation != expected_generation {
             return Err(ProtocolError::GenerationMismatch);
@@ -203,7 +211,9 @@ impl StartupErrorParams {
             return Err(ProtocolError::UnknownStartupCode(self.code.clone()));
         }
         if self.message.is_empty() {
-            return Err(ProtocolError::InvalidFrame("startupError.message is empty".into()));
+            return Err(ProtocolError::InvalidFrame(
+                "startupError.message is empty".into(),
+            ));
         }
         Ok(())
     }
@@ -229,7 +239,11 @@ pub struct EventParams {
 
 impl EventParams {
     /// Validate identity, generation, kind, and payload shape.
-    pub fn validate(&self, expected_runtime_id: &str, expected_generation: u64) -> Result<(), ProtocolError> {
+    pub fn validate(
+        &self,
+        expected_runtime_id: &str,
+        expected_generation: u64,
+    ) -> Result<(), ProtocolError> {
         if self.runtime_id != expected_runtime_id {
             return Err(ProtocolError::RuntimeMismatch);
         }
@@ -237,13 +251,17 @@ impl EventParams {
             return Err(ProtocolError::GenerationMismatch);
         }
         if self.subscription_id.is_empty() {
-            return Err(ProtocolError::InvalidFrame("event.subscriptionId is empty".into()));
+            return Err(ProtocolError::InvalidFrame(
+                "event.subscriptionId is empty".into(),
+            ));
         }
         if !EVENT_KINDS.contains(&self.kind.as_str()) {
             return Err(ProtocolError::UnknownEventKind(self.kind.clone()));
         }
         if !self.payload.is_object() {
-            return Err(ProtocolError::InvalidFrame("event.payload must be an object".into()));
+            return Err(ProtocolError::InvalidFrame(
+                "event.payload must be an object".into(),
+            ));
         }
         Ok(())
     }
@@ -280,7 +298,11 @@ pub struct StreamEndedParams {
 
 impl StreamEndedParams {
     /// Validate identity and generation.
-    pub fn validate(&self, expected_runtime_id: &str, expected_generation: u64) -> Result<(), ProtocolError> {
+    pub fn validate(
+        &self,
+        expected_runtime_id: &str,
+        expected_generation: u64,
+    ) -> Result<(), ProtocolError> {
         if self.runtime_id != expected_runtime_id {
             return Err(ProtocolError::RuntimeMismatch);
         }
@@ -288,7 +310,9 @@ impl StreamEndedParams {
             return Err(ProtocolError::GenerationMismatch);
         }
         if self.subscription_id.is_empty() {
-            return Err(ProtocolError::InvalidFrame("streamEnded.subscriptionId is empty".into()));
+            return Err(ProtocolError::InvalidFrame(
+                "streamEnded.subscriptionId is empty".into(),
+            ));
         }
         Ok(())
     }
@@ -392,7 +416,8 @@ pub struct FrameRules<'a> {
 
 /// Parse one incoming NDJSON line.
 pub fn parse_incoming(line: &str, rules: FrameRules<'_>) -> Result<IncomingFrame, ProtocolError> {
-    let value: Value = serde_json::from_str(line).map_err(|error| ProtocolError::InvalidJson(error.to_string()))?;
+    let value: Value = serde_json::from_str(line)
+        .map_err(|error| ProtocolError::InvalidJson(error.to_string()))?;
     let object = value
         .as_object()
         .ok_or_else(|| ProtocolError::InvalidFrame("frame must be a JSON object".into()))?;
@@ -404,7 +429,9 @@ pub fn parse_incoming(line: &str, rules: FrameRules<'_>) -> Result<IncomingFrame
         }
     }
     if object.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
-        return Err(ProtocolError::InvalidFrame("jsonrpc must be \"2.0\"".into()));
+        return Err(ProtocolError::InvalidFrame(
+            "jsonrpc must be \"2.0\"".into(),
+        ));
     }
 
     if let Some(method) = object.get("method") {
@@ -412,7 +439,9 @@ pub fn parse_incoming(line: &str, rules: FrameRules<'_>) -> Result<IncomingFrame
             .as_str()
             .ok_or_else(|| ProtocolError::InvalidFrame("method must be a string".into()))?;
         if !method.starts_with("nano.") {
-            return Err(ProtocolError::InvalidFrame(format!("method is outside nano.*: {method}")));
+            return Err(ProtocolError::InvalidFrame(format!(
+                "method is outside nano.*: {method}"
+            )));
         }
         if object.contains_key("id") {
             return Err(ProtocolError::InvalidFrame(
@@ -423,7 +452,9 @@ pub fn parse_incoming(line: &str, rules: FrameRules<'_>) -> Result<IncomingFrame
             .get("params")
             .filter(|params| params.is_object())
             .cloned()
-            .ok_or_else(|| ProtocolError::InvalidFrame("notification params must be an object".into()))?;
+            .ok_or_else(|| {
+                ProtocolError::InvalidFrame("notification params must be an object".into())
+            })?;
         return Ok(IncomingFrame::Notification {
             method: method.to_string(),
             params,
@@ -433,8 +464,16 @@ pub fn parse_incoming(line: &str, rules: FrameRules<'_>) -> Result<IncomingFrame
     let id = match object.get("id") {
         Some(Value::String(id)) if !id.is_empty() => Some(id.clone()),
         Some(Value::Null) => None,
-        Some(_) => return Err(ProtocolError::InvalidFrame("response id must be a non-empty string or null".into())),
-        None => return Err(ProtocolError::InvalidFrame("frame is neither a response nor a notification".into())),
+        Some(_) => {
+            return Err(ProtocolError::InvalidFrame(
+                "response id must be a non-empty string or null".into(),
+            ))
+        }
+        None => {
+            return Err(ProtocolError::InvalidFrame(
+                "frame is neither a response nor a notification".into(),
+            ))
+        }
     };
     let result = object.get("result").cloned();
     let error = match object.get("error") {
@@ -474,10 +513,30 @@ pub fn encode_request(
     encode_value(&frame)
 }
 
+/// Encode one client-to-host notification frame.
+pub fn encode_notification(
+    method: &str,
+    params: Value,
+    nonce: Option<&str>,
+) -> Result<Vec<u8>, ProtocolError> {
+    let mut frame = json!({
+        "jsonrpc": "2.0",
+        "method": method,
+        "params": params,
+    });
+    if let Some(nonce) = nonce {
+        frame
+            .as_object_mut()
+            .expect("frame is an object")
+            .insert("nonce".to_string(), Value::String(nonce.to_string()));
+    }
+    encode_value(&frame)
+}
+
 /// Encode any frame value with the newline terminator and size limit.
 pub fn encode_value(value: &Value) -> Result<Vec<u8>, ProtocolError> {
-    let mut bytes =
-        serde_json::to_vec(value).map_err(|error| ProtocolError::InvalidFrame(error.to_string()))?;
+    let mut bytes = serde_json::to_vec(value)
+        .map_err(|error| ProtocolError::InvalidFrame(error.to_string()))?;
     bytes.push(b'\n');
     if bytes.len() > MAX_FRAME_BYTES {
         return Err(ProtocolError::FrameTooLarge(bytes.len()));
@@ -685,6 +744,9 @@ mod tests {
     fn oversized_encoded_frame_is_refused() {
         let huge = "x".repeat(MAX_FRAME_BYTES + 1);
         let value = json!({ "payload": huge });
-        assert!(matches!(encode_value(&value), Err(ProtocolError::FrameTooLarge(_))));
+        assert!(matches!(
+            encode_value(&value),
+            Err(ProtocolError::FrameTooLarge(_))
+        ));
     }
 }

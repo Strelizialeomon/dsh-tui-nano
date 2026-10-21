@@ -15,6 +15,7 @@ import { BoundedWriter } from './writer.mjs'
 import { claimMount, releaseMount } from './ledger.mjs'
 import { SubscriptionHub } from './events.mjs'
 import { ConversationService } from '../conversation/service.mjs'
+import { TerminalService } from '../terminal/service.mjs'
 import { buildCapabilities } from './capabilities.mjs'
 import { IMPLEMENTED_REQUEST_METHODS } from './methods.mjs'
 
@@ -38,6 +39,7 @@ export function startHost(ctx, config) {
     writer: undefined,
     hub: undefined,
     conversation: undefined,
+    terminal: undefined,
     agentHandle: undefined,
     session: undefined,
     claim: undefined,
@@ -203,6 +205,15 @@ async function runStartup(state, config) {
     session,
     rootSessionId: state.config.rootSessionId,
   })
+  state.terminal = new TerminalService({
+    ctx,
+    writer: state.writer,
+    agent: state.agentHandle.agent,
+    session,
+    rootSessionId: state.config.rootSessionId,
+    nonce: state.config.nonce,
+    nonceRequired: state.transport.nonceRequired,
+  })
 
   const hello = {
     jsonrpc: '2.0',
@@ -364,8 +375,10 @@ function handleLine(state, line) {
     return
   }
   if (frame.type === 'notification') {
-    // S01 has no client-to-host notifications. Reserved notification methods are
-    // rejected silently (notifications carry no response by definition).
+    // S09 input/resize are the only client-to-host notifications. They carry no
+    // response; an invalid one ends that attachment explicitly.
+    if (state.terminal?.handleNotification(frame.method, frame.params) === true) return
+    // Other reserved notification methods are rejected silently.
     return
   }
 
@@ -457,6 +470,46 @@ async function dispatchRequest(state, frame) {
       await sendResult(state, id, state.conversation.snapshot(params))
       return undefined
     }
+    case 'nano.terminal.environment': {
+      await sendResult(state, id, state.terminal.environment(signalOf(state, id)))
+      return undefined
+    }
+    case 'nano.terminal.shells': {
+      await sendResult(state, id, { shells: await state.terminal.shells(signalOf(state, id)) })
+      return undefined
+    }
+    case 'nano.terminal.list': {
+      await sendResult(state, id, state.terminal.list())
+      return undefined
+    }
+    case 'nano.terminal.create': {
+      await sendResult(state, id, await state.terminal.create(params, signalOf(state, id)))
+      return undefined
+    }
+    case 'nano.terminal.retain': {
+      await sendResult(state, id, await state.terminal.retain(params, signalOf(state, id)))
+      return undefined
+    }
+    case 'nano.terminal.release': {
+      await sendResult(state, id, state.terminal.release(params))
+      return undefined
+    }
+    case 'nano.terminal.attach': {
+      await sendResult(state, id, await state.terminal.attach(params, signalOf(state, id)))
+      return undefined
+    }
+    case 'nano.terminal.detach': {
+      await sendResult(state, id, state.terminal.detach(params))
+      return undefined
+    }
+    case 'nano.terminal.rename': {
+      await sendResult(state, id, state.terminal.rename(params))
+      return undefined
+    }
+    case 'nano.terminal.close': {
+      await sendResult(state, id, await state.terminal.close(params))
+      return undefined
+    }
     default: {
       const reserved = RESERVED_METHODS.get(method)
       if (reserved !== undefined) {
@@ -465,6 +518,10 @@ async function dispatchRequest(state, frame) {
       throw new RpcError('jsonrpc/method-not-found', `unknown method ${method}`)
     }
   }
+}
+
+function signalOf(state, id) {
+  return state.inFlight.get(id)?.controller.signal
 }
 
 async function sendResult(state, id, result) {
@@ -541,11 +598,25 @@ async function runShutdown(state, reason) {
   }, faults))
 
   steps.push(await runStep('agents', deadline, async () => {
-    if (state.agentHandle === undefined) return
-    // Cancel the main Agent subtree without unregistering the Session yet; the
-    // persistence flush below still needs a live Session in the store.
-    state.agentHandle.agent.cancel({ kind: 'user' })
-    await state.agentHandle.agent.whenIdle()
+    // User terminals are owned by this host; close their process range before
+    // the Session owner is disposed. Terminal output is never persisted.
+    let terminalError
+    if (state.terminal !== undefined) {
+      try {
+        await state.terminal.closeAll()
+      } catch (error) {
+        terminalError = error
+      } finally {
+        state.terminal = undefined
+      }
+    }
+    if (state.agentHandle !== undefined) {
+      // Cancel the main Agent subtree without unregistering the Session yet; the
+      // persistence flush below still needs a live Session in the store.
+      state.agentHandle.agent.cancel({ kind: 'user' })
+      await state.agentHandle.agent.whenIdle()
+    }
+    if (terminalError !== undefined) throw terminalError
   }, faults))
 
   steps.push(await runStep('persistence', deadline, async () => {
@@ -659,6 +730,14 @@ async function failStartup(state, error) {
       state.hub.closeAll('startup failed')
     } catch (cleanupError) {
       cleanupFailures.push(`subscriptions: ${describe(cleanupError)}`)
+    }
+  }
+  if (state.terminal !== undefined) {
+    try {
+      await withTimeout(state.terminal.closeAll(), 3000, 'terminal cleanup')
+      state.terminal = undefined
+    } catch (cleanupError) {
+      cleanupFailures.push(`terminals: ${describe(cleanupError)}`)
     }
   }
   if (state.agentHandle !== undefined) {

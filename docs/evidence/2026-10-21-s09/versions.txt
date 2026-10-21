@@ -1,0 +1,8 @@
+date: 2026-10-21T13:58:20Z
+rustc: rustc 1.99.1 (58cf8f9c3 2026-10-13)
+cargo: cargo 1.99.1 (5f94df478 2026-08-27)
+node: v24.18.0
+dsh: 0.2.1-rc.2
+tmux: tmux 3.6b
+parser: vt100 0.15.2
+widget: tui-term 0.2.0

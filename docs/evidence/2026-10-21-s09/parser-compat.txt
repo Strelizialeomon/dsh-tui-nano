@@ -1,0 +1,15 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.02s
+     Running tests/parser_compat.rs (target/debug/deps/parser_compat-bc8a7062285e9878)
+
+running 9 tests
+test combining_characters_stay_in_one_cell ... ok
+test alternate_screen_and_cursor_addressing_round_trip ... ok
+test scrollback_is_visible_through_the_same_screen ... ok
+test scroll_regions_and_erasure_do_not_corrupt_rows ... ok
+test sgr_colors_are_parsed ... ok
+test wide_characters_keep_their_cells ... ok
+test frozen_parser_identity_matches_the_widget_reexport ... ok
+test input_modes_are_reported ... ok
+test mouse_reporting_mode_and_encoding_are_reported ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

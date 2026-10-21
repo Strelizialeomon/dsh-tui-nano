@@ -1,9 +1,9 @@
 {
   "contract": "dsh-tui-nano/nano-protocol",
-  "contractVersion": "1.0.0",
+  "contractVersion": "1.1.0",
   "protocol": {
     "major": 1,
-    "minor": 0
+    "minor": 1
   },
   "namespace": "nano.*",
   "sourceOfTruth": "This file is the single machine-checkable definition of the Nano host protocol. Both the TypeScript bridge and the Rust runtime load it in tests; method tables, limits, error codes, lifecycle edges, event kinds and fixtures are compared against each implementation so neither side can drift silently.",
@@ -209,6 +209,38 @@
     {
       "code": 1018,
       "name": "nano/conversation/too-large"
+    },
+    {
+      "code": 1019,
+      "name": "nano/terminal/unavailable"
+    },
+    {
+      "code": 1020,
+      "name": "nano/terminal/limit-reached"
+    },
+    {
+      "code": 1021,
+      "name": "nano/terminal/control-unavailable"
+    },
+    {
+      "code": 1022,
+      "name": "nano/terminal/not-found"
+    },
+    {
+      "code": 1023,
+      "name": "nano/terminal/input"
+    },
+    {
+      "code": 1024,
+      "name": "nano/terminal/input-full"
+    },
+    {
+      "code": 1025,
+      "name": "nano/terminal/closed-id"
+    },
+    {
+      "code": 1026,
+      "name": "nano/terminal/failed"
     }
   ],
   "shapes": {
@@ -315,6 +347,38 @@
       "seq": "integer",
       "status": "enum:idle|running",
       "inbox": "conversationInbox"
+    },
+    "terminalShell": {
+      "path": "string",
+      "args": "array:string",
+      "name": "string"
+    },
+    "terminalInfo": {
+      "id": "string",
+      "title": "string",
+      "shell": "terminalShell",
+      "cwd": "string",
+      "cols": "integer",
+      "rows": "integer",
+      "state": "enum:running|exited|failed",
+      "exitCode": "integer?",
+      "error": "string?"
+    },
+    "terminalEnvironment": {
+      "cwd": "string",
+      "maxInputBytes": "integer",
+      "maxBufferedBytes": "integer",
+      "maxCols": "integer",
+      "maxRows": "integer",
+      "scrollback": "integer"
+    },
+    "terminalAttachment": {
+      "attachmentId": "string",
+      "terminalId": "string",
+      "sequence": "integer",
+      "writable": "boolean",
+      "info": "terminalInfo",
+      "screen": "string"
     }
   },
   "methods": [
@@ -476,74 +540,6 @@
         ],
         "optional": [
           "reason"
-        ]
-      }
-    },
-    {
-      "name": "nano.terminal.attach",
-      "direction": "client-to-host",
-      "kind": "request",
-      "owner": "S09",
-      "status": "reserved",
-      "params": {
-        "required": [
-          "sessionId"
-        ],
-        "optional": [
-          "terminalId"
-        ]
-      }
-    },
-    {
-      "name": "nano.terminal.input",
-      "direction": "client-to-host",
-      "kind": "notification",
-      "owner": "S09",
-      "status": "reserved",
-      "params": {
-        "required": [
-          "attachmentId",
-          "sequence",
-          "bytes"
-        ],
-        "optional": []
-      },
-      "paramsSemantics": {
-        "bytes": "utf-8"
-      }
-    },
-    {
-      "name": "nano.terminal.ack",
-      "direction": "host-to-client",
-      "kind": "notification",
-      "owner": "S09",
-      "status": "reserved",
-      "params": {
-        "required": [
-          "attachmentId",
-          "sequence"
-        ],
-        "optional": [
-          "refusal"
-        ]
-      },
-      "paramsSemantics": {
-        "refusal": "enum:read-only|not-running"
-      }
-    },
-    {
-      "name": "nano.terminal.state",
-      "direction": "host-to-client",
-      "kind": "notification",
-      "owner": "S09",
-      "status": "reserved",
-      "params": {
-        "required": [
-          "attachmentId",
-          "writable"
-        ],
-        "optional": [
-          "info"
         ]
       }
     },
@@ -733,6 +729,325 @@
         ],
         "optional": []
       }
+    },
+    {
+      "name": "nano.terminal.environment",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S09",
+      "status": "implemented",
+      "params": {
+        "required": [],
+        "optional": []
+      },
+      "result": {
+        "shape": "terminalEnvironment",
+        "required": [
+          "cwd",
+          "maxInputBytes",
+          "maxBufferedBytes",
+          "maxCols",
+          "maxRows",
+          "scrollback"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.terminal.shells",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S09",
+      "status": "implemented",
+      "params": {
+        "required": [],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "shells"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.terminal.list",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S09",
+      "status": "implemented",
+      "params": {
+        "required": [],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "terminals"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.terminal.create",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S09",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "terminalId",
+          "cols",
+          "rows"
+        ],
+        "optional": [
+          "shellPath"
+        ]
+      },
+      "result": {
+        "required": [
+          "terminal"
+        ],
+        "optional": []
+      },
+      "paramsSemantics": {
+        "terminalId": "Nano pre-generated; persisted before create; idempotent while open",
+        "cols": "integer; clamped by the client",
+        "rows": "integer; clamped by the client"
+      }
+    },
+    {
+      "name": "nano.terminal.retain",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S09",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "terminalId"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "holdId"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.terminal.release",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S09",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "holdId"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "released"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.terminal.attach",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S09",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "terminalId"
+        ],
+        "optional": []
+      },
+      "result": {
+        "shape": "terminalAttachment",
+        "required": [
+          "attachmentId",
+          "terminalId",
+          "sequence",
+          "writable",
+          "info",
+          "screen"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.terminal.detach",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S09",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "attachmentId"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "detached"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.terminal.rename",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S09",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "terminalId",
+          "title"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "renamed"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.terminal.close",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S09",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "terminalId"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "closed"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.terminal.input",
+      "direction": "client-to-host",
+      "kind": "notification",
+      "owner": "S09",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "attachmentId",
+          "sequence",
+          "bytes"
+        ],
+        "optional": []
+      },
+      "paramsSemantics": {
+        "bytes": "utf-8",
+        "sequence": "attachment-local, consecutive from 1"
+      }
+    },
+    {
+      "name": "nano.terminal.resize",
+      "direction": "client-to-host",
+      "kind": "notification",
+      "owner": "S09",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "attachmentId",
+          "sequence",
+          "cols",
+          "rows"
+        ],
+        "optional": []
+      },
+      "paramsSemantics": {
+        "sequence": "attachment-local, consecutive from 1"
+      }
+    },
+    {
+      "name": "nano.terminal.output",
+      "direction": "host-to-client",
+      "kind": "notification",
+      "owner": "S09",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "attachmentId",
+          "terminalId",
+          "sequence",
+          "data"
+        ],
+        "optional": []
+      },
+      "paramsSemantics": {
+        "sequence": "monotonic across the attachment",
+        "data": "utf-8"
+      }
+    },
+    {
+      "name": "nano.terminal.state",
+      "direction": "host-to-client",
+      "kind": "notification",
+      "owner": "S09",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "attachmentId",
+          "terminalId",
+          "writable",
+          "info"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.terminal.ack",
+      "direction": "host-to-client",
+      "kind": "notification",
+      "owner": "S09",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "attachmentId",
+          "sequence"
+        ],
+        "optional": [
+          "refusal"
+        ]
+      },
+      "paramsSemantics": {
+        "refusal": "enum:read-only|not-running"
+      }
+    },
+    {
+      "name": "nano.terminal.ended",
+      "direction": "host-to-client",
+      "kind": "notification",
+      "owner": "S09",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "attachmentId",
+          "terminalId",
+          "reason"
+        ],
+        "optional": [
+          "detail"
+        ]
+      },
+      "paramsSemantics": {
+        "reason": "enum:detached|drained|failed|slow-consumer|closed|input-failed"
+      }
     }
   ],
   "eventKinds": [
@@ -822,7 +1137,7 @@
       "params": {
         "protocol": {
           "major": 1,
-          "minor": 0
+          "minor": 1
         },
         "runtimeId": "rt-fixture",
         "generation": 1,
@@ -968,6 +1283,51 @@
           },
           "status": "running"
         }
+      }
+    },
+    "terminalAttach": {
+      "jsonrpc": "2.0",
+      "id": "req-5",
+      "method": "nano.terminal.attach",
+      "params": {
+        "terminalId": "term-fixture"
+      }
+    },
+    "terminalOutput": {
+      "jsonrpc": "2.0",
+      "method": "nano.terminal.output",
+      "params": {
+        "attachmentId": "att-1",
+        "terminalId": "term-fixture",
+        "sequence": 7,
+        "data": "hello\r\n"
+      }
+    },
+    "terminalAttachResult": {
+      "jsonrpc": "2.0",
+      "id": "req-5",
+      "result": {
+        "attachmentId": "att-1",
+        "terminalId": "term-fixture",
+        "sequence": 6,
+        "writable": true,
+        "info": {
+          "id": "term-fixture",
+          "title": "zsh",
+          "shell": {
+            "path": "/bin/zsh",
+            "args": [
+              "-i"
+            ],
+            "name": "zsh"
+          },
+          "cwd": "/work",
+          "cols": 80,
+          "rows": 24,
+          "state": "running",
+          "exitCode": null
+        },
+        "screen": "\u001b[?25h"
       }
     }
   },

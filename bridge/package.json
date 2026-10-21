@@ -15,6 +15,7 @@
   "files": [
     "runtime/**/*.mjs",
     "conversation/**/*.mjs",
+    "terminal/**/*.mjs",
     "profile/**/*.mjs",
     "cordis.patch.yml",
     "README.md"

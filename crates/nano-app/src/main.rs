@@ -9,8 +9,8 @@ use std::io::{self, Stdout};
 use std::time::Duration;
 
 use crossterm::event::{
-    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyboardEnhancementFlags,
-    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    Event, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -46,6 +46,7 @@ fn run() -> Result<(), String> {
     let mut terminal =
         TerminalGuard::new(!cli.no_alt_screen).map_err(|error| format!("terminal: {error}"))?;
     let mut dirty = true;
+    let mut mouse_capture = false;
     loop {
         let mut link_events = Vec::new();
         if let Some(link) = &app.link {
@@ -75,12 +76,28 @@ fn run() -> Result<(), String> {
                 Event::Paste(text) => {
                     dirty |= app.handle_paste(text);
                 }
+                Event::Mouse(mouse) => {
+                    dirty |= app.handle_mouse(mouse);
+                }
                 Event::Resize(_, _) => {
                     dirty = true;
                 }
                 _ => {}
             }
         }
+        let want_mouse = app.terminal_active();
+        if want_mouse != mouse_capture {
+            mouse_capture = want_mouse;
+            let mut stdout = io::stdout();
+            if mouse_capture {
+                let _ = execute!(stdout, EnableMouseCapture);
+            } else {
+                let _ = execute!(stdout, DisableMouseCapture);
+            }
+        }
+    }
+    if mouse_capture {
+        let _ = execute!(io::stdout(), DisableMouseCapture);
     }
     drop(terminal);
 

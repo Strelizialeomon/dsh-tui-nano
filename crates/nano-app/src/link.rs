@@ -60,12 +60,32 @@ pub enum LinkEvent {
     Fatal(String),
 }
 
+/// One command for the host worker.
+enum HostCommand {
+    /// A request awaiting its response.
+    Request {
+        /// Caller-generated local id.
+        id: u64,
+        /// Protocol method.
+        method: String,
+        /// Protocol params.
+        params: Value,
+    },
+    /// A client-to-host notification without a response.
+    Notify {
+        /// Protocol method.
+        method: String,
+        /// Protocol params.
+        params: Value,
+    },
+}
+
 /// Shared handle to the host worker threads.
 pub struct HostLink {
     /// Incoming link events.
     pub events: Receiver<LinkEvent>,
     /// Outgoing request channel.
-    commands: Sender<(u64, String, Value)>,
+    commands: Sender<HostCommand>,
     /// The owning host handle, used for the final ordered shutdown.
     host: Host,
     /// Stops the event loop thread.
@@ -83,7 +103,7 @@ impl HostLink {
         let host = Host::spawn(new_runtime_id(), 1, root_session_id, mode, options)
             .map_err(|error| format!("could not spawn the host: {error}"))?;
         let (event_tx, event_rx) = channel();
-        let (command_tx, command_rx) = channel::<(u64, String, Value)>();
+        let (command_tx, command_rx) = channel::<HostCommand>();
         let stop = Arc::new(AtomicBool::new(false));
 
         let startup_host = host.clone();
@@ -148,15 +168,26 @@ impl HostLink {
         let command_host = host.clone();
         let command_events = event_tx;
         std::thread::spawn(move || {
-            while let Ok((id, method, params)) = command_rx.recv() {
-                let result = command_host
-                    .request(&method, params)
-                    .map_err(classify_request_error);
-                if command_events
-                    .send(LinkEvent::RequestDone { id, result })
-                    .is_err()
-                {
-                    return;
+            while let Ok(command) = command_rx.recv() {
+                match command {
+                    HostCommand::Request { id, method, params } => {
+                        let result = command_host
+                            .request(&method, params)
+                            .map_err(classify_request_error);
+                        if command_events
+                            .send(LinkEvent::RequestDone { id, result })
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    HostCommand::Notify { method, params } => {
+                        if let Err(error) = command_host.notify(&method, params) {
+                            let _ =
+                                command_events.send(LinkEvent::Fatal(describe_host_error(&error)));
+                            return;
+                        }
+                    }
                 }
             }
         });
@@ -174,9 +205,29 @@ impl HostLink {
     pub fn request(&self, method: &str, params: Value) -> Result<u64, String> {
         let id = self.counter.fetch_add(1, Ordering::SeqCst);
         self.commands
-            .send((id, method.to_string(), params))
+            .send(HostCommand::Request {
+                id,
+                method: method.to_string(),
+                params,
+            })
             .map_err(|_| "the host request worker is gone".to_string())?;
         Ok(id)
+    }
+
+    /// Send one client-to-host notification. Failure means the transport is
+    /// unusable; the caller reports it instead of replaying input.
+    pub fn notify(&self, method: &str, params: Value) -> Result<(), String> {
+        self.commands
+            .send(HostCommand::Notify {
+                method: method.to_string(),
+                params,
+            })
+            .map_err(|_| "the host request worker is gone".to_string())
+    }
+
+    /// Resolved Nano data root for terminal identity persistence.
+    pub fn data_root(&self) -> std::path::PathBuf {
+        self.host.paths().data_root.clone()
     }
 
     /// Run the one ordered shutdown after the terminal is restored.

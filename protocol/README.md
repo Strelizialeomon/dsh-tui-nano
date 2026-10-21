@@ -3,6 +3,7 @@
 `nano-protocol.json` 是 Rust 运行时与 TypeScript 桥接之间唯一的机器可校验契约。两边的测试都读取它，核对：
 
 - 方法名、方向、实现状态（`implemented` / `reserved`）；S02 的对话方法为 `nano.conversation.submit|editQueued|deleteQueued|steerQueued|cancel|snapshot`；
+- S09 的终端方法：请求为 `nano.terminal.environment|shells|list|create|retain|release|attach|detach|rename|close`；客户端通知为 `nano.terminal.input|resize`；服务端通知为 `nano.terminal.output|state|ack|ended`。终端帧是实时通知，不进入持久事件或会话转录；
 - S02 的事件 kind：`conversation.status`、`conversation.inbox`（完整投影；超帧上限时降级为有界预览，带 `truncated`/`total`/`omitted`）、`conversation.stream`（start/chunk/end 帧）；
 - 帧必需字段、错误码、生命周期边、事件 kind；
 - 容量上限（frame、pending、chunk、背压队列、退出预算、单次提交 32 KiB）；
