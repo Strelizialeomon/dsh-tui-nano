@@ -13,7 +13,7 @@
 
 S13 额外拥有 `docs/release/design-contract.md`：统一键位、布局槽位、主题 token 和视觉基准的冻结契约。S13 只定义/冻结这份契约并做发布验收，不实现界面；各子件引用同一份契约，不能各自再定义一套键位或主题。
 
-design-contract 的视觉基准固定为 `docs/design/2026-10-17-dsh-tui-ux-research/preview/index.html` 和同目录截图：dark/light 两套颜色 token、4ch 行号槽、8 行差异预算、输入框上下 2px 上下文线、底部权限/瞬态/cwd、子代理状态灯（running 0.8s 闪烁、error 红、cancelled 黄、completed 绿）都从 demo 取值；行高/间距按 demo 的比例，不另造配色、emoji 或动效。终端字号由用户控制，不强制 demo 的 14px。
+design-contract 的视觉基准固定为 `docs/design/2026-10-17-dsh-tui-ux-research/preview/index.html` 和同目录截图：dark/light 两套颜色 token、4ch 行号槽 + 2ch 标记槽、8 行差异预算、输入框上下各一条单单元格高的上下文线（左侧占比色段；正常 accent、约 80% warning、约 95% error、未知回退普通边框）、底部权限/瞬态/cwd、子代理状态灯（running 0.8s 闪烁、error 红、cancelled 黄、completed 绿，reduced motion 时静止）、装饰性 emoji 默认 0 个。间距以终端单元格为单位，不冻结浏览器 px、14px 字号或 22px 行高；字号由用户终端控制。
 
 ## 2. 支持矩阵
 
@@ -134,7 +134,7 @@ design-contract 的视觉基准固定为 `docs/design/2026-10-17-dsh-tui-ux-rese
 - 截图/录屏的存放格式和命名由 S13 定，但必须能对应到版本和验收项。
 - 证据必须脱敏：密钥、凭据、PII、用户正文、完整环境和绝对路径不得进入 `docs/release/`；这是硬要求，不是「默认」。
 - 发布审核档位按 spec-flow 闸卡当场选择；本份不预设档位。
-- `docs/release/design-contract.md` 的格式和初始内容由 S13 在实施期定义；各子件只引用，不各写一份。颜色/间距/行高/状态灯/行号槽从 `preview/index.html` 取值，不另造。
+- `docs/release/design-contract.md` 的格式和初始内容由 S13 在实施期定义；各子件只引用，不各写一份。颜色/间距/行号槽/状态灯/上下文线以 `preview/index.html` 为基准，但用终端单元格映射，不冻结浏览器 px/字号/行高。
 - 截图/录屏使用合成 home/workdir 或固定遮罩规则；未脱敏原件只留在受控本机目录，不进发布证据。
 
 ## 11. 审核修订记录
