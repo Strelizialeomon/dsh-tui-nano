@@ -156,3 +156,15 @@ test('RpcError maps contract names to numeric codes', () => {
   assert.equal(error.code, 1001)
   assert.throws(() => new RpcError('missing/code', 'x'), /unknown protocol error name/)
 })
+
+test('invalid params keep the request id for the error response', () => {
+  try {
+    parseFrameLine(
+      JSON.stringify({ jsonrpc: '2.0', id: 'req-9', method: 'nano.subscribe', params: [] }),
+    )
+    assert.fail('expected a ProtocolViolation')
+  } catch (error) {
+    assert.equal(error.code, -32602)
+    assert.equal(error.requestId, 'req-9')
+  }
+})

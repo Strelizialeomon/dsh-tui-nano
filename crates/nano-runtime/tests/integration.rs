@@ -1,9 +1,9 @@
 //! Real-host integration tests for S01.
 //!
 //! These tests spawn the installed `dsh` launcher with the Nano profile and
-//! talk over fd 3/4 exactly as the TUI does. They are gated by `NANO_E2E=1`
-//! because they run pnpm and real host processes. The slow termination-budget
-//! test additionally needs `NANO_E2E_SLOW=1`.
+//! talk over fd 3/4 exactly as the TUI does. They are `#[ignore]`d because they
+//! run pnpm and real host processes; run them with `--ignored`. The slow
+//! termination-budget test additionally needs `NANO_E2E_SLOW=1`.
 
 use std::fs;
 use std::ops::{Deref, DerefMut};
@@ -20,11 +20,8 @@ use nano_runtime::paths::RuntimePaths;
 use nano_runtime::protocol::{Address, CapabilityStatus, SessionFactMode, StepStatus};
 use nano_runtime::{
     Hello, Host, HostError, HostEvent, HostOptions, SessionMode, ShutdownOutcome,
+    SHUTDOWN_STEP_NAMES,
 };
-
-fn e2e_enabled() -> bool {
-    std::env::var("NANO_E2E").ok().as_deref() == Some("1")
-}
 
 fn slow_enabled() -> bool {
     std::env::var("NANO_E2E_SLOW").ok().as_deref() == Some("1")
@@ -180,18 +177,16 @@ fn session_log_exists(data_root: &Path, session_id: &str) -> bool {
     entries.flatten().any(|entry| entry.path().join(session_id).is_dir())
 }
 
-fn listening_sockets(pid: u32) -> Vec<String> {
+fn listening_sockets(pid: u32) -> Result<Vec<String>, String> {
     let output = Command::new("lsof")
         .args(["-nP", "-a", "-p", &pid.to_string(), "-iTCP", "-sTCP:LISTEN"])
-        .output();
-    match output {
-        Ok(output) => String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .skip(1)
-            .map(str::to_string)
-            .collect(),
-        Err(_) => Vec::new(),
-    }
+        .output()
+        .map_err(|error| format!("lsof is required for the no-listener assertion: {error}"))?;
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .skip(1)
+        .map(str::to_string)
+        .collect())
 }
 
 fn clean_report(outcome: &ShutdownOutcome) {
@@ -204,16 +199,15 @@ fn clean_report(outcome: &ShutdownOutcome) {
         report.steps.iter().all(|step| step.status == StepStatus::Stopped),
         "non-stopped shutdown step: {report:?}"
     );
+    let names: Vec<&str> = report.steps.iter().map(|step| step.name.as_str()).collect();
+    assert_eq!(names, SHUTDOWN_STEP_NAMES.to_vec());
     assert_eq!(outcome.session_saved, Some(true));
     assert_eq!(outcome.scope_cleared, Some(true));
 }
 
 #[test]
+#[ignore = "spawns a real dsh host; run with --ignored"]
 fn handshake_subscribe_shutdown_roundtrip() {
-    if !e2e_enabled() {
-        eprintln!("skip handshake_subscribe_shutdown_roundtrip: set NANO_E2E=1");
-        return;
-    }
     let fixture = Fixture::new();
     fixture.install();
     let session = generate_root_session_id();
@@ -223,7 +217,13 @@ fn handshake_subscribe_shutdown_roundtrip() {
     assert_eq!(hello.root_session_id, session);
     assert_eq!(hello.session.mode, SessionFactMode::Created);
     assert!(hello.session.seq >= 3, "session header events were expected");
+    assert_eq!(hello.versions.official, "0.2.1-rc.2");
+    assert_eq!(hello.versions.bridge, "0.1.0");
+    assert!(hello.versions.node.starts_with('v'));
     assert_eq!(hello.capabilities["agent"].status, CapabilityStatus::Supported);
+    assert_eq!(hello.capabilities["approval"].status, CapabilityStatus::Unavailable);
+    assert_eq!(hello.capabilities["userQuestions"].status, CapabilityStatus::Unavailable);
+    assert_eq!(hello.capabilities["tool-ask-user"].status, CapabilityStatus::Unavailable);
     assert_eq!(
         hello.capabilities["tool-ask-user"].mode.as_deref(),
         Some("blocking")
@@ -238,7 +238,9 @@ fn handshake_subscribe_shutdown_roundtrip() {
     assert_eq!(owners, vec![host.pid()]);
     assert!(pid_alive(host.pid()));
     assert!(
-        listening_sockets(host.pid()).is_empty(),
+        listening_sockets(host.pid())
+            .expect("lsof must run for the no-listener assertion")
+            .is_empty(),
         "the Nano host must not open a TCP listener"
     );
 
@@ -296,14 +298,25 @@ fn handshake_subscribe_shutdown_roundtrip() {
         fixture.data.join("sessions").read_dir().unwrap().count() > 0,
         "session log was not created"
     );
+    let storage = fixture
+        .data
+        .join("runtime-data")
+        .join(&session)
+        .join("storage");
+    assert!(storage.is_dir(), "per-root storage directory is missing");
     assert!(
-        fixture
-            .data
-            .join("runtime-data")
-            .join(&session)
-            .join("storage")
-            .is_dir(),
-        "per-root storage directory is missing"
+        storage.join("session_projcache").is_dir(),
+        "the official storage domain did not write under the per-root storage"
+    );
+    assert!(
+        !fixture
+            .options
+            .dsh_home
+            .as_ref()
+            .expect("dsh home")
+            .join("storages")
+            .exists(),
+        "the host must not write $DSH_HOME/storages"
     );
     let runtime = fixture.paths();
     assert!(!runtime.data_root.join("runtime").read_dir().unwrap().any(|entry| {
@@ -314,11 +327,8 @@ fn handshake_subscribe_shutdown_roundtrip() {
 }
 
 #[test]
+#[ignore = "spawns a real dsh host; run with --ignored"]
 fn second_host_same_session_is_occupied() {
-    if !e2e_enabled() {
-        eprintln!("skip second_host_same_session_is_occupied: set NANO_E2E=1");
-        return;
-    }
     let fixture = Fixture::new();
     fixture.install();
     let session = generate_root_session_id();
@@ -342,11 +352,8 @@ fn second_host_same_session_is_occupied() {
 }
 
 #[test]
+#[ignore = "spawns a real dsh host; run with --ignored"]
 fn simultaneous_hosts_for_one_session_leave_exactly_one_winner() {
-    if !e2e_enabled() {
-        eprintln!("skip simultaneous_hosts_for_one_session_leave_exactly_one_winner: set NANO_E2E=1");
-        return;
-    }
     let fixture = Fixture::new();
     fixture.install();
     let session = generate_root_session_id();
@@ -373,11 +380,8 @@ fn simultaneous_hosts_for_one_session_leave_exactly_one_winner() {
 }
 
 #[test]
+#[ignore = "spawns a real dsh host; run with --ignored"]
 fn reused_pid_causes_false_occupancy_without_double_write() {
-    if !e2e_enabled() {
-        eprintln!("skip reused_pid_causes_false_occupancy_without_double_write: set NANO_E2E=1");
-        return;
-    }
     let fixture = Fixture::new();
     fixture.install();
     let session = generate_root_session_id();
@@ -415,11 +419,23 @@ fn reused_pid_causes_false_occupancy_without_double_write() {
 }
 
 #[test]
+#[ignore = "spawns a real dsh host; run with --ignored"]
+fn stdio_fallback_handshake_and_shutdown() {
+    let fixture = Fixture::new();
+    fixture.install();
+    let session = generate_root_session_id();
+    let mut options = fixture.options.clone();
+    options.force_fallback = true;
+    let host = fixture.start_with(&session, SessionMode::Create, &options);
+    let hello = handshake(&host);
+    assert_eq!(hello.root_session_id, session);
+    let outcome = host.shutdown();
+    clean_report(&outcome);
+}
+
+#[test]
+#[ignore = "spawns a real dsh host; run with --ignored"]
 fn corrupt_ledger_refuses_startup() {
-    if !e2e_enabled() {
-        eprintln!("skip corrupt_ledger_refuses_startup: set NANO_E2E=1");
-        return;
-    }
     let fixture = Fixture::new();
     fixture.install();
     fs::create_dir_all(&fixture.data).unwrap();
@@ -444,11 +460,8 @@ fn corrupt_ledger_refuses_startup() {
 }
 
 #[test]
+#[ignore = "spawns a real dsh host; run with --ignored"]
 fn dead_owner_is_swept_and_session_resumes() {
-    if !e2e_enabled() {
-        eprintln!("skip dead_owner_is_swept_and_session_resumes: set NANO_E2E=1");
-        return;
-    }
     let fixture = Fixture::new();
     fixture.install();
     let session = generate_root_session_id();
@@ -476,11 +489,8 @@ fn dead_owner_is_swept_and_session_resumes() {
 }
 
 #[test]
+#[ignore = "spawns a real dsh host; run with --ignored"]
 fn multiple_windows_and_two_sessions_in_one_checkout_are_isolated() {
-    if !e2e_enabled() {
-        eprintln!("skip multiple_windows_and_two_sessions_in_one_checkout_are_isolated: set NANO_E2E=1");
-        return;
-    }
     let fixture = Fixture::new();
     fixture.install();
     // A and C share one checkout (two sessions); B is a separate worktree.
@@ -536,11 +546,8 @@ fn multiple_windows_and_two_sessions_in_one_checkout_are_isolated() {
 }
 
 #[test]
+#[ignore = "spawns a real dsh host; run with --ignored"]
 fn writer_held_is_reported_without_switching_sessions() {
-    if !e2e_enabled() {
-        eprintln!("skip writer_held_is_reported_without_switching_sessions: set NANO_E2E=1");
-        return;
-    }
     let fixture = Fixture::new();
     fixture.install();
     let session = generate_root_session_id();
@@ -574,11 +581,8 @@ fn writer_held_is_reported_without_switching_sessions() {
 }
 
 #[test]
+#[ignore = "spawns a real dsh host; run with --ignored"]
 fn startup_signal_cancels_cleanly() {
-    if !e2e_enabled() {
-        eprintln!("skip startup_signal_cancels_cleanly: set NANO_E2E=1");
-        return;
-    }
     let fixture = Fixture::new();
     fixture.install();
     let session = generate_root_session_id();
@@ -601,11 +605,8 @@ fn startup_signal_cancels_cleanly() {
 }
 
 #[test]
+#[ignore = "spawns a real dsh host; run with --ignored"]
 fn transport_eof_runs_host_cleanup() {
-    if !e2e_enabled() {
-        eprintln!("skip transport_eof_runs_host_cleanup: set NANO_E2E=1");
-        return;
-    }
     let fixture = Fixture::new();
     fixture.install();
     let session = generate_root_session_id();
@@ -627,11 +628,8 @@ fn transport_eof_runs_host_cleanup() {
 }
 
 #[test]
+#[ignore = "spawns a real dsh host; run with --ignored"]
 fn direct_signals_enter_the_shutdown_path() {
-    if !e2e_enabled() {
-        eprintln!("skip direct_signals_enter_the_shutdown_path: set NANO_E2E=1");
-        return;
-    }
     let fixture = Fixture::new();
     fixture.install();
     for signal in [libc::SIGTERM, libc::SIGHUP] {
@@ -657,11 +655,8 @@ fn direct_signals_enter_the_shutdown_path() {
 }
 
 #[test]
+#[ignore = "spawns a real dsh host; run with --ignored"]
 fn persistence_failure_is_reported_without_lying() {
-    if !e2e_enabled() {
-        eprintln!("skip persistence_failure_is_reported_without_lying: set NANO_E2E=1");
-        return;
-    }
     let fixture = Fixture::new();
     fixture.install();
     let session = generate_root_session_id();
@@ -681,10 +676,51 @@ fn persistence_failure_is_reported_without_lying() {
         .steps
         .iter()
         .any(|step| step.name == "persistence" && step.status == StepStatus::Failed));
-    assert!(fixture.session_owners(&session).is_empty());
+    assert!(report
+        .steps
+        .iter()
+        .any(|step| step.name == "ledger" && step.status == StepStatus::Failed));
+    assert_eq!(
+        fixture.session_owners(&session),
+        vec![host.pid()],
+        "a failed cleanup must retain the claim for pid-based recovery"
+    );
 }
 
 #[test]
+#[ignore = "spawns a real dsh host; run with --ignored"]
+fn unknown_cleanup_step_is_reported_and_claim_retained() {
+    let fixture = Fixture::new();
+    fixture.install();
+    let session = generate_root_session_id();
+    let mut options = fixture.options.clone();
+    options.test_faults = Some(json!({ "unknownStep": "persistence" }));
+    let host = fixture.start_with(&session, SessionMode::Create, &options);
+    handshake(&host);
+    let outcome = host.shutdown();
+    assert!(outcome.ack);
+    assert!(outcome.process_exited);
+    assert!(!outcome.clean);
+    assert_eq!(outcome.session_saved, Some(false));
+    assert_eq!(outcome.exit_code, Some(1));
+    let report = outcome.report.as_ref().expect("report");
+    assert!(report
+        .steps
+        .iter()
+        .any(|step| step.name == "persistence" && step.status == StepStatus::Unknown));
+    assert!(report
+        .steps
+        .iter()
+        .any(|step| step.name == "ledger" && step.status == StepStatus::Failed));
+    assert_eq!(
+        fixture.session_owners(&session),
+        vec![host.pid()],
+        "an unknown cleanup step must retain the claim"
+    );
+}
+
+#[test]
+#[ignore = "spawns a real dsh host; run with --ignored"]
 fn shutdown_budget_is_bounded_when_cleanup_hangs() {
     if !slow_enabled() {
         eprintln!("skip shutdown_budget_is_bounded_when_cleanup_hangs: set NANO_E2E_SLOW=1");
@@ -695,7 +731,9 @@ fn shutdown_budget_is_bounded_when_cleanup_hangs() {
     let session = generate_root_session_id();
     let mut options = fixture.options.clone();
     options.test_faults = Some(json!({ "hangShutdown": true }));
-    let mut sibling = Command::new("sleep").arg("30").spawn().expect("sibling sleep");
+    let witness_session = generate_root_session_id();
+    let witness = fixture.start(&witness_session, SessionMode::Create);
+    handshake(&witness);
     let host = fixture.start_with(&session, SessionMode::Create, &options);
     handshake(&host);
     let started = Instant::now();
@@ -706,21 +744,24 @@ fn shutdown_budget_is_bounded_when_cleanup_hangs() {
         "shutdown returned before the graceful budget: {elapsed:?}"
     );
     assert!(
-        elapsed < Duration::from_secs(20),
+        elapsed < Duration::from_secs(16),
         "shutdown exceeded the 10s + 3s budget: {elapsed:?}"
     );
     assert!(!outcome.ack);
     assert!(outcome.process_exited);
     assert!(outcome.forced);
     assert!(!outcome.clean);
-    assert!(
-        fixture.session_owners(&session).is_empty(),
-        "the SIGTERM tree disposal must still release the ledger through its Cordis effect"
+    assert_eq!(
+        fixture.session_owners(&session),
+        vec![host.pid()],
+        "a host killed after an unverified cleanup retains its claim"
     );
-    assert!(
-        sibling.try_wait().expect("sibling status").is_none(),
-        "the host's process-group kill must not touch an unrelated process"
+    assert_eq!(
+        witness.lifecycle_state(),
+        LifecycleState::Ready,
+        "the host's process-group kill must not touch another dsh host"
     );
-    let _ = sibling.kill();
-    let _ = sibling.wait();
+    assert!(pid_alive(witness.pid()));
+    let witness_outcome = witness.shutdown();
+    clean_report(&witness_outcome);
 }

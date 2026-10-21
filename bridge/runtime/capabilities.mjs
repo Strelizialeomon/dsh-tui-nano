@@ -32,9 +32,21 @@ export function buildCapabilities(ctx, config) {
       : { status: 'unsupported', detail: `${serviceKey} is not composed in this profile` }
   }
 
+  // The seams are composed, but S01 registers no answerer. Reporting them as
+  // supported would claim an interaction path that cannot answer; S03 owns the
+  // single answerer for each seam.
+  capabilities.approval = {
+    status: 'unavailable',
+    detail: 'the approval answerer belongs to S03',
+  }
+  capabilities.userQuestions = {
+    status: 'unavailable',
+    detail: 'the question answerer belongs to S03',
+  }
   capabilities['tool-ask-user'] = {
-    status: ctx.get('userQuestions') === undefined ? 'unsupported' : 'supported',
+    status: ctx.get('userQuestions') === undefined ? 'unsupported' : 'unavailable',
     mode: typeof config.askUserMode === 'string' ? config.askUserMode : 'blocking',
+    detail: 'the tool is mounted, but no answerer is registered until S03',
   }
 
   // S11 and S10 own the schedule and Monitor backends; neither is composed by S01.

@@ -11,7 +11,7 @@
 
 Rust 不嵌入 Node 引擎。经官方 `dsh --profile dsh-tui-nano` 入口启动一份精确版本的 profile，加载已安装桥接插件和官方包；不用 `dsh web` 开浏览器，不复制上游启动器源码，不使用能力不全的 SDK server。首版不打开 HTTP/WebSocket 监听端口。
 
-官方 Connection 提供无 WebServer 时的 carrier-neutral 能力；Gateway 的公开 `invoke`/`stream`/`wireStream` 可复用。桥接创建显式本地 Peer，端点固定白名单并用生成契约校验，不把任意 endpoint、JavaScript 或文件导入能力暴露给 Rust。审批与问卷是两个独立官方 seam：审批走 `approval/request` waterfall，问卷走 `ctx.userQuestions` waterfall；各自只能注册一个回答者，不能共用一个。是否能在最小 profile 完整组合，需要本份用真实发行包证明。
+S01 的桥接是 profile 进程内的 Cordis 插件，只通过官方公开 `ctx` 服务调用（agents/sessions/sessionPersistence/userQuestions 等），不挂载官方 Connection/Gateway Peer，也不把任意 endpoint、JavaScript 或文件导入能力暴露给 Rust；`nano.*` 契约本身就是端点白名单。若后续子件需要跨进程 Remote 调用，必须另加显式本地 Peer 与固定白名单，不得把任意 endpoint 暴露给 Rust。审批与问卷是两个独立官方 seam：审批走 `approval/request` waterfall，问卷走 `ctx.userQuestions` waterfall；各自只能注册一个回答者，不能共用一个。S01 只验证 seam 组合，并在没有回答者时把能力报 `unavailable`；唯一回答者由 S03 注册。最小 profile 的服务组合、握手与关停已由本份用真实发行包验证。
 
 ## 2. 启动与身份
 
@@ -20,9 +20,9 @@ Rust 不嵌入 Node 引擎。经官方 `dsh --profile dsh-tui-nano` 入口启动
 启动顺序：
 
 1. 解析 Node/dsh/桥接包的实际路径与版本、绝对工作目录、数据根、目标会话；不通过用户 Shell 拼接启动参数。新会话的 `rootSessionId` 由 Nano 预生成并原样传给官方 create；create 返回不同 ID 即硬失败。
-2. 启动自己的宿主进程，保存精确子进程句柄和拥有范围；不扫描名称后批量杀 `node`/`dsh`。宿主进入独立进程组/session，SIGINT/SIGTERM/SIGHUP 统一转发到 `nano.shutdown`，不能先于桥接清理直接死亡。
+2. 启动自己的宿主进程，保存精确子进程句柄和拥有范围；不扫描名称后批量杀 `node`/`dsh`。宿主进入独立进程组/session，SIGINT/SIGTERM/SIGHUP 进入同一个有序关停路径；宿主自身接管这些信号，Rust 也可显式发送 `nano.shutdown`。重复信号强制结束，但不能先于桥接清理直接死亡。
 3. 宿主在创建/恢复会话之前取得根会话认领（见 §2.1）；认领失败直接退出，不创建会话、不挂 schedule、不启动模型请求。
-4. 设置本次 profile 的 roots：`session-persistence-jsonl.root = <数据根>/sessions`（共享会话日志，官方 per-session flock），`storage-json.root = <数据根>/runtime-data/<rootSessionId>/storage`（所有 storage-json domain 按根会话隔离，避免不同宿主并发写同一 unit）；按 S11 的配方 `ctx.provide(storageBackendServiceKey('nano-schedule-json'), backend)` 并完整替换 `storage-domain` 的 config（`backend: json` + `routes.schedule: nano-schedule-json`）。不能只写 routes，也不能靠 patch 行序。官方全局配置/凭据/指令来源保持显式，不改用户文件。
+4. 设置本次 profile 的 roots：`session-persistence-jsonl.root = <数据根>/sessions`（共享会话日志，官方 per-session flock），`storage-json.root = <数据根>/runtime-data/<rootSessionId>/storage`（所有 storage-json domain 按根会话隔离，避免不同宿主并发写同一 unit）。`storage-domain` 的后端 `provide`、完整 config 与 `routes.schedule` 由 S11 提供；S01 只保证本步在会话创建前完成、root 已设置、失败即关闭，不替换 storage-domain 路由。官方全局配置/凭据/指令来源保持显式，不改用户文件。
 5. 创建或恢复准确主会话。已物化的会话确认官方可写锁；新建 blank 会话在首次 materializing write 前没有官方锁，此时以 §2.1 的认领作为前置互斥，物化后再确认官方锁。失败时不启动该会话的 schedule 或模型请求。会话重用返回了不同 ID、工作目录冲突、writer-held 或 profile 未加载必需服务都不是冷启动成功；报出失败并保留草稿，不能悄悄换会话。
 6. 协议握手和 UI 决策通道就绪后，才启动该主会话的调度并接受动作。
 
@@ -75,7 +75,7 @@ Rust 不嵌入 Node 引擎。经官方 `dsh --profile dsh-tui-nano` 入口启动
 
 事件 writer 按字节有界：控制/审批/错误优先于可以重新取得的预览；持久事件不丢弃、不换序。慢消费者无法及时接收时关闭对应订阅，显式报告需从快照恢复，不阻塞官方持久化或无限积压。高频 preview 可以合并，但标识、最终状态、tool result 和审批撤回不能被合并掉。
 
-UI 的事件接收与绘制解耦；输入处理不能被一整段 JSON 转换、附件或历史分页堵住。frame 与累计队列限制都测，不能仅限制条数。
+UI 的事件接收与绘制解耦；输入处理不能被一整段 JSON 转换、附件或历史分页堵住。frame 与累计队列限制都测，不能仅限制条数。`nano.subscribe` 的重放窗口上限为 10000 个持久事件；更大的历史须用较晚的 `fromSeq` 分段读取。
 
 ### 3.2 重试与未知结果
 
@@ -89,14 +89,14 @@ Shell 启动、PTY write、schedule create、权限变更等没有可证明重�
 stopped -> starting -> handshaking -> ready
 starting|handshaking -> stopping -> stopped | cleanup-failed   # 启动半途取消
 starting|handshaking -> failed -> stopped | cleanup-failed
-ready -> disconnected   # 传输断开、宿主尚存；只重建订阅
-disconnected -> ready
+ready -> disconnected   # 传输断开、宿主尚存；S01 的 fd 传输不重建
+disconnected -> lost    # 宿主随后退出
 ready -> lost           # 宿主死去；需要显式重新连接/恢复
 lost -> stopping -> stopped | cleanup-failed
 ready -> stopping -> stopped | cleanup-failed
 ```
 
-`disconnected` 和 `lost` 是两件事：前者宿主还活着，Rust 只重建可观察订阅，不自动另起会操作同一会话的宿主；后者宿主死去，需要一次明确「重新连接/恢复」，不自动恢复原命令或 Monitor。`failed` 和启动期取消都必须继续走到 `stopped`/`cleanup-failed`，不能悬空。
+`disconnected` 和 `lost` 是两件事：前者宿主还活着，但 S01 的 fd 3/4 传输不可重建，Rust 不再发送动作，等待宿主走 EOF 清理并转为 `lost`；恢复必须由 S07 停止旧宿主、释放认领、起新 generation。后者宿主死去，同样需要一次明确「重新连接/恢复」，不自动恢复原命令或 Monitor。`failed` 和启动期取消都必须继续走到 `stopped`/`cleanup-failed`，不能悬空。
 
 ## 5. 退出与异常
 
@@ -110,7 +110,7 @@ macOS 官方执行器用可观察进程树/进程组，无法证明抓到所有�
 
 ## 6. 数据与隐私
 
-Nano 会话根与 KV 根不覆盖官方 dsh 数据。profile 启动时用 `--patch` 设置 `session-persistence-jsonl.root = <数据根>/sessions`（共享会话日志，官方 per-session flock）和 `storage-json.root = <数据根>/runtime-data/<rootSessionId>/storage`（所有 storage-json domain 按根会话隔离，避免不同宿主并发写同一 unit）；不写 `$DSH_HOME/storages`，也不让两个宿主共享同一 storage root。workspace/projection cache 因此是窗口本地视图，不跨窗口共享；会话列表来自共享 `sessions/` 和 session-query，不依赖 workspace 域。session.jsonl 等仍由官方格式和迁移管理；Rust 不读写压缩流。诊断保留版本、方法、状态、计数、延迟和错误分类，默认不含用户正文/参数/环境值。
+Nano 会话根与 KV 根不覆盖官方 dsh 数据。profile 启动时用 `--patch` 设置 `session-persistence-jsonl.root = <数据根>/sessions`（共享会话日志，官方 per-session flock）和 `storage-json.root = <数据根>/runtime-data/<rootSessionId>/storage`（所有 storage-json domain 按根会话隔离，避免不同宿主并发写同一 unit）；不写 `$DSH_HOME/storages`，也不让两个宿主共享同一 storage root。workspace/projection cache 因此是窗口本地视图，不跨窗口共享；会话列表来自共享 `sessions/` 和 session-query，不依赖 workspace 域。session.jsonl 等仍由官方格式和迁移管理；Rust 不读写压缩流。诊断保留版本、方法、状态、计数、延迟和错误分类，默认不含用户正文/参数/环境值。S01 的实现只保留宿主 stderr 的有界尾部用于启动失败定位；结构化计数/延迟随相应功能子件补齐。凭据只在官方 provider 内解析；Nano 不复制凭据，不改 `$DSH_HOME` 的凭据、指令或 `storages/`。
 
 本地目录初始 POSIX 0700，诊断/偏好文件 0600。会话挂载账本只含 pid、启动时间和 sessionId，不含用户正文；账本损坏时拒绝启动，不当作空账本。凭据仅在官方 provider 内解析，不跨协议回传。官方发行版支持的凭据读取与迁移行为要在首次使用说明中准确披露；不宣称同系统用户文件权限能隔离 Agent。
 
@@ -122,7 +122,7 @@ stdout 被第三方插件污染时协议失败，错误只显示净化后的诊�
 - [x] 证明无 WebServer 组合可用、没有浏览器/监听端口、没有简版 SDK 偷换。
 - [x] 同项目两个 worktree 窗口、同 checkout 两个不同会话均正常；关闭 A 不终止 B。
 - [ ] 同会话双 writer 拒绝，调度未提前执行；writer-held 不改成新会话（S01 认领 + S07 联合）。
-- [ ] 两个宿主同时认领同一根会话，第二个在创建/恢复会话和挂 schedule 之前被拒绝；blank 会话也成立。
+- [ ] 两个宿主同时认领同一根会话，第二个在创建/恢复会话和挂 schedule 之前被拒绝；blank 会话也成立（S01 认领/创建顺序已测；schedule 挂载由 S11 提供）。
 - [x] 账本损坏/不可读时拒绝启动，不当作空账本；正常退出立即可被认领；宿主崩溃后由 pid 存活判定回收；pid 复用只导致误占用，不导致双写。
 - [ ] 所有 `storage-json` domain 走 per-root root；两个根会话互相看不到对方的调度任务和 workspace 视图；会话列表来自共享 `sessions/`（S01 + S11 联合）。
 - [ ] 切换根会话后，transcript、草稿、队列、审批、问卷、终端、Monitor、调度列表都不出现上一个会话的内容（S01 + S02/S03/S07/S09/S10/S11 联合，S13 交叉核对）。
@@ -143,7 +143,7 @@ stdout 被第三方插件污染时协议失败，错误只显示净化后的诊�
 | 调度专用后端路由（S11） | 让 schedule 表按根会话隔离，所有 storage-json domain 也不跨宿主共享；没有则两宿主争同一 unit | S11 提供 `provide` + 完整 storage-domain config；S01 只保证启动顺序 |
 | generation + 生命周期状态机 | 重启后拒绝旧代事件/回执/审批/PTY；没有则旧窗口串新宿主 | 作者设计；需逐条验收状态边 |
 | 四事实关停报告 | 区分 ACK、进程结束、范围清空、会话保存；没有则把「已发停止」当「已退出」 | 作者设计；10s+3s 预算 |
-| 审批/问卷各一条 answerer | 两个官方 seam 不能共用一个回答者；没有则一边永远无人回答 | 官方能力；需分别注册并处理失败关闭 |
+| 审批/问卷各一条 answerer | 两个官方 seam 不能共用一个回答者；没有则一边永远无人回答 | 官方能力；S01 只验证 seam 组合并把无回答者状态报 `unavailable`；唯一回答者由 S03 注册 |
 | 有界 writer + 慢消费者订阅关闭 | 背压时不阻塞持久化，也不无限缓存；没有则内存或持久化被拖死 | 作者建议；关闭后需从快照/游标恢复 |
 | 未知结果不自动重发 | 断流后写入可能已提交；没有则重复副作用 | 总纲已确认；需先查官方状态 |
 | 能力三态 | `unsupported`/`unavailable`/`error` 不能伪装成可用；没有则 UI 撒谎 | 总纲已确认；每个功能自证 |
@@ -158,9 +158,27 @@ stdout 被第三方插件污染时协议失败，错误只显示净化后的诊�
 - `nano-schedule-json` 后端名、root `runtime-data/<rootSessionId>/storage` 和完整 storage-domain config 由 S11 定义；S01 只保证启动顺序和失败关闭。
 - 宿主进入独立进程组并转发 SIGINT/SIGTERM/SIGHUP；这是作者设计，用于保证桥接清理先于宿主死亡。
 - 账本只服务同机多窗口；跨机器并发不在首版范围，也不承诺 pid 复用下的自动回收。
+- 事件 writer 的额外边界：`maxEventFrameBytes = 262144`、`maxSubscriptionQueueBytes = 8388608`、`maxTotalQueueBytes = 16777216`；`maxReplayEvents = 10000`。
+- `nano/*` 错误码 1001–1010、能力名集合（含 `networkListener`）、`capability.required` 标记、回退传输的 `nonce` 字段名、`<数据根>/runtime/` 下的 generation patch 文件及其删除生命周期，均以 `protocol/nano-protocol.json` 为准。
+- 关停报告步骤为 `accepting`/`subscriptions`/`agents`/`persistence`/`dispose`/`ledger`；`dispose` 必须在持久化 flush 之后。
+- `nano.hello` 的 `versions.bridge` 读取桥接包 `package.json`，不硬编码。
+- fd 3/4 传输断开后不重建；`disconnected -> lost` 是 S01 的唯一后续边，恢复由 S07 起新 generation。
+- Rust 的 `forward_signals` API 供 S02 的 app 接线；S01 的宿主自身在启动后接管 SIGINT/SIGTERM，并移除 launcher 先注册的处理器，保证桥接清理先于进程退出。
 
 ## 10. 审核修订记录
 
-待本稿逐份过闸；上述验收均未执行。
+2026-10-21 实施 PR #18 重审（用户点重审；2 个只读 agent：规格符合性 + 对抗找 bug）。原始结论见 PR #18 评论。处置如下：
 
-2026-10-21 原型（独立 Node 脚本，非完整宿主）：同一套 `session-mounts` 算法下，两个进程抢同一会话只有一个成功，另一个报 `session-owner`；不同会话可并行认领；owner 退出后新进程可回收。完整 profile、宿主启动顺序和真实 `nano.*` 握手仍待 S01 验收。
+| # | 严重度 | 发现 | 处置 |
+| --- | --- | --- | --- |
+| 1 | 阻断 | 清理失败仍提前释放会话挂载认领 | 已修：清理失败/unknown 时保留认领并在报告里记 `ledger: failed`；正常清理后才释放 |
+| 2 | 重大 | 启动失败清理先 dispose 再 flush，必然误报 `cleanup-failed` | 已修：先 flush 再 dispose；新增未知步骤测试 |
+| 3 | 重大 | writer 写失败不结算在途控制帧，可挂死 hello/startupError/关停报告 | 已修：在途帧随错误 reject，失败后 control/event 立即短路；新增失败 sink 测试 |
+| 4 | 重大 | 官方 launcher 的 SIGTERM/SIGINT 处理器抢占有序关停 | 已修：宿主接管这两个信号，先走桥接清理再 `appExit`；重复信号 SIGKILL |
+| 5 | 重大 | 审批/问卷能力在无回答者时仍报 `supported` | 已修：报 `unavailable`，detail 指向 S03；README 同步 |
+| 6 | 重大 | 规格要求显式本地 Peer/端点白名单，实现为直接服务调用 | 已改规格 §1：记录直接 `ctx` 服务调用与 `nano.*` 白名单；后续跨进程需求另加 Peer |
+| 7 | 重大 | `disconnected` 后宿主死亡可永久卡住；`disconnected -> ready` 无实现 | 已修：waiter 在进程退出时转 `lost`；规格 §4 与契约删除不可重建的 `disconnected -> ready` |
+| 8 | 次要（已修） | E2E 在无环境变量时静默“通过”；版本行/`unknown`/契约枚举/lsof 空检/账本 EACCES/锁竞争误报等 | 已改为 `#[ignore]`；补齐版本、`unknownStep`、能力名/步骤/保留方法语义、lsof 必跑、EACCES、lock-busy、回放上限、单调时钟等 |
+| 9 | 次要（记录） | 存储域断言、强杀/逃逸后代、诊断结构化、Rust 信号转发接线、fallback E2E、锁回收 TOCTOU 极窄窗口 | 存储域改为真实 `session_projcache` 写入断言；其余在 README/§9 标明范围或留后续子件 |
+
+2026-10-21 原型（独立 Node 脚本，非完整宿主）：同一套 `session-mounts` 算法下，两个进程抢同一会话只有一个成功，另一个报 `session-owner`；不同会话可并行认领；owner 退出后新进程可回收。完整 profile、宿主启动顺序和真实 `nano.*` 握手已由 #18 的 14 项真实宿主测试覆盖。

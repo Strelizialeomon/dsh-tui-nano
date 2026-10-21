@@ -98,10 +98,16 @@ export function parseFrameLine(line, { requireNonce = false, nonce } = {}) {
 
   if (typeof value.method === 'string') {
     if (!value.method.startsWith('nano.')) {
-      throw new ProtocolViolation(`method is outside the nano namespace: ${value.method}`, ERROR_CODES.get('jsonrpc/method-not-found'))
+      throw withRequestId(
+        new ProtocolViolation(`method is outside the nano namespace: ${value.method}`, ERROR_CODES.get('jsonrpc/method-not-found')),
+        value,
+      )
     }
     if (!isPlainObject(value.params)) {
-      throw new ProtocolViolation('params must be an object', ERROR_CODES.get('jsonrpc/invalid-params'))
+      throw withRequestId(
+        new ProtocolViolation('params must be an object', ERROR_CODES.get('jsonrpc/invalid-params')),
+        value,
+      )
     }
     if (Object.hasOwn(value, 'id')) {
       if (typeof value.id !== 'string' || value.id === '') {
@@ -266,6 +272,11 @@ function validateErrorObject(error) {
   }
 }
 
+function withRequestId(error, value) {
+  if (typeof value.id === 'string' && value.id !== '') error.requestId = value.id
+  return error
+}
+
 function requireNonEmptyString(value, field) {
   if (typeof value !== 'string' || value === '') throw new ProtocolViolation(`${field} must be a non-empty string`)
 }
@@ -283,18 +294,4 @@ function isPlainObject(value) {
 }
 
 /** Capability names this generation understands; unknown names are optional minor additions. */
-const KNOWN_CAPABILITIES = new Set([
-  'agent',
-  'sessionPersistence',
-  'sessionQuery',
-  'attachments',
-  'userQuestions',
-  'approval',
-  'jobs',
-  'subagents',
-  'schedule',
-  'monitor',
-  'terminal',
-  'tool-ask-user',
-  'networkListener',
-])
+const KNOWN_CAPABILITIES = new Set(CONTRACT.capabilityNames)

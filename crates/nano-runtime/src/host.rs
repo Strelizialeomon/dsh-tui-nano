@@ -71,6 +71,8 @@ pub struct HostOptions {
     pub request_timeout: Option<Duration>,
     /// Test-only faults forwarded to the bridge config.
     pub test_faults: Option<Value>,
+    /// Test-only: force the stdin/stdout nonce fallback transport.
+    pub force_fallback: bool,
 }
 
 /// Events surfaced to the app.
@@ -228,8 +230,12 @@ impl Host {
             options.test_faults.as_ref(),
         )?;
 
-        let spawned = spawn_primary(&preflight.paths, &patch_path, &preflight.official_version)
-            .or_else(|_| spawn_fallback(&preflight.paths, &patch_path, &preflight.official_version))?;
+        let spawned = if options.force_fallback {
+            spawn_fallback(&preflight.paths, &patch_path, &preflight.official_version)?
+        } else {
+            spawn_primary(&preflight.paths, &patch_path, &preflight.official_version)
+                .or_else(|_| spawn_fallback(&preflight.paths, &patch_path, &preflight.official_version))?
+        };
 
         let lifecycle = Lifecycle::new();
         lifecycle.transition(LifecycleState::Starting)?;
@@ -318,34 +324,32 @@ impl Host {
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                self.inner
-                    .shared
-                    .lifecycle
-                    .transition_if_allowed(LifecycleState::Failed);
-                return Err(HostError::Timeout(format!(
+                return Err(self.fail_handshake(HostError::Timeout(format!(
                     "handshake did not complete; diagnostics: {}",
                     self.diagnostics_tail(5).join(" | ")
-                )));
+                ))));
             }
             let event = self.next_event(Some(remaining))?;
             match event {
                 HostEvent::Hello(hello) => {
-                    hello.validate(&self.inner.shared.runtime_id, self.inner.shared.generation)?;
+                    hello
+                        .validate(&self.inner.shared.runtime_id, self.inner.shared.generation)
+                        .map_err(|error| self.fail_handshake(error.into()))?;
                     if hello.root_session_id != self.inner.shared.root_session_id {
-                        return Err(HostError::Handshake(format!(
+                        return Err(self.fail_handshake(HostError::Handshake(format!(
                             "rootSessionId mismatch: expected {}, received {}",
                             self.inner.shared.root_session_id, hello.root_session_id
-                        )));
+                        ))));
                     }
                     let expected_mode = match self.inner.shared.session_mode {
                         SessionMode::Create => SessionFactMode::Created,
                         SessionMode::Resume => SessionFactMode::Resumed,
                     };
                     if hello.session.mode != expected_mode {
-                        return Err(HostError::Handshake(format!(
+                        return Err(self.fail_handshake(HostError::Handshake(format!(
                             "session mode mismatch: expected {:?}, received {:?}",
                             expected_mode, hello.session.mode
-                        )));
+                        ))));
                     }
                     self.inner.shared.lifecycle.transition(LifecycleState::Ready)?;
                     *self.inner.hello.lock().expect("hello mutex poisoned") = Some(hello.clone());
@@ -380,12 +384,12 @@ impl Host {
                     });
                 }
                 HostEvent::ProtocolFailure(message) => {
-                    return Err(HostError::Handshake(message));
+                    return Err(self.fail_handshake(HostError::Handshake(message)));
                 }
                 other => {
-                    return Err(HostError::Handshake(format!(
+                    return Err(self.fail_handshake(HostError::Handshake(format!(
                         "unexpected frame before hello: {other:?}"
-                    )));
+                    ))));
                 }
             }
         }
@@ -471,8 +475,50 @@ impl Host {
         if let Some(outcome) = self.inner.shutdown.lock().expect("shutdown mutex poisoned").clone() {
             return outcome;
         }
-        let deadline = Instant::now() + Duration::from_millis(GRACEFUL_SHUTDOWN_MS);
         let state = self.inner.shared.lifecycle.state();
+        if matches!(
+            state,
+            LifecycleState::Starting
+                | LifecycleState::Handshaking
+                | LifecycleState::Failed
+                | LifecycleState::Disconnected
+        ) {
+            // No request can be acknowledged on these paths. Close the transport
+            // so a surviving host runs its EOF cleanup, then use the short TERM
+            // window instead of the full graceful budget.
+            self.inner
+                .shared
+                .lifecycle
+                .transition_if_allowed(LifecycleState::Stopping);
+            self.close_transport();
+            let forced = self.wait_for_exit_or_terminate(
+                Instant::now() + Duration::from_millis(TERM_GRACE_MS),
+            );
+            let process_exited = self.inner.shared.exited.load(Ordering::SeqCst);
+            self.inner
+                .shared
+                .lifecycle
+                .transition_if_allowed(if process_exited && !forced {
+                    LifecycleState::Stopped
+                } else {
+                    LifecycleState::CleanupFailed
+                });
+            let outcome = ShutdownOutcome {
+                ack: false,
+                process_exited,
+                exit_code: *self.inner.shared.exit_code.lock().expect("exit code mutex poisoned"),
+                forced,
+                report: None,
+                scope_cleared: None,
+                session_saved: None,
+                clean: false,
+            };
+            *self.inner.shutdown.lock().expect("shutdown mutex poisoned") = Some(outcome.clone());
+            self.remove_patch();
+            return outcome;
+        }
+
+        let deadline = Instant::now() + Duration::from_millis(GRACEFUL_SHUTDOWN_MS);
         let mut ack = false;
         let mut report = None;
 
@@ -512,25 +558,7 @@ impl Host {
             LifecycleState::Stopping | LifecycleState::Stopped | LifecycleState::CleanupFailed => {}
         }
 
-        let mut forced = false;
-        if !self.inner.shared.exited.load(Ordering::SeqCst) {
-            while !self.inner.shared.exited.load(Ordering::SeqCst) && Instant::now() < deadline {
-                thread::sleep(Duration::from_millis(20));
-            }
-        }
-        if !self.inner.shared.exited.load(Ordering::SeqCst) {
-            forced = true;
-            self.terminate_group(libc::SIGTERM);
-            let term_deadline = Instant::now() + Duration::from_millis(TERM_GRACE_MS);
-            while !self.inner.shared.exited.load(Ordering::SeqCst) && Instant::now() < term_deadline {
-                thread::sleep(Duration::from_millis(20));
-            }
-            if !self.inner.shared.exited.load(Ordering::SeqCst) {
-                self.terminate_group(libc::SIGKILL);
-                self.wait_for_exit(Duration::from_secs(2));
-            }
-        }
-
+        let forced = self.wait_for_exit_or_terminate(deadline);
         let process_exited = self.inner.shared.exited.load(Ordering::SeqCst);
         let scope_cleared = report.as_ref().map(scope_cleared_from_report);
         let session_saved = report.as_ref().and_then(session_saved_from_report);
@@ -564,8 +592,9 @@ impl Host {
     }
 
     /// Install a signal-forwarding thread. The first SIGINT/SIGTERM/SIGHUP runs
-    /// the normal shutdown path; a second forces KILL. The thread exits once the
-    /// shutdown outcome is cached or a second signal arrives.
+    /// the normal shutdown path; a second forces KILL. The thread returns after a
+    /// second signal, or once the shutdown outcome is cached and another signal
+    /// wakes the iterator; it does not poll in between.
     pub fn forward_signals(self) -> thread::JoinHandle<()> {
         thread::spawn(move || {
             use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
@@ -616,6 +645,36 @@ impl Host {
         self.inner.hello.lock().expect("hello mutex poisoned").clone()
     }
 
+    fn fail_handshake(&self, error: HostError) -> HostError {
+        self.inner
+            .shared
+            .lifecycle
+            .transition_if_allowed(LifecycleState::Failed);
+        self.close_transport();
+        error
+    }
+
+    /// Wait until the graceful deadline, then use TERM and finally KILL. Returns
+    /// true when a forced signal was needed.
+    fn wait_for_exit_or_terminate(&self, deadline: Instant) -> bool {
+        while !self.inner.shared.exited.load(Ordering::SeqCst) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        if self.inner.shared.exited.load(Ordering::SeqCst) {
+            return false;
+        }
+        self.terminate_group(libc::SIGTERM);
+        let term_deadline = Instant::now() + Duration::from_millis(TERM_GRACE_MS);
+        while !self.inner.shared.exited.load(Ordering::SeqCst) && Instant::now() < term_deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        if !self.inner.shared.exited.load(Ordering::SeqCst) {
+            self.terminate_group(libc::SIGKILL);
+            self.wait_for_exit(Duration::from_secs(2));
+        }
+        true
+    }
+
     fn request_internal(
         &self,
         method: &str,
@@ -647,7 +706,7 @@ impl Host {
             }
             pending.insert(id.clone(), sender);
         }
-        let encoded = encode_request(
+        let encoded = match encode_request(
             &id,
             method,
             params,
@@ -656,7 +715,18 @@ impl Host {
             } else {
                 None
             },
-        )?;
+        ) {
+            Ok(encoded) => encoded,
+            Err(error) => {
+                self.inner
+                    .shared
+                    .pending
+                    .lock()
+                    .expect("pending mutex poisoned")
+                    .remove(&id);
+                return Err(error.into());
+            }
+        };
         if let Err(error) = self.write_frame(&encoded) {
             self.inner
                 .shared
@@ -790,6 +860,7 @@ fn spawn_primary(paths: &RuntimePaths, patch_path: &Path, _official: &str) -> Re
     let (from_child_read, from_child_write) = os_pipe::pipe()
         .map_err(|error| HostError::Spawn(format!("could not create fd 4 pipe: {error}")))?;
     let mut command = base_command(paths, patch_path);
+    command.env("NANO_TRANSPORT", "fd");
     let in_fd = to_child_read.as_raw_fd();
     let out_fd = from_child_write.as_raw_fd();
     unsafe {
@@ -844,6 +915,7 @@ fn spawn_fallback(
     _official: &str,
 ) -> Result<SpawnedHost, HostError> {
     let mut command = base_command(paths, patch_path);
+    command.env("NANO_TRANSPORT", "stdio");
     command.stdin(Stdio::piped());
     let mut child = command
         .spawn()
@@ -1042,6 +1114,11 @@ fn spawn_waiter(shared: Arc<Shared>, child: Arc<ChildState>) {
                 Ok(Some(status)) => {
                     *shared.exit_code.lock().expect("exit code mutex poisoned") = status.code();
                     shared.exited.store(true, Ordering::SeqCst);
+                    if shared.lifecycle.state() == LifecycleState::Disconnected {
+                        shared
+                            .lifecycle
+                            .transition_if_allowed(LifecycleState::Lost);
+                    }
                     break;
                 }
                 Ok(None) => {}

@@ -16,9 +16,20 @@ import { StartupError } from './errors.mjs'
  *   close: () => void
  * }}
  */
-export function openTransport({ nonce } = {}) {
-  if (descriptorUsable(3) && descriptorUsable(4)) {
-    return createFdTransport()
+export function openTransport({ nonce, kind } = {}) {
+  if (kind === 'stdio') {
+    if (typeof nonce !== 'string' || nonce === '') {
+      throw new StartupError('unsupported', 'the stdio fallback requires a per-generation nonce')
+    }
+    return createStdioTransport()
+  }
+  if (kind === undefined || kind === 'fd') {
+    if (descriptorUsable(3) && descriptorUsable(4)) {
+      return createFdTransport()
+    }
+    if (kind === 'fd') {
+      throw new StartupError('unsupported', 'the runtime requested fd 3/4, but those descriptors are not usable')
+    }
   }
   if (typeof nonce !== 'string' || nonce === '') {
     throw new StartupError('unsupported', 'dedicated fd 3/4 are unavailable and no fallback nonce was supplied')

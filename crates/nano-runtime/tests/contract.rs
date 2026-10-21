@@ -10,10 +10,11 @@ use nano_runtime::protocol::{
     parse_incoming, Address, EventParams, FrameRules, Hello, ShutdownReport, StartupErrorParams,
     StreamEndedParams,
 };
+use nano_runtime::protocol::KNOWN_CAPABILITIES;
 use nano_runtime::{
     ERROR_CODE_NAMES, EVENT_KINDS, GRACEFUL_SHUTDOWN_MS, IMPLEMENTED_METHODS, LIFECYCLE_STATES,
     LIFECYCLE_TRANSITIONS, MAX_ATTACHMENT_CHUNK_BYTES, MAX_FRAME_BYTES, MAX_PENDING_REQUESTS,
-    STARTUP_ERROR_CODES, TERM_GRACE_MS,
+    MAX_REPLAY_EVENTS, SHUTDOWN_STEP_NAMES, STARTUP_ERROR_CODES, TERM_GRACE_MS,
 };
 
 const CONTRACT_TEXT: &str = include_str!("../../../protocol/nano-protocol.json");
@@ -41,6 +42,30 @@ fn limits_match() {
     assert_eq!(limits["gracefulShutdownMs"].as_u64(), Some(GRACEFUL_SHUTDOWN_MS));
     assert_eq!(limits["termGraceMs"].as_u64(), Some(TERM_GRACE_MS));
     assert_eq!(limits["mountLockStaleMs"].as_u64(), Some(30_000));
+    assert_eq!(limits["maxReplayEvents"].as_u64(), Some(MAX_REPLAY_EVENTS));
+}
+
+#[test]
+fn capability_names_and_shutdown_steps_match() {
+    let contract = contract();
+    let names: BTreeSet<&str> = contract["capabilityNames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap())
+        .collect();
+    assert_eq!(names, KNOWN_CAPABILITIES.into_iter().collect::<BTreeSet<_>>());
+    let steps: BTreeSet<&str> = contract["shutdownSteps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap())
+        .collect();
+    assert_eq!(steps, SHUTDOWN_STEP_NAMES.into_iter().collect::<BTreeSet<_>>());
+    assert_eq!(
+        contract["shapes"]["capability"]["required"].as_str(),
+        Some("boolean?")
+    );
 }
 
 #[test]

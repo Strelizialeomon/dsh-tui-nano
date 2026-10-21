@@ -62,7 +62,7 @@ pub const LIFECYCLE_STATES: [&str; 9] = [
 ];
 
 /// Lifecycle transitions in contract order.
-pub const LIFECYCLE_TRANSITIONS: [(&str, &str); 16] = [
+pub const LIFECYCLE_TRANSITIONS: [(&str, &str); 15] = [
     ("stopped", "starting"),
     ("starting", "handshaking"),
     ("handshaking", "ready"),
@@ -71,7 +71,6 @@ pub const LIFECYCLE_TRANSITIONS: [(&str, &str); 16] = [
     ("starting", "failed"),
     ("handshaking", "failed"),
     ("ready", "disconnected"),
-    ("disconnected", "ready"),
     ("ready", "lost"),
     ("ready", "stopping"),
     ("disconnected", "lost"),
@@ -114,6 +113,19 @@ pub const IMPLEMENTED_METHODS: [&str; 8] = [
 
 /// Event kinds this client accepts.
 pub const EVENT_KINDS: [&str; 1] = ["session.event"];
+
+/// Shutdown report step names, in report order.
+pub const SHUTDOWN_STEP_NAMES: [&str; 6] = [
+    "accepting",
+    "subscriptions",
+    "agents",
+    "persistence",
+    "dispose",
+    "ledger",
+];
+
+/// Maximum durable events replayed by one subscribe request.
+pub const MAX_REPLAY_EVENTS: u64 = 10_000;
 
 /// Startup error codes accepted from the host.
 pub const STARTUP_ERROR_CODES: [&str; 4] = ["occupied", "startup-failed", "cleanup-failed", "unsupported"];

@@ -18,6 +18,8 @@ import {
   IMPLEMENTED_NOTIFICATION_METHODS,
   IMPLEMENTED_REQUEST_METHODS,
 } from '../runtime/methods.mjs'
+import { buildCapabilities } from '../runtime/capabilities.mjs'
+import { SHUTDOWN_STEP_NAMES } from '../runtime/host.mjs'
 import {
   encodeFrame,
   parseFrameLine,
@@ -119,4 +121,17 @@ test('encodeFrame produces one newline-terminated frame', () => {
   const bytes = encodeFrame(CONTRACT.fixtures.request)
   assert.equal(bytes.at(-1), 0x0a)
   assert.equal(bytes.toString('utf8').trim().split('\n').length, 1)
+})
+
+test('capability names match the contract and unanswered seams are unavailable', () => {
+  const capabilities = buildCapabilities({ get: () => undefined }, {})
+  assert.deepEqual(Object.keys(capabilities).sort(), [...CONTRACT.capabilityNames].sort())
+  assert.equal(capabilities.approval.status, 'unavailable')
+  assert.equal(capabilities.userQuestions.status, 'unavailable')
+  assert.equal(capabilities['tool-ask-user'].status, 'unsupported')
+  assert.equal(capabilities.schedule.status, 'unsupported')
+})
+
+test('shutdown step names match the contract', () => {
+  assert.deepEqual([...SHUTDOWN_STEP_NAMES], CONTRACT.shutdownSteps)
 })

@@ -60,3 +60,42 @@ test('flush rejects when the sink never drains', async () => {
   writer.enqueueEvent('sub-1', Buffer.from('event\n'))
   await assert.rejects(writer.flush({ timeoutMs: 20 }), /did not flush/)
 })
+
+test('a write failure settles the in-flight control promise', async () => {
+  const writer = new BoundedWriter({
+    write: async () => {
+      throw new Error('EPIPE')
+    },
+  })
+  const control = writer.sendControl(Buffer.from('hello\n'))
+  await assert.rejects(control, /EPIPE/)
+})
+
+test('queued control frames reject when an earlier write fails', async () => {
+  let calls = 0
+  const writer = new BoundedWriter({
+    write: async () => {
+      calls += 1
+      if (calls === 1) throw new Error('EPIPE')
+      return undefined
+    },
+  })
+  const first = writer.sendControl(Buffer.from('one\n'))
+  const second = writer.sendControl(Buffer.from('two\n'))
+  await assert.rejects(first, /EPIPE/)
+  await assert.rejects(second, /EPIPE/)
+})
+
+test('control and event sends short-circuit after a transport failure', async () => {
+  const writer = new BoundedWriter({
+    write: async () => {
+      throw new Error('EPIPE')
+    },
+  })
+  await assert.rejects(writer.sendControl(Buffer.from('one\n')), /EPIPE/)
+  await assert.rejects(writer.sendControl(Buffer.from('two\n')), /EPIPE/)
+  assert.deepEqual(writer.enqueueEvent('sub-1', Buffer.from('event\n')), {
+    ok: false,
+    reason: 'transport-failed',
+  })
+})

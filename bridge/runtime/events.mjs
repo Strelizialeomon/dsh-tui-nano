@@ -6,6 +6,7 @@
 // are fanned out with a per-subscription envelope sequence; a slow consumer is
 // closed explicitly rather than being dropped silently.
 import { randomBytes } from 'node:crypto'
+import { LIMITS } from '../../protocol/index.mjs'
 import { encodeFrame } from './frames.mjs'
 import { RpcError } from './errors.mjs'
 
@@ -56,6 +57,12 @@ export class SubscriptionHub {
     }
     if (start > baseline) {
       throw new RpcError('jsonrpc/invalid-params', `fromSeq ${String(start)} is past the current seq ${String(baseline)}`)
+    }
+    if (baseline - start > LIMITS.maxReplayEvents) {
+      throw new RpcError(
+        'jsonrpc/invalid-params',
+        `replay window ${String(baseline - start)} exceeds maxReplayEvents ${String(LIMITS.maxReplayEvents)}; request a later fromSeq`,
+      )
     }
 
     const subscription = {

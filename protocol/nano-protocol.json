@@ -1,13 +1,20 @@
 {
   "contract": "dsh-tui-nano/nano-protocol",
   "contractVersion": "1.0.0",
-  "protocol": { "major": 1, "minor": 0 },
+  "protocol": {
+    "major": 1,
+    "minor": 0
+  },
   "namespace": "nano.*",
   "sourceOfTruth": "This file is the single machine-checkable definition of the Nano host protocol. Both the TypeScript bridge and the Rust runtime load it in tests; method tables, limits, error codes, lifecycle edges, event kinds and fixtures are compared against each implementation so neither side can drift silently.",
   "transport": {
     "encoding": "utf-8",
     "framing": "ndjson",
-    "primary": { "requestFd": 3, "responseFd": 4, "nonceRequired": false },
+    "primary": {
+      "requestFd": 3,
+      "responseFd": 4,
+      "nonceRequired": false
+    },
     "fallback": {
       "requestFd": 0,
       "responseFd": 1,
@@ -25,7 +32,8 @@
     "maxEventFrameBytes": 262144,
     "gracefulShutdownMs": 10000,
     "termGraceMs": 3000,
-    "mountLockStaleMs": 30000
+    "mountLockStaleMs": 30000,
+    "maxReplayEvents": 10000
   },
   "lifecycle": {
     "states": [
@@ -40,22 +48,66 @@
       "cleanup-failed"
     ],
     "transitions": [
-      ["stopped", "starting"],
-      ["starting", "handshaking"],
-      ["handshaking", "ready"],
-      ["starting", "stopping"],
-      ["handshaking", "stopping"],
-      ["starting", "failed"],
-      ["handshaking", "failed"],
-      ["ready", "disconnected"],
-      ["disconnected", "ready"],
-      ["ready", "lost"],
-      ["ready", "stopping"],
-      ["disconnected", "lost"],
-      ["failed", "stopping"],
-      ["lost", "stopping"],
-      ["stopping", "stopped"],
-      ["stopping", "cleanup-failed"]
+      [
+        "stopped",
+        "starting"
+      ],
+      [
+        "starting",
+        "handshaking"
+      ],
+      [
+        "handshaking",
+        "ready"
+      ],
+      [
+        "starting",
+        "stopping"
+      ],
+      [
+        "handshaking",
+        "stopping"
+      ],
+      [
+        "starting",
+        "failed"
+      ],
+      [
+        "handshaking",
+        "failed"
+      ],
+      [
+        "ready",
+        "disconnected"
+      ],
+      [
+        "ready",
+        "lost"
+      ],
+      [
+        "ready",
+        "stopping"
+      ],
+      [
+        "disconnected",
+        "lost"
+      ],
+      [
+        "failed",
+        "stopping"
+      ],
+      [
+        "lost",
+        "stopping"
+      ],
+      [
+        "stopping",
+        "stopped"
+      ],
+      [
+        "stopping",
+        "cleanup-failed"
+      ]
     ]
   },
   "startupErrorCodes": [
@@ -65,21 +117,66 @@
     "unsupported"
   ],
   "errorCodes": [
-    { "code": -32700, "name": "jsonrpc/parse-error" },
-    { "code": -32600, "name": "jsonrpc/invalid-request" },
-    { "code": -32601, "name": "jsonrpc/method-not-found" },
-    { "code": -32602, "name": "jsonrpc/invalid-params" },
-    { "code": -32603, "name": "jsonrpc/internal-error" },
-    { "code": 1001, "name": "nano/not-ready" },
-    { "code": 1002, "name": "nano/subscription-unknown" },
-    { "code": 1003, "name": "nano/frame-too-large" },
-    { "code": 1004, "name": "nano/pending-limit" },
-    { "code": 1005, "name": "nano/generation-mismatch" },
-    { "code": 1006, "name": "nano/cancelled" },
-    { "code": 1007, "name": "nano/cleanup-failed" },
-    { "code": 1008, "name": "nano/unsupported" },
-    { "code": 1009, "name": "nano/protocol" },
-    { "code": 1010, "name": "nano/closed" }
+    {
+      "code": -32700,
+      "name": "jsonrpc/parse-error"
+    },
+    {
+      "code": -32600,
+      "name": "jsonrpc/invalid-request"
+    },
+    {
+      "code": -32601,
+      "name": "jsonrpc/method-not-found"
+    },
+    {
+      "code": -32602,
+      "name": "jsonrpc/invalid-params"
+    },
+    {
+      "code": -32603,
+      "name": "jsonrpc/internal-error"
+    },
+    {
+      "code": 1001,
+      "name": "nano/not-ready"
+    },
+    {
+      "code": 1002,
+      "name": "nano/subscription-unknown"
+    },
+    {
+      "code": 1003,
+      "name": "nano/frame-too-large"
+    },
+    {
+      "code": 1004,
+      "name": "nano/pending-limit"
+    },
+    {
+      "code": 1005,
+      "name": "nano/generation-mismatch"
+    },
+    {
+      "code": 1006,
+      "name": "nano/cancelled"
+    },
+    {
+      "code": 1007,
+      "name": "nano/cleanup-failed"
+    },
+    {
+      "code": 1008,
+      "name": "nano/unsupported"
+    },
+    {
+      "code": 1009,
+      "name": "nano/protocol"
+    },
+    {
+      "code": 1010,
+      "name": "nano/closed"
+    }
   ],
   "shapes": {
     "protocolVersion": {
@@ -99,7 +196,8 @@
     "capability": {
       "status": "enum:supported|unavailable|unsupported",
       "mode": "string?",
-      "detail": "string?"
+      "detail": "string?",
+      "required": "boolean?"
     },
     "capabilityMap": {
       "*": "capability"
@@ -187,8 +285,15 @@
       "status": "implemented",
       "params": {
         "shape": "startupError",
-        "required": ["code", "message"],
-        "optional": ["holderPid", "generation", "repairPath"]
+        "required": [
+          "code",
+          "message"
+        ],
+        "optional": [
+          "holderPid",
+          "generation",
+          "repairPath"
+        ]
       }
     },
     {
@@ -199,11 +304,16 @@
       "status": "implemented",
       "params": {
         "required": [],
-        "optional": ["reason"]
+        "optional": [
+          "reason"
+        ]
       },
       "result": {
         "shape": "shutdownReport",
-        "required": ["steps", "clean"]
+        "required": [
+          "steps",
+          "clean"
+        ]
       }
     },
     {
@@ -213,12 +323,23 @@
       "owner": "S01",
       "status": "implemented",
       "params": {
-        "required": ["address"],
-        "optional": ["kinds", "fromSeq"]
+        "required": [
+          "address"
+        ],
+        "optional": [
+          "kinds",
+          "fromSeq"
+        ]
       },
       "result": {
-        "required": ["subscriptionId", "address", "seq"],
-        "optional": ["header"]
+        "required": [
+          "subscriptionId",
+          "address",
+          "seq"
+        ],
+        "optional": [
+          "header"
+        ]
       }
     },
     {
@@ -228,7 +349,9 @@
       "owner": "S01",
       "status": "implemented",
       "params": {
-        "required": ["subscriptionId"],
+        "required": [
+          "subscriptionId"
+        ],
         "optional": []
       },
       "result": {
@@ -243,11 +366,15 @@
       "owner": "S01",
       "status": "implemented",
       "params": {
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "optional": []
       },
       "result": {
-        "required": ["cancelled"],
+        "required": [
+          "cancelled"
+        ],
         "optional": []
       }
     },
@@ -284,7 +411,9 @@
           "subscriptionId",
           "outcome"
         ],
-        "optional": ["reason"]
+        "optional": [
+          "reason"
+        ]
       }
     },
     {
@@ -294,8 +423,12 @@
       "owner": "S09",
       "status": "reserved",
       "params": {
-        "required": ["sessionId"],
-        "optional": ["terminalId"]
+        "required": [
+          "sessionId"
+        ],
+        "optional": [
+          "terminalId"
+        ]
       }
     },
     {
@@ -305,8 +438,15 @@
       "owner": "S09",
       "status": "reserved",
       "params": {
-        "required": ["attachmentId", "sequence", "bytes"],
+        "required": [
+          "attachmentId",
+          "sequence",
+          "bytes"
+        ],
         "optional": []
+      },
+      "paramsSemantics": {
+        "bytes": "utf-8"
       }
     },
     {
@@ -316,8 +456,16 @@
       "owner": "S09",
       "status": "reserved",
       "params": {
-        "required": ["attachmentId", "sequence"],
-        "optional": ["refusal"]
+        "required": [
+          "attachmentId",
+          "sequence"
+        ],
+        "optional": [
+          "refusal"
+        ]
+      },
+      "paramsSemantics": {
+        "refusal": "enum:read-only|not-running"
       }
     },
     {
@@ -327,8 +475,13 @@
       "owner": "S09",
       "status": "reserved",
       "params": {
-        "required": ["attachmentId", "writable"],
-        "optional": ["info"]
+        "required": [
+          "attachmentId",
+          "writable"
+        ],
+        "optional": [
+          "info"
+        ]
       }
     },
     {
@@ -338,8 +491,14 @@
       "owner": "S03",
       "status": "reserved",
       "params": {
-        "required": ["requestId", "outcome"],
+        "required": [
+          "requestId",
+          "outcome"
+        ],
         "optional": []
+      },
+      "paramsSemantics": {
+        "outcome": "enum:allowed-once|rejected"
       }
     },
     {
@@ -349,8 +508,20 @@
       "owner": "S03",
       "status": "reserved",
       "params": {
-        "required": ["requestId", "answers"],
+        "required": [
+          "requestId",
+          "answers"
+        ],
         "optional": []
+      },
+      "paramsSemantics": {
+        "answers": {
+          "item": {
+            "id": "string",
+            "selected": "array:string",
+            "custom": "string?"
+          }
+        }
       }
     },
     {
@@ -360,8 +531,15 @@
       "owner": "S06",
       "status": "reserved",
       "params": {
-        "required": ["receiptId", "sequence", "bytes"],
+        "required": [
+          "receiptId",
+          "sequence",
+          "bytes"
+        ],
         "optional": []
+      },
+      "paramsSemantics": {
+        "bytes": "base64; maxRawBytes=49152"
       }
     }
   ],
@@ -384,7 +562,9 @@
       "id": "req-1",
       "method": "nano.subscribe",
       "params": {
-        "address": { "rootSessionId": "session-fixture" },
+        "address": {
+          "rootSessionId": "session-fixture"
+        },
         "fromSeq": 0
       }
     },
@@ -393,9 +573,14 @@
       "id": "req-1",
       "result": {
         "subscriptionId": "sub-1",
-        "address": { "rootSessionId": "session-fixture" },
+        "address": {
+          "rootSessionId": "session-fixture"
+        },
         "seq": 3,
-        "header": { "id": "session-fixture", "cwd": "/work" }
+        "header": {
+          "id": "session-fixture",
+          "cwd": "/work"
+        }
       }
     },
     "errorResponse": {
@@ -404,14 +589,19 @@
       "error": {
         "code": 1001,
         "message": "not ready",
-        "data": { "state": "starting" }
+        "data": {
+          "state": "starting"
+        }
       }
     },
     "hello": {
       "jsonrpc": "2.0",
       "method": "nano.hello",
       "params": {
-        "protocol": { "major": 1, "minor": 0 },
+        "protocol": {
+          "major": 1,
+          "minor": 0
+        },
         "runtimeId": "rt-fixture",
         "generation": 1,
         "versions": {
@@ -424,15 +614,23 @@
         "session": {
           "mode": "created",
           "seq": 3,
-          "header": { "id": "session-fixture", "cwd": "/work" }
+          "header": {
+            "id": "session-fixture",
+            "cwd": "/work"
+          }
         },
         "capabilities": {
-          "agent": { "status": "supported" },
+          "agent": {
+            "status": "supported"
+          },
           "schedule": {
             "status": "unsupported",
             "detail": "S11 mounts the schedule backend"
           },
-          "tool-ask-user": { "status": "supported", "mode": "blocking" }
+          "tool-ask-user": {
+            "status": "supported",
+            "mode": "blocking"
+          }
         },
         "limits": {
           "maxFrameBytes": 33554432,
@@ -462,7 +660,9 @@
         "sequence": 0,
         "kind": "session.event",
         "payload": {
-          "address": { "rootSessionId": "session-fixture" },
+          "address": {
+            "rootSessionId": "session-fixture"
+          },
           "seq": 0,
           "type": "permission/preset",
           "data": {}
@@ -485,15 +685,56 @@
       "id": "req-3",
       "result": {
         "steps": [
-          { "name": "accepting", "status": "stopped" },
-          { "name": "subscriptions", "status": "stopped" },
-          { "name": "agents", "status": "stopped" },
-          { "name": "persistence", "status": "stopped" },
-          { "name": "dispose", "status": "stopped" },
-          { "name": "ledger", "status": "stopped" }
+          {
+            "name": "accepting",
+            "status": "stopped"
+          },
+          {
+            "name": "subscriptions",
+            "status": "stopped"
+          },
+          {
+            "name": "agents",
+            "status": "stopped"
+          },
+          {
+            "name": "persistence",
+            "status": "stopped"
+          },
+          {
+            "name": "dispose",
+            "status": "stopped"
+          },
+          {
+            "name": "ledger",
+            "status": "stopped"
+          }
         ],
         "clean": true
       }
     }
-  }
+  },
+  "capabilityNames": [
+    "agent",
+    "sessionPersistence",
+    "sessionQuery",
+    "attachments",
+    "userQuestions",
+    "approval",
+    "jobs",
+    "subagents",
+    "schedule",
+    "monitor",
+    "terminal",
+    "tool-ask-user",
+    "networkListener"
+  ],
+  "shutdownSteps": [
+    "accepting",
+    "subscriptions",
+    "agents",
+    "persistence",
+    "dispose",
+    "ledger"
+  ]
 }

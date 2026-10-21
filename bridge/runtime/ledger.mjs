@@ -207,23 +207,28 @@ async function acquireLock({ lockPath, token, staleMs, now, isAlive, sleep }) {
     const holderPid = parseLockPid(content)
     if (holderPid !== undefined) {
       if (!isAlive(holderPid)) {
-        safeUnlink(lockPath)
+        unlinkIfUnchanged(lockPath, content)
         continue
       }
-      // A live holder's lock is normally short-lived; retry briefly before
-      // declaring the session occupied. A live pid is never reclaimed.
+      // A live holder's lock is normally short-lived; a lock held for a
+      // different session must not be reported as this session's owner. Retry
+      // briefly, then fail as a lock-busy startup problem; the ledger record
+      // (read under the lock) is what reports a true session owner.
       if (now() - startedAt < 1000) {
         await sleep(50)
         continue
       }
-      throw new StartupError('occupied', `session mount lock is held by pid ${String(holderPid)}`, {
-        holderPid,
+      throw new StartupError('startup-failed', `session mount lock is busy (pid ${String(holderPid)}); retry`, {
+        cause: new Error('mount lock contention'),
       })
     }
 
     const age = now() - stat.mtimeMs
     if (age > staleMs) {
-      safeUnlink(lockPath)
+      // Re-read and compare immediately before unlinking so a fresh lock that
+      // replaced the stale one is not removed. The pid liveness rule remains
+      // the final authority; this closes the common reclaim race.
+      unlinkIfUnchanged(lockPath, content)
       continue
     }
     if (now() - startedAt > staleMs + 5000) {
@@ -300,6 +305,16 @@ function atomicWriteJson(targetPath, value) {
     }
     safeUnlink(temporary)
     throw error
+  }
+}
+
+function unlinkIfUnchanged(lockPath, expected) {
+  try {
+    if (fs.readFileSync(lockPath, 'utf8') !== expected) return false
+    fs.unlinkSync(lockPath)
+    return true
+  } catch {
+    return false
   }
 }
 

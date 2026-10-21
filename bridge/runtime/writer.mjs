@@ -38,6 +38,7 @@ export class BoundedWriter {
     this.eventBytes = 0
     this.eventBytesBySubscription = new Map()
     this.draining = false
+    this.inFlight = undefined
     this.failed = undefined
     this.closed = false
     this.flushWaiters = []
@@ -55,6 +56,7 @@ export class BoundedWriter {
    * @returns {Promise<void>} write completion.
    */
   sendControl(buffer) {
+    if (this.failed !== undefined) return Promise.reject(this.failed)
     if (this.closed) return Promise.reject(new Error('writer is closed'))
     return new Promise((resolve, reject) => {
       this.controlQueue.push({ buffer, resolve, reject })
@@ -66,9 +68,10 @@ export class BoundedWriter {
    * Queue one event frame for a subscription.
    * @param {string} subscriptionId - owning subscription.
    * @param {Buffer} buffer - encoded event frame.
-   * @returns {{ok: true} | {ok: false, reason: 'slow-consumer'|'event-too-large'}} admission result.
+   * @returns {{ok: true} | {ok: false, reason: 'slow-consumer'|'event-too-large'|'transport-failed'}} admission result.
    */
   enqueueEvent(subscriptionId, buffer) {
+    if (this.failed !== undefined) return { ok: false, reason: 'transport-failed' }
     if (this.closed) return { ok: false, reason: 'slow-consumer' }
     if (buffer.length > this.maxEventFrameBytes) return { ok: false, reason: 'event-too-large' }
     const current = this.eventBytesBySubscription.get(subscriptionId) ?? 0
@@ -127,6 +130,8 @@ export class BoundedWriter {
   close() {
     this.closed = true
     const error = new Error('writer is closed')
+    this.inFlight?.reject?.(error)
+    this.inFlight = undefined
     for (const entry of this.controlQueue.splice(0)) entry.reject(error)
     this.eventQueue = []
     this.eventBytes = 0
@@ -145,12 +150,21 @@ export class BoundedWriter {
       while (true) {
         const entry = this.controlQueue.shift() ?? this.eventQueue.shift()
         if (entry === undefined) break
+        this.inFlight = entry
         if (entry.subscriptionId !== undefined) this.releaseEventBytes(entry.subscriptionId, entry.buffer.length)
-        await this.write(entry.buffer)
+        try {
+          await this.write(entry.buffer)
+        } catch (error) {
+          entry.reject?.(error)
+          throw error
+        }
+        this.inFlight = undefined
         entry.resolve?.()
       }
     } catch (error) {
       this.failed = error
+      this.inFlight?.reject?.(error)
+      this.inFlight = undefined
       for (const entry of this.controlQueue.splice(0)) entry.reject(error)
       for (const entry of this.eventQueue.splice(0)) {
         if (entry.subscriptionId !== undefined) this.releaseEventBytes(entry.subscriptionId, entry.buffer.length)

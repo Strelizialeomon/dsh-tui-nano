@@ -153,7 +153,7 @@ test('reclaims an invalid lock only after it is older than the stale window', as
   await releaseMount(waited)
 })
 
-test('refuses to reclaim a lock held by a live pid', async () => {
+test('reports a long-held lock as lock-busy, not as the session owner', async () => {
   const dataRoot = tempRoot()
   fs.writeFileSync(path.join(dataRoot, LOCK_FILE), '9999-live-token')
   let clock = Date.now()
@@ -170,9 +170,23 @@ test('refuses to reclaim a lock held by a live pid', async () => {
       now: () => clock,
       sleep,
     }),
-    (error) =>
-      error instanceof StartupError && error.code === 'occupied' && error.holderPid === 9999,
+    (error) => error instanceof StartupError && error.code === 'startup-failed' && /busy/.test(error.message),
   )
+})
+
+test('an unreadable ledger refuses startup', async () => {
+  const dataRoot = tempRoot()
+  const ledgerPath = path.join(dataRoot, LEDGER_FILE)
+  fs.writeFileSync(ledgerPath, JSON.stringify({ version: 1, owners: [] }))
+  fs.chmodSync(ledgerPath, 0o000)
+  try {
+    await assert.rejects(
+      claimMount({ dataRoot, pid: 1111, sessionIds: ['session-a'], isAlive: live([1111]) }),
+      (error) => error instanceof StartupError && error.code === 'startup-failed' && Boolean(error.repairPath),
+    )
+  } finally {
+    fs.chmodSync(ledgerPath, 0o600)
+  }
 })
 
 test('only one of two concurrent claims for the same session succeeds', async () => {

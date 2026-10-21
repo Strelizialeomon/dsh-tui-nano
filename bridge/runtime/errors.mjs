@@ -46,6 +46,8 @@ export class ProtocolViolation extends Error {
     super(message)
     this.name = 'ProtocolViolation'
     this.code = code
+    /** Request id when the frame was still identifiable. */
+    this.requestId = undefined
   }
 }
 
