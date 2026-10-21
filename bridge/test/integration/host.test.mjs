@@ -184,6 +184,232 @@ test(
 )
 
 test(
+  'manual shell execution injects bash context and job observation is non-consuming',
+  { skip: process.env.NANO_E2E !== '1' ? 'set NANO_E2E=1' : false, timeout: 180_000 },
+  async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nano-shell-e2e-'))
+    const dshHome = path.join(root, 'dsh-home')
+    const dataRoot = path.join(root, 'data')
+    const work = path.join(root, 'work')
+    fs.mkdirSync(work, { recursive: true })
+    const dsh = execFileSync('which', ['dsh'], { encoding: 'utf8' }).trim()
+    execFileSync(
+      process.execPath,
+      [
+        installScript,
+        '--dsh-home',
+        dshHome,
+        '--data-root',
+        dataRoot,
+        '--bridge-package',
+        bridgeRoot,
+        '--dsh-bin',
+        dsh,
+        '--json',
+      ],
+      { encoding: 'utf8' },
+    )
+
+    const sessionId = `session-${randomUUID()}`
+    const runtimeId = `rt-shell-${randomUUID()}`
+    const patchPath = path.join(dataRoot, 'runtime', 'shell-e2e.json')
+    fs.mkdirSync(path.dirname(patchPath), { recursive: true, mode: 0o700 })
+    fs.writeFileSync(
+      patchPath,
+      JSON.stringify([
+        { id: 'session-persistence-jsonl', config: { root: path.join(dataRoot, 'sessions') } },
+        {
+          id: 'storage-json',
+          config: { root: path.join(dataRoot, 'runtime-data', sessionId, 'storage') },
+        },
+        {
+          id: 'storage-domain',
+          config: {
+            backend: 'json',
+            routes: { schedule: 'nano-schedule-json', nano_probe: 'nano-schedule-json' },
+          },
+        },
+        {
+          id: 'nano-bridge',
+          config: {
+            runtimeId,
+            generation: 1,
+            rootSessionId: sessionId,
+            cwd: work,
+            dataRoot,
+            sessionMode: 'create',
+            officialVersion: '0.2.1-rc.2',
+            nonce: 'shell-e2e-nonce',
+            askUserMode: 'blocking',
+          },
+        },
+      ]),
+      { mode: 0o600 },
+    )
+
+    const child = spawn(process.execPath, [dsh, '--profile', 'dsh-tui-nano', '--patch', patchPath], {
+      cwd: work,
+      env: { ...process.env, DSH_HOME: dshHome },
+      stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe'],
+    })
+    let stderr = ''
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString()
+    })
+    const input = child.stdio[3]
+    const output = child.stdio[4]
+    const frames = []
+    const waiters = []
+    let buffer = Buffer.alloc(0)
+    output.on('data', (chunk) => {
+      buffer = Buffer.concat([buffer, chunk])
+      while (true) {
+        const index = buffer.indexOf(0x0a)
+        if (index < 0) break
+        const line = buffer.subarray(0, index).toString('utf8')
+        buffer = buffer.subarray(index + 1)
+        if (line.trim() === '') continue
+        const frame = JSON.parse(line)
+        if (process.env.NANO_DEBUG === '1') console.error('FRAME', JSON.stringify(frame))
+        frames.push(frame)
+        for (const waiter of [...waiters]) {
+          if (waiter.match(frame)) {
+            waiters.splice(waiters.indexOf(waiter), 1)
+            clearTimeout(waiter.timer)
+            waiter.resolve(frame)
+          }
+        }
+      }
+    })
+    t.after(() => {
+      if (child.exitCode === null) child.kill('SIGKILL')
+    })
+
+    const waitFor = (match, timeout = 60_000) =>
+      new Promise((resolve, reject) => {
+        const existing = frames.find(match)
+        if (existing !== undefined) return resolve(existing)
+        const waiter = { match, resolve }
+        waiter.timer = setTimeout(() => {
+          waiters.splice(waiters.indexOf(waiter), 1)
+          reject(new Error(`timed out; recent=${JSON.stringify(frames.slice(-8))}; stderr=${stderr.slice(-2000)}`))
+        }, timeout)
+        waiters.push(waiter)
+      })
+
+    let counter = 0
+    const call = async (method, params) => {
+      const id = `req-${++counter}`
+      input.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`)
+      return waitFor((frame) => frame.id === id)
+    }
+
+    const hello = await waitFor((frame) => frame.method === 'nano.hello' || frame.method === 'nano.startupError')
+    assert.equal(hello.method, 'nano.hello', `startup error: ${JSON.stringify(hello)}`)
+    const address = { rootSessionId: sessionId }
+    await call('nano.subscribe', {
+      address,
+      kinds: [
+        'session.event',
+        'conversation.status',
+        'conversation.inbox',
+        'conversation.stream',
+        'jobs.event',
+        'jobs.output',
+      ],
+      fromSeq: 0,
+    })
+
+    const snapshot = await call('nano.jobs.snapshot', { address })
+    assert.deepEqual(snapshot.result.jobs, [])
+
+    const exec = await call('nano.shell.exec', {
+      address,
+      command: "printf 'hello\\n'; printf 'oops\\n' >&2; exit 7",
+    })
+    assert.equal(exec.result.exitCode, 7)
+    assert.equal(exec.result.signal, null)
+    assert.equal(exec.result.timedOut, false)
+    assert.equal(exec.result.stdout.text, 'hello\n')
+    assert.equal(exec.result.stderr.text, 'oops\n')
+    assert.equal(exec.result.policy.mode, 'danger-full-access')
+    assert.equal(typeof exec.result.injectedMessageId, 'string')
+
+    // `!!` has no context-injection path.
+    const noInject = await call('nano.shell.exec', {
+      address,
+      command: 'true',
+      inject: false,
+    })
+    assert.equal(noInject.result.injectedMessageId, undefined)
+
+    // Each command is a fresh shell in the session directory; `cd` does not
+    // persist to the next command.
+    const realWork = fs.realpathSync(work)
+    const pwd = await call('nano.shell.exec', { address, command: 'pwd' })
+    assert.equal(pwd.result.stdout.text, `${realWork}\n`)
+    const changed = await call('nano.shell.exec', { address, command: 'cd /; pwd' })
+    assert.equal(changed.result.stdout.text, '/\n')
+    const restored = await call('nano.shell.exec', { address, command: 'pwd' })
+    assert.equal(restored.result.stdout.text, `${realWork}\n`)
+
+    // The synthetic message lands in the official next-step inbox without
+    // waking the driver: no model turn is requested and the status stays idle.
+    const inbox = await waitFor(
+      (frame) =>
+        frame.method === 'nano.event' &&
+        frame.params.kind === 'conversation.inbox' &&
+        (frame.params.payload.inbox?.nextStep ?? []).some(
+          (message) => message.id === exec.result.injectedMessageId,
+        ),
+    )
+    const injected = inbox.params.payload.inbox.nextStep.find(
+      (message) => message.id === exec.result.injectedMessageId,
+    )
+    assert.equal(injected.id, exec.result.injectedMessageId)
+    assert.match(injected.content[0].text, /<bash-input>/)
+    assert.notEqual(injected.source.kind, 'user')
+    const status = await call('nano.conversation.snapshot', { address })
+    assert.equal(status.result.status, 'idle')
+
+    // `!` never allocates a job id.
+    const afterExec = await call('nano.jobs.snapshot', { address })
+    assert.deepEqual(afterExec.result.jobs, [])
+
+    // Unknown and foreign job ids are not-found, not already-finished.
+    const missingFollow = await call('nano.jobs.follow', {
+      address,
+      jobId: 'bash-0000000000000000',
+      from: 0,
+    })
+    assert.equal(missingFollow.error.code, 1028)
+    const missingKill = await call('nano.jobs.kill', {
+      address,
+      jobId: 'bash-0000000000000000',
+    })
+    assert.equal(missingKill.error.code, 1028)
+
+    const wrongAddress = await call('nano.shell.exec', {
+      address: { rootSessionId: 'other-session' },
+      command: 'true',
+    })
+    assert.equal(wrongAddress.error.code, 1011)
+
+    const shutdown = await call('nano.shutdown', {})
+    assert.equal(shutdown.result.clean, true)
+    const exitCode = await new Promise((resolve) => {
+      if (child.exitCode !== null) return resolve(child.exitCode)
+      const timer = setTimeout(() => resolve('timeout'), 15_000)
+      child.once('exit', (code) => {
+        clearTimeout(timer)
+        resolve(code)
+      })
+    })
+    assert.equal(exitCode, 0, `host did not exit cleanly; stderr=${stderr.slice(-2000)}`)
+  },
+)
+
+test(
   'conversation surface submits, dedupes, and keeps official identity',
   { skip: process.env.NANO_E2E !== '1' ? 'set NANO_E2E=1' : false, timeout: 180_000 },
   async (t) => {

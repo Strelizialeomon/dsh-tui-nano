@@ -307,7 +307,7 @@ test('a foreign root is refused before the official service is touched', async (
 test('official validation errors keep the stable code in the RPC error', () => {
   const mapped = scheduleRpcError(Object.assign(new Error('bad cron'), { code: 'invalid_rule' }))
   assert.equal(mapped.rpcName, 'nano/schedule/error')
-  assert.equal(mapped.code, 1028)
+  assert.equal(mapped.code, 1030)
   assert.equal(mapped.data.code, 'invalid_rule')
   assert.match(mapped.message, /invalid_rule/)
 })

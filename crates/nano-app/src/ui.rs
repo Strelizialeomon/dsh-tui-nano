@@ -6,6 +6,7 @@
 
 use nano_controls::{PanelMode, PanelRow};
 use nano_conversation::{ConversationItem, MessageKind, PreviewView, ToolPreview, ToolStatus};
+use nano_jobs::{BashRecord, BashState, JobStatus};
 use nano_schedule::RowKind;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -42,7 +43,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         .split(area);
 
     draw_header(frame, app, layout[0]);
-    if app.skills_panel_open() {
+    if app.jobs_open {
+        draw_jobs(frame, app, layout[1]);
+    } else if app.skills_panel_open() {
         draw_skills_panel(frame, app, layout[1]);
     } else if app.instructions_panel_open() {
         draw_instructions_panel(frame, app, layout[1]);
@@ -84,6 +87,19 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
             app.model.inbox().total_count()
         )),
     ];
+    if !app.jobs.is_empty() {
+        spans.push(Span::raw(format!(
+            " · 任务 {}/{}",
+            app.jobs.active_count(),
+            app.jobs.len()
+        )));
+    }
+    if app.jobs_open {
+        spans.push(Span::styled(
+            " · 任务面板",
+            Style::default().fg(Color::Black).bg(Color::Yellow),
+        ));
+    }
     if app.replay_truncated {
         spans.push(Span::styled(
             " · 更早记录未回放",
@@ -172,6 +188,9 @@ fn draw_feed(frame: &mut Frame, app: &mut App, area: Rect) {
             Style::default().fg(Color::Cyan),
         )));
         wrap_block(&mut lines, &text, width, 200, Color::Cyan);
+    }
+    for record in &app.bash_records {
+        push_bash_record(&mut lines, record, width);
     }
     if lines.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -540,6 +559,217 @@ fn push_preview(lines: &mut Vec<Line<'static>>, preview: &PreviewView, width: us
     }
 }
 
+fn push_bash_record(lines: &mut Vec<Line<'static>>, record: &BashRecord, width: usize) {
+    let color = match &record.state {
+        BashState::Running => Color::Yellow,
+        BashState::Done => match record.result.as_ref().and_then(|result| result.exit_code) {
+            Some(0) => Color::Green,
+            _ => Color::Red,
+        },
+        BashState::Failed(_) | BashState::Unknown(_) => Color::Red,
+    };
+    lines.push(Line::from(vec![
+        Span::styled("bash ", Style::default().fg(Color::Yellow)),
+        Span::styled(
+            format!("!{}", record.command),
+            Style::default().fg(Color::Yellow),
+        ),
+        Span::raw(" · "),
+        Span::styled(record.outcome_label(), Style::default().fg(color)),
+    ]));
+    let stdout = record.stdout();
+    if !stdout.is_empty() {
+        // Keep the tail: the official truncation/spill notice is appended at
+        // the end and must not be cut away by the display bound.
+        wrap_tail_block(lines, &stdout, width, 4_000, Color::White);
+    }
+    let stderr = record.stderr();
+    if !stderr.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "[stderr]",
+            Style::default().fg(Color::Red),
+        )));
+        wrap_tail_block(lines, &stderr, width, 4_000, Color::Red);
+    }
+    if let Some(error) = &record.inject_error {
+        lines.push(Line::from(Span::styled(
+            format!("（输出未注入会话：{error}）"),
+            Style::default().fg(Color::Yellow),
+        )));
+    }
+}
+
+fn draw_jobs(frame: &mut Frame, app: &mut App, area: Rect) {
+    let title = if app.jobs.detail_open() {
+        let job = app.jobs.detail_job();
+        match job {
+            Some(job) => format!(
+                " 任务详情 · {} · {} · ↑↓ 滚动，k 停止，r 重读，Esc 返回 ",
+                job.id,
+                job.status_line()
+            ),
+            None => " 任务详情 · 已移除 · Esc 返回 ".to_string(),
+        }
+    } else {
+        format!(
+            " 任务 · 官方 jobs · {} 个（{} 运行中） · ↑↓ 选择，Enter 详情，k 停止，r 刷新，Esc 关闭 ",
+            app.jobs.len(),
+            app.jobs.active_count()
+        )
+    };
+    let block = Block::default().borders(Borders::ALL).title(title);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let width = inner.width.max(1) as usize;
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if app.jobs.detail_open() {
+        push_job_detail(&mut lines, app, width);
+    } else if app.jobs.is_empty() {
+        let message = if app.ready {
+            "（没有可见任务。Agent 的前台命令在运行期间也会出现在这里。）"
+        } else {
+            "（宿主已断开；任务随宿主结束，不显示跨重启的运行状态）"
+        };
+        lines.push(Line::from(Span::styled(
+            message,
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        push_job_list(&mut lines, app);
+    }
+    let viewport = inner.height as usize;
+    let total = lines.len();
+    let offset = if app.jobs.detail_open() {
+        app.jobs_detail_lines = total;
+        let max_scroll = total.saturating_sub(viewport);
+        total
+            .saturating_sub(viewport)
+            .saturating_sub(app.jobs_scroll_back.min(max_scroll))
+    } else {
+        // Keep the selected row inside the viewport; the list itself is not a
+        // tail view. Up/Down therefore scroll a long list with the selection.
+        list_offset(app.jobs.selected(), total, viewport)
+    };
+    let visible: Vec<Line<'static>> = lines.into_iter().skip(offset).collect();
+    frame.render_widget(Paragraph::new(Text::from(visible)), inner);
+}
+
+fn push_job_list(lines: &mut Vec<Line<'static>>, app: &App) {
+    for (index, job) in app.jobs.jobs().iter().enumerate() {
+        let marker = if index == app.jobs.selected() {
+            "▶"
+        } else {
+            " "
+        };
+        let call = job
+            .call_label()
+            .map(|call| format!(" · 调用 {call}"))
+            .unwrap_or_default();
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{marker} [{}] ", job.kind),
+                Style::default().fg(Color::Magenta),
+            ),
+            Span::raw(format!("{} · ", truncate(&job.label, 96))),
+            Span::styled(
+                job.status_line(),
+                Style::default().fg(job_color(job.status())),
+            ),
+            Span::styled(
+                format!(" · {}{}", job.id, call),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+    }
+}
+
+fn push_job_detail(lines: &mut Vec<Line<'static>>, app: &App, width: usize) {
+    let Some(job) = app.jobs.detail_job() else {
+        lines.push(Line::from(Span::styled(
+            "（任务已从官方列表移除；按 Esc 返回）",
+            Style::default().fg(Color::Red),
+        )));
+        return;
+    };
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("{} {}", job.kind, job.label),
+            Style::default().fg(Color::Magenta),
+        ),
+        Span::raw(" · "),
+        Span::styled(
+            job.status_line(),
+            Style::default().fg(job_color(job.status())),
+        ),
+    ]));
+    lines.push(Line::from(Span::styled(
+        format!(
+            "输出 ring：已写 {} 字节 · 最早保留 {} 字节（只读跟随，不影响模型的 job_output 游标）",
+            job.output.total, job.output.earliest
+        ),
+        Style::default().fg(Color::DarkGray),
+    )));
+    if let Some(call) = &job.tool_call {
+        lines.push(Line::from(Span::styled(
+            format!("所属调用：{}（根调用 {}）", call.call_id, call.root_call_id),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    for path in &job.output.spill_paths {
+        lines.push(Line::from(Span::styled(
+            format!("完整输出：{path}"),
+            Style::default().fg(Color::Yellow),
+        )));
+    }
+    if app.following.contains(&job.id) {
+        lines.push(Line::from(Span::styled(
+            "正在读取输出…",
+            Style::default().fg(Color::Yellow),
+        )));
+    }
+    match app.jobs.output(&job.id) {
+        Some(buffer) => {
+            if buffer.head_truncated {
+                lines.push(Line::from(Span::styled(
+                    "（显示端已裁剪较早的本地缓存；完整输出以官方 ring/spill 为准）",
+                    Style::default().fg(Color::Yellow),
+                )));
+            }
+            if buffer.lossy {
+                lines.push(Line::from(Span::styled(
+                    "（ring 已裁剪：更早字节不可读，不能用后续内容冒充连续输出）",
+                    Style::default().fg(Color::Yellow),
+                )));
+            }
+            if buffer.text.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "（暂无输出）",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            } else {
+                // The buffer keeps its tail; render the tail as well, never the
+                // head of a tail buffer.
+                wrap_tail_block(lines, &buffer.text, width, 200_000, Color::Gray);
+            }
+        }
+        None => lines.push(Line::from(Span::styled(
+            "（尚未读取输出；按 r 读取）",
+            Style::default().fg(Color::DarkGray),
+        ))),
+    }
+}
+
+fn job_color(status: JobStatus) -> Color {
+    match status {
+        JobStatus::Running => Color::Yellow,
+        JobStatus::Stopping => Color::Yellow,
+        JobStatus::Completed => Color::Green,
+        JobStatus::Killed => Color::Red,
+        JobStatus::Failed => Color::Red,
+        JobStatus::Unknown => Color::Magenta,
+    }
+}
+
 fn push_preview_tool(lines: &mut Vec<Line<'static>>, tool: &ToolPreview) {
     let name = tool.name.clone().unwrap_or_else(|| "tool".to_string());
     let state = if tool.complete {
@@ -599,10 +829,15 @@ fn draw_queue(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
-    let title = match app.editing_queue() {
-        Some(message_id) => format!(" 编辑队列项 {message_id} · Enter 应用，Esc 取消 "),
-        None => " 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） "
-            .to_string(),
+    let title = if app.shell_confirm.is_some() {
+        " 人工命令（用户权限，不是 Agent 授权）· Enter 执行，Esc 取消 ".to_string()
+    } else {
+        match app.editing_queue() {
+            Some(message_id) => format!(" 编辑队列项 {message_id} · Enter 应用，Esc 取消 "),
+            None => {
+                " 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行 · Ctrl+T 任务 ".to_string()
+            }
+        }
     };
     let block = Block::default().borders(Borders::ALL).title(title);
     let inner = block.inner(area);
@@ -965,6 +1200,37 @@ fn wrap_segments(line: &str, width: usize) -> Vec<Segment> {
     segments
 }
 
+/// First visible row that keeps the selected list item on screen.
+fn list_offset(selected: usize, total: usize, viewport: usize) -> usize {
+    let visible = viewport.max(1);
+    selected
+        .saturating_sub(visible.saturating_sub(1))
+        .min(total.saturating_sub(visible))
+}
+
+/// Wrap the tail of a block and mark display-side truncation explicitly.
+/// Output tail semantics matter: the newest bytes and the official
+/// truncation/spill notice live at the end.
+fn wrap_tail_block(
+    lines: &mut Vec<Line<'static>>,
+    text: &str,
+    width: usize,
+    max_chars: usize,
+    color: Color,
+) {
+    let characters = text.chars().count();
+    if characters > max_chars {
+        let tail: String = text.chars().skip(characters - max_chars).collect();
+        lines.push(Line::from(Span::styled(
+            format!("[显示已截断：仅显示最后 {max_chars} 字符；完整输出以官方输出为准]"),
+            Style::default().fg(Color::Yellow),
+        )));
+        wrap_block(lines, &tail, width, max_chars, color);
+    } else {
+        wrap_block(lines, text, width, max_chars, color);
+    }
+}
+
 fn wrap_block(
     lines: &mut Vec<Line<'static>>,
     text: &str,
@@ -1059,5 +1325,26 @@ mod tests {
         let segments = wrap_segments("", 10);
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].width, 0);
+    }
+
+    #[test]
+    fn the_tail_renderer_keeps_the_newest_text_and_marks_truncation() {
+        let mut lines = Vec::new();
+        wrap_tail_block(&mut lines, "abcdef", 10, 3, Color::White);
+        let joined: String = lines
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
+            .collect();
+        assert!(joined.contains("显示已截断"));
+        assert!(joined.contains("def"));
+        assert!(!joined.contains("abc"));
+    }
+
+    #[test]
+    fn the_list_offset_keeps_the_selection_visible() {
+        assert_eq!(list_offset(0, 40, 10), 0);
+        assert_eq!(list_offset(20, 40, 10), 11);
+        assert_eq!(list_offset(39, 40, 10), 30);
+        assert_eq!(list_offset(0, 3, 10), 0);
     }
 }

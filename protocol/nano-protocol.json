@@ -245,10 +245,18 @@
     },
     {
       "code": 1027,
-      "name": "nano/schedule/unavailable"
+      "name": "nano/shell/exec-failed"
     },
     {
       "code": 1028,
+      "name": "nano/jobs/not-found"
+    },
+    {
+      "code": 1029,
+      "name": "nano/schedule/unavailable"
+    },
+    {
+      "code": 1030,
       "name": "nano/schedule/error"
     }
   ],
@@ -310,7 +318,7 @@
       "generation": "integer",
       "subscriptionId": "string",
       "sequence": "integer",
-      "kind": "enum:session.event|conversation.status|conversation.inbox|conversation.stream|schedule.changed|skills.changed|instructions.changed|controls.model|controls.permission",
+      "kind": "enum:session.event|conversation.status|conversation.inbox|conversation.stream|schedule.changed|skills.changed|instructions.changed|controls.model|controls.permission|jobs.event|jobs.output",
       "payload": "object"
     },
     "streamEnded": {
@@ -471,6 +479,66 @@
       "sources": "array:instructionSource",
       "budgetNotice": "string?",
       "truncated": "boolean?"
+    },
+    "collectedOutput": {
+      "text": "string",
+      "truncated": "boolean",
+      "spillPath": "string?"
+    },
+    "shellResult": {
+      "exitCode": "integer|null",
+      "signal": "string|null",
+      "timedOut": "boolean",
+      "aborted": "boolean",
+      "stdout": "collectedOutput",
+      "stderr": "collectedOutput",
+      "sandbox": "object?",
+      "policy": "object?",
+      "injectedMessageId": "string?",
+      "injectError": "string?"
+    },
+    "jobToolCall": {
+      "callId": "string",
+      "rootCallId": "string"
+    },
+    "jobOutput": {
+      "total": "integer",
+      "earliest": "integer",
+      "spillPaths": "array:string?"
+    },
+    "jobView": {
+      "id": "string",
+      "kind": "string",
+      "label": "string",
+      "owner": "string?",
+      "status": "enum:running|stopping|completed|killed|failed",
+      "progress": "string?",
+      "detail": "string?",
+      "startedAt": "integer",
+      "finishedAt": "integer?",
+      "output": "jobOutput",
+      "toolCall": "jobToolCall?"
+    },
+    "jobChunk": {
+      "at": "integer",
+      "text": "string",
+      "channel": "enum:stdout|stderr|log?",
+      "gapBefore": "boolean?"
+    },
+    "jobsEvent": {
+      "address": "address",
+      "seq": "integer",
+      "type": "enum:registered|progress|stopping|settled|removed",
+      "job": "jobView",
+      "cause": "enum:producer|kill|teardown?",
+      "awaited": "boolean?"
+    },
+    "jobsOutput": {
+      "address": "address",
+      "seq": "integer",
+      "jobId": "string",
+      "owner": "string?",
+      "total": "integer"
     }
   },
   "methods": [
@@ -1210,6 +1278,105 @@
           "truncated"
         ]
       }
+    },
+    {
+      "name": "nano.shell.exec",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S08",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address",
+          "command"
+        ],
+        "optional": [
+          "inject"
+        ]
+      },
+      "paramsSemantics": {
+        "inject": "boolean; false for `!!` (no context injection)"
+      },
+      "result": {
+        "shape": "shellResult",
+        "required": [
+          "exitCode",
+          "signal",
+          "timedOut",
+          "aborted",
+          "stdout",
+          "stderr"
+        ],
+        "optional": [
+          "sandbox",
+          "policy",
+          "injectedMessageId",
+          "injectError"
+        ]
+      }
+    },
+    {
+      "name": "nano.jobs.snapshot",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S08",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "seq",
+          "jobs"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.jobs.follow",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S08",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address",
+          "jobId",
+          "from"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "chunks",
+          "next",
+          "lossy"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.jobs.kill",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S08",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address",
+          "jobId"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "outcome"
+        ],
+        "optional": []
+      }
     }
   ],
   "eventKinds": [
@@ -1295,6 +1462,41 @@
       "payload": {
         "address": "address",
         "permission": "controlsPermissionState"
+      }
+    },
+    {
+      "kind": "jobs.event",
+      "owner": "S08",
+      "status": "implemented",
+      "payload": {
+        "shape": "jobsEvent",
+        "required": [
+          "address",
+          "seq",
+          "type",
+          "job"
+        ],
+        "optional": [
+          "cause",
+          "awaited"
+        ]
+      }
+    },
+    {
+      "kind": "jobs.output",
+      "owner": "S08",
+      "status": "implemented",
+      "payload": {
+        "shape": "jobsOutput",
+        "required": [
+          "address",
+          "seq",
+          "jobId",
+          "total"
+        ],
+        "optional": [
+          "owner"
+        ]
       }
     }
   ],
@@ -1670,6 +1872,49 @@
           "budgetNotice": "Workspace instruction budget 65536 bytes: omitted AGENTS.global.md"
         }
       }
+    },
+    "shellExec": {
+      "jsonrpc": "2.0",
+      "id": "req-5",
+      "method": "nano.shell.exec",
+      "params": {
+        "address": {
+          "rootSessionId": "session-fixture"
+        },
+        "command": "printf hello"
+      }
+    },
+    "jobsEvent": {
+      "jsonrpc": "2.0",
+      "method": "nano.event",
+      "params": {
+        "runtimeId": "rt-fixture",
+        "generation": 1,
+        "subscriptionId": "sub-1",
+        "sequence": 1,
+        "kind": "jobs.event",
+        "payload": {
+          "address": {
+            "rootSessionId": "session-fixture"
+          },
+          "seq": 1,
+          "type": "settled",
+          "cause": "producer",
+          "awaited": false,
+          "job": {
+            "id": "bash-0123456789abcdef",
+            "kind": "bash",
+            "label": "sleep 30",
+            "status": "completed",
+            "startedAt": 1,
+            "finishedAt": 2,
+            "output": {
+              "total": 12,
+              "earliest": 0
+            }
+          }
+        }
+      }
     }
   },
   "capabilityNames": [
@@ -1689,7 +1934,8 @@
     "modelSelection",
     "permissionPresets",
     "commands",
-    "skills"
+    "skills",
+    "shell"
   ],
   "shutdownSteps": [
     "accepting",

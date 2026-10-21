@@ -68,49 +68,39 @@ fn every_event_kind_is_covered_by_the_contract_shape() {
         .iter()
         .map(|entry| entry["kind"].as_str().unwrap())
         .collect();
-    for kind in &kinds {
-        assert!(
-            [
-                "session.event",
-                "conversation.status",
-                "conversation.inbox",
-                "conversation.stream",
-                "schedule.changed",
-                "controls.model",
-                "controls.permission",
-                "skills.changed",
-                "instructions.changed"
-            ]
-            .contains(kind),
-            "unexpected event kind {kind}"
-        );
-    }
-    // S02 owns four live/durable kinds; S04 and S05 each add two, and S11
-    // adds the schedule refresh signal.
-    assert_eq!(kinds.len(), 9);
-    for kind in ["skills.changed", "instructions.changed"] {
+    // Exact set, not a subset: a future unknown kind must fail this contract
+    // test instead of silently widening what the conversation model accepts.
+    assert_eq!(
+        kinds,
+        vec![
+            "session.event",
+            "conversation.status",
+            "conversation.inbox",
+            "conversation.stream",
+            "schedule.changed",
+            "skills.changed",
+            "instructions.changed",
+            "controls.model",
+            "controls.permission",
+            "jobs.event",
+            "jobs.output"
+        ]
+    );
+    for (owner, kind) in [
+        ("S04", "controls.model"),
+        ("S04", "controls.permission"),
+        ("S05", "skills.changed"),
+        ("S05", "instructions.changed"),
+        ("S08", "jobs.event"),
+        ("S08", "jobs.output"),
+        ("S11", "schedule.changed"),
+    ] {
         let event = contract["eventKinds"]
             .as_array()
             .unwrap()
             .iter()
             .find(|event| event["kind"] == kind)
             .unwrap();
-        assert_eq!(event["owner"], "S05");
-    }
-    let schedule = contract["eventKinds"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|event| event["kind"] == "schedule.changed")
-        .unwrap();
-    assert_eq!(schedule["owner"], "S11");
-    for kind in ["controls.model", "controls.permission"] {
-        let event = contract["eventKinds"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|event| event["kind"] == kind)
-            .unwrap();
-        assert_eq!(event["owner"], "S04");
+        assert_eq!(event["owner"], owner, "{kind} owner");
     }
 }
