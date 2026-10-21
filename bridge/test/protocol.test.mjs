@@ -32,7 +32,7 @@ import {
 test('implemented methods match the contract', () => {
   assert.deepEqual([...IMPLEMENTED_METHODS].sort(), [...CONTRACT_IMPLEMENTED.keys()].sort())
   for (const [name, method] of CONTRACT_IMPLEMENTED) {
-    assert.ok(['S01', 'S02', 'S03'].includes(method.owner), `${name} owner`)
+    assert.ok(['S01', 'S02', 'S03', 'S04', 'S05', 'S06', 'S07', 'S08'].includes(method.owner), `${name} owner`)
     if (method.kind === 'request') {
       assert.ok(IMPLEMENTED_REQUEST_METHODS.includes(name), `${name} must be dispatched as a request`)
     } else {
@@ -56,10 +56,30 @@ test('limits and error codes match the contract', () => {
   assert.equal(LIMITS.termGraceMs, 3000)
   assert.equal(LIMITS.mountLockStaleMs, 30000)
   assert.equal(LIMITS.maxSubmitTextBytes, 32768)
+  assert.equal(LIMITS.maxSkillPreviewBytes, 65536)
   assert.equal(ERROR_CODES.get('nano/conversation/too-large'), 1018)
   assert.equal(ERROR_CODES.get('nano/generation-mismatch'), 1005)
   assert.equal(ERROR_CODES.get('nano/unsupported'), 1008)
   assert.equal(ERROR_CODES.get('nano/closed'), 1010)
+  assert.equal(ERROR_CODES.get('nano/skills/not-found'), 1019)
+  assert.equal(ERROR_CODES.get('nano/skills/no-preview'), 1020)
+  assert.equal(ERROR_CODES.get('nano/skills/preview-failed'), 1021)
+  assert.equal(ERROR_CODES.get('nano/controls/writer-held'), 1022)
+  assert.equal(ERROR_CODES.get('nano/controls/model-unavailable'), 1023)
+  assert.equal(ERROR_CODES.get('nano/controls/permission-rejected'), 1024)
+  assert.equal(ERROR_CODES.get('nano/controls/command-failed'), 1025)
+  assert.equal(ERROR_CODES.get('nano/controls/unavailable'), 1026)
+  assert.equal(ERROR_CODES.get('nano/shell/exec-failed'), 1027)
+  assert.equal(ERROR_CODES.get('nano/jobs/not-found'), 1028)
+  assert.equal(ERROR_CODES.get('nano/sessions/unavailable'), 1029)
+  assert.equal(ERROR_CODES.get('nano/sessions/not-active'), 1030)
+  assert.equal(ERROR_CODES.get('nano/sessions/title-invalid'), 1031)
+  assert.equal(ERROR_CODES.get('nano/sessions/compact-unavailable'), 1032)
+  assert.equal(ERROR_CODES.get('nano/sessions/rejected'), 1033)
+  assert.equal(ERROR_CODES.get('nano/decisions/unknown-request'), 1043)
+  assert.equal(ERROR_CODES.get('nano/decisions/answer-invalid'), 1044)
+  assert.equal(ERROR_CODES.get('nano/decisions/reply-queued'), 1045)
+  assert.equal(ERROR_CODES.get('nano/decisions/answer-failed'), 1046)
 })
 
 test('lifecycle edges are exactly the contract table', () => {
@@ -75,6 +95,13 @@ test('event kinds match', () => {
     'conversation.status',
     'conversation.inbox',
     'conversation.stream',
+    'controls.model',
+    'controls.permission',
+    'sessions.context',
+    'skills.changed',
+    'instructions.changed',
+    'jobs.event',
+    'jobs.output',
     'decisions.approval',
     'decisions.question',
     'decisions.projection',
@@ -106,6 +133,9 @@ test('hello fixture validates and echoes contract limits', () => {
   assert.equal(hello.rootSessionId, 'session-fixture')
   assert.equal(hello.limits.maxFrameBytes, LIMITS.maxFrameBytes)
   assert.equal(hello.capabilities['tool-ask-user'].mode, 'blocking')
+  assert.equal(hello.capabilities.fileReferences.status, 'supported')
+  assert.equal(hello.attachmentLimits.maxImageBytes, 20 * 1024 * 1024)
+  assert.equal(hello.attachmentLimits.fileAdmission, 'verbatim')
 })
 
 test('startupError, event, and streamEnded fixtures validate', () => {
@@ -127,6 +157,69 @@ test('shutdown report fixture has the four facts', () => {
   assert.ok(report.steps.every((step) => step.status === 'stopped'))
 })
 
+test('conversation fixtures parse on the bridge side', () => {
+  const submit = parseFrameLine(JSON.stringify(CONTRACT.fixtures.conversationSubmit))
+  assert.equal(submit.type, 'request')
+  assert.equal(submit.method, 'nano.conversation.submit')
+  assert.equal(submit.params.delivery, 'queue')
+  assert.equal(submit.params.content[0].type, 'text')
+  const withAttachments = parseFrameLine(
+    JSON.stringify(CONTRACT.fixtures.conversationSubmitAttachments),
+  )
+  assert.equal(withAttachments.type, 'request')
+  assert.equal(withAttachments.params.content[1].type, 'image')
+  assert.equal(withAttachments.params.content[1].receiptId, 'receipt-image-fixture')
+  assert.equal(withAttachments.params.content[2].type, 'file')
+  const event = parseFrameLine(JSON.stringify(CONTRACT.fixtures.conversationEvent))
+  assert.equal(event.type, 'notification')
+  const validated = validateEvent(event.params, { runtimeId: 'rt-fixture', generation: 1 })
+  assert.equal(validated.kind, 'conversation.status')
+  assert.equal(validated.payload.status, 'running')
+})
+
+test('sessions fixtures parse on the bridge side', () => {
+  const list = CONTRACT.fixtures.sessionsList
+  assert.equal(list.result.sessions[0].sessionId, 'session-fixture')
+  assert.equal(list.result.sessions[0].current, true)
+  const event = parseFrameLine(JSON.stringify(CONTRACT.fixtures.sessionsContextEvent))
+  const validated = validateEvent(event.params, { runtimeId: 'rt-fixture', generation: 1 })
+  assert.equal(validated.kind, 'sessions.context')
+  assert.equal(validated.payload.projectedTokens, 1200)
+  assert.equal(validated.payload.contextWindow, 128000)
+})
+
+test('shell and jobs fixtures parse on the bridge side', () => {
+  const shell = parseFrameLine(JSON.stringify(CONTRACT.fixtures.shellExec))
+  assert.equal(shell.type, 'request')
+  assert.equal(shell.method, 'nano.shell.exec')
+  assert.equal(shell.params.command, 'printf hello')
+  const jobs = parseFrameLine(JSON.stringify(CONTRACT.fixtures.jobsEvent))
+  assert.equal(jobs.type, 'notification')
+  const validated = validateEvent(jobs.params, { runtimeId: 'rt-fixture', generation: 1 })
+  assert.equal(validated.kind, 'jobs.event')
+  assert.equal(validated.payload.type, 'settled')
+  assert.equal(validated.payload.job.status, 'completed')
+})
+
+test('skill and instruction fixtures parse on the bridge side', () => {
+  const list = parseFrameLine(JSON.stringify(CONTRACT.fixtures.skillsList))
+  assert.equal(list.type, 'request')
+  assert.equal(list.method, 'nano.skills.list')
+  assert.equal(list.params.address.rootSessionId, 'session-fixture')
+  const listed = CONTRACT.fixtures.skillsListResult.result
+  assert.equal(listed.skills[0].name, 'hello-skill')
+  assert.equal(listed.skills[0].modelInvocable, false)
+  assert.ok(listed.commands.includes('compact'))
+  const preview = CONTRACT.fixtures.skillPreviewResult.result
+  assert.equal(preview.limit, LIMITS.maxSkillPreviewBytes)
+  assert.equal(preview.truncated, false)
+  const event = parseFrameLine(JSON.stringify(CONTRACT.fixtures.instructionsEvent))
+  const validated = validateEvent(event.params, { runtimeId: 'rt-fixture', generation: 1 })
+  assert.equal(validated.kind, 'instructions.changed')
+  assert.equal(validated.payload.sources[0].path, 'AGENTS.md')
+  assert.match(validated.payload.budgetNotice, /^Workspace instruction budget/)
+})
+
 test('decision fixtures validate as events', () => {
   for (const fixture of ['approvalEvent', 'questionEvent']) {
     const event = parseFrameLine(JSON.stringify(CONTRACT.fixtures[fixture]))
@@ -134,19 +227,6 @@ test('decision fixtures validate as events', () => {
     assert.match(validated.kind, /^decisions\./)
     assert.equal(validated.payload.address.rootSessionId, 'session-fixture')
   }
-})
-
-test('conversation fixtures parse on the bridge side', () => {
-  const submit = parseFrameLine(JSON.stringify(CONTRACT.fixtures.conversationSubmit))
-  assert.equal(submit.type, 'request')
-  assert.equal(submit.method, 'nano.conversation.submit')
-  assert.equal(submit.params.delivery, 'queue')
-  assert.equal(submit.params.content[0].type, 'text')
-  const event = parseFrameLine(JSON.stringify(CONTRACT.fixtures.conversationEvent))
-  assert.equal(event.type, 'notification')
-  const validated = validateEvent(event.params, { runtimeId: 'rt-fixture', generation: 1 })
-  assert.equal(validated.kind, 'conversation.status')
-  assert.equal(validated.payload.status, 'running')
 })
 
 test('encodeFrame produces one newline-terminated frame', () => {
@@ -166,7 +246,10 @@ test('capability names match the contract and absent seams are unsupported', () 
 
 test('composed interaction seams report the S03 answerer as supported', () => {
   const services = new Set(['approval', 'userQuestions'])
-  const capabilities = buildCapabilities({ get: (key) => (services.has(key) ? {} : undefined) }, {})
+  const capabilities = buildCapabilities(
+    { get: (key) => (services.has(key) ? {} : undefined) },
+    {},
+  )
   assert.equal(capabilities.approval.status, 'supported')
   assert.equal(capabilities.userQuestions.status, 'supported')
   assert.equal(capabilities['tool-ask-user'].status, 'supported')

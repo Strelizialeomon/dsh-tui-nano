@@ -6,11 +6,11 @@ use std::collections::BTreeSet;
 use serde_json::Value;
 
 use nano_runtime::frame::FrameReader;
+use nano_runtime::protocol::KNOWN_CAPABILITIES;
 use nano_runtime::protocol::{
     parse_incoming, Address, EventParams, FrameRules, Hello, ShutdownReport, StartupErrorParams,
     StreamEndedParams,
 };
-use nano_runtime::protocol::KNOWN_CAPABILITIES;
 use nano_runtime::{
     ERROR_CODE_NAMES, EVENT_KINDS, GRACEFUL_SHUTDOWN_MS, IMPLEMENTED_METHODS, LIFECYCLE_STATES,
     LIFECYCLE_TRANSITIONS, MAX_ATTACHMENT_CHUNK_BYTES, MAX_FRAME_BYTES, MAX_PENDING_REQUESTS,
@@ -26,20 +26,35 @@ fn contract() -> Value {
 #[test]
 fn protocol_version_matches() {
     let contract = contract();
-    assert_eq!(contract["protocol"]["major"].as_u64(), Some(u64::from(nano_runtime::PROTOCOL_MAJOR)));
-    assert_eq!(contract["protocol"]["minor"].as_u64(), Some(u64::from(nano_runtime::PROTOCOL_MINOR)));
+    assert_eq!(
+        contract["protocol"]["major"].as_u64(),
+        Some(u64::from(nano_runtime::PROTOCOL_MAJOR))
+    );
+    assert_eq!(
+        contract["protocol"]["minor"].as_u64(),
+        Some(u64::from(nano_runtime::PROTOCOL_MINOR))
+    );
 }
 
 #[test]
 fn limits_match() {
     let limits = &contract()["limits"];
-    assert_eq!(limits["maxFrameBytes"].as_u64(), Some(MAX_FRAME_BYTES as u64));
-    assert_eq!(limits["maxPendingRequests"].as_u64(), Some(MAX_PENDING_REQUESTS as u64));
+    assert_eq!(
+        limits["maxFrameBytes"].as_u64(),
+        Some(MAX_FRAME_BYTES as u64)
+    );
+    assert_eq!(
+        limits["maxPendingRequests"].as_u64(),
+        Some(MAX_PENDING_REQUESTS as u64)
+    );
     assert_eq!(
         limits["maxAttachmentChunkBytes"].as_u64(),
         Some(MAX_ATTACHMENT_CHUNK_BYTES as u64)
     );
-    assert_eq!(limits["gracefulShutdownMs"].as_u64(), Some(GRACEFUL_SHUTDOWN_MS));
+    assert_eq!(
+        limits["gracefulShutdownMs"].as_u64(),
+        Some(GRACEFUL_SHUTDOWN_MS)
+    );
     assert_eq!(limits["termGraceMs"].as_u64(), Some(TERM_GRACE_MS));
     assert_eq!(limits["mountLockStaleMs"].as_u64(), Some(30_000));
     assert_eq!(limits["maxReplayEvents"].as_u64(), Some(MAX_REPLAY_EVENTS));
@@ -54,14 +69,20 @@ fn capability_names_and_shutdown_steps_match() {
         .iter()
         .map(|value| value.as_str().unwrap())
         .collect();
-    assert_eq!(names, KNOWN_CAPABILITIES.into_iter().collect::<BTreeSet<_>>());
+    assert_eq!(
+        names,
+        KNOWN_CAPABILITIES.into_iter().collect::<BTreeSet<_>>()
+    );
     let steps: BTreeSet<&str> = contract["shutdownSteps"]
         .as_array()
         .unwrap()
         .iter()
         .map(|value| value.as_str().unwrap())
         .collect();
-    assert_eq!(steps, SHUTDOWN_STEP_NAMES.into_iter().collect::<BTreeSet<_>>());
+    assert_eq!(
+        steps,
+        SHUTDOWN_STEP_NAMES.into_iter().collect::<BTreeSet<_>>()
+    );
     assert_eq!(
         contract["shapes"]["capability"]["required"].as_str(),
         Some("boolean?")
@@ -77,14 +98,20 @@ fn lifecycle_matches() {
         .iter()
         .map(|value| value.as_str().unwrap())
         .collect();
-    assert_eq!(states, LIFECYCLE_STATES.into_iter().collect::<BTreeSet<_>>());
+    assert_eq!(
+        states,
+        LIFECYCLE_STATES.into_iter().collect::<BTreeSet<_>>()
+    );
     let edges: BTreeSet<(&str, &str)> = contract["lifecycle"]["transitions"]
         .as_array()
         .unwrap()
         .iter()
         .map(|edge| (edge[0].as_str().unwrap(), edge[1].as_str().unwrap()))
         .collect();
-    assert_eq!(edges, LIFECYCLE_TRANSITIONS.into_iter().collect::<BTreeSet<_>>());
+    assert_eq!(
+        edges,
+        LIFECYCLE_TRANSITIONS.into_iter().collect::<BTreeSet<_>>()
+    );
 }
 
 #[test]
@@ -94,7 +121,12 @@ fn error_codes_match() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|entry| (entry["name"].as_str().unwrap(), entry["code"].as_i64().unwrap()))
+        .map(|entry| {
+            (
+                entry["name"].as_str().unwrap(),
+                entry["code"].as_i64().unwrap(),
+            )
+        })
         .collect();
     assert_eq!(codes, ERROR_CODE_NAMES.into_iter().collect::<BTreeSet<_>>());
 }
@@ -108,7 +140,10 @@ fn startup_codes_and_event_kinds_match() {
         .iter()
         .map(|value| value.as_str().unwrap())
         .collect();
-    assert_eq!(startup, STARTUP_ERROR_CODES.into_iter().collect::<BTreeSet<_>>());
+    assert_eq!(
+        startup,
+        STARTUP_ERROR_CODES.into_iter().collect::<BTreeSet<_>>()
+    );
     let kinds: BTreeSet<&str> = contract["eventKinds"]
         .as_array()
         .unwrap()
@@ -127,7 +162,10 @@ fn implemented_methods_match() {
         .filter(|method| method["status"] == "implemented")
         .map(|method| method["name"].as_str().unwrap())
         .collect();
-    assert_eq!(implemented, IMPLEMENTED_METHODS.into_iter().collect::<BTreeSet<_>>());
+    assert_eq!(
+        implemented,
+        IMPLEMENTED_METHODS.into_iter().collect::<BTreeSet<_>>()
+    );
     for method in methods {
         let name = method["name"].as_str().unwrap();
         assert!(name.starts_with("nano."), "{name} is outside nano.*");
@@ -138,10 +176,14 @@ fn implemented_methods_match() {
         );
         match method["status"].as_str().unwrap() {
             "implemented" => assert!(
-                method["owner"] == "S01" || method["owner"] == "S02" || method["owner"] == "S03",
+                ["S01", "S02", "S03", "S04", "S05", "S06", "S07", "S08"]
+                    .contains(&method["owner"].as_str().unwrap()),
                 "{name} is implemented by an owner this contract test does not know"
             ),
-            "reserved" => assert_ne!(method["owner"], "S01", "{name} is reserved but owned by S01"),
+            "reserved" => assert_ne!(
+                method["owner"], "S01",
+                "{name} is reserved but owned by S01"
+            ),
             other => panic!("unknown method status {other}"),
         }
     }

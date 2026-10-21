@@ -1,9 +1,9 @@
 {
   "contract": "dsh-tui-nano/nano-protocol",
-  "contractVersion": "1.0.0",
+  "contractVersion": "1.1.0",
   "protocol": {
     "major": 1,
-    "minor": 0
+    "minor": 1
   },
   "namespace": "nano.*",
   "sourceOfTruth": "This file is the single machine-checkable definition of the Nano host protocol. Both the TypeScript bridge and the Rust runtime load it in tests; method tables, limits, error codes, lifecycle edges, event kinds and fixtures are compared against each implementation so neither side can drift silently.",
@@ -34,7 +34,8 @@
     "termGraceMs": 3000,
     "mountLockStaleMs": 30000,
     "maxReplayEvents": 10000,
-    "maxSubmitTextBytes": 32768
+    "maxSubmitTextBytes": 32768,
+    "maxSkillPreviewBytes": 65536
   },
   "lifecycle": {
     "states": [
@@ -212,18 +213,114 @@
     },
     {
       "code": 1019,
-      "name": "nano/decisions/unknown-request"
+      "name": "nano/skills/not-found"
     },
     {
       "code": 1020,
-      "name": "nano/decisions/answer-invalid"
+      "name": "nano/skills/no-preview"
     },
     {
       "code": 1021,
-      "name": "nano/decisions/reply-queued"
+      "name": "nano/skills/preview-failed"
+    },
+    {
+      "code": 1029,
+      "name": "nano/sessions/unavailable"
+    },
+    {
+      "code": 1030,
+      "name": "nano/sessions/not-active"
+    },
+    {
+      "code": 1031,
+      "name": "nano/sessions/title-invalid"
+    },
+    {
+      "code": 1032,
+      "name": "nano/sessions/compact-unavailable"
+    },
+    {
+      "code": 1033,
+      "name": "nano/sessions/rejected"
     },
     {
       "code": 1022,
+      "name": "nano/controls/writer-held"
+    },
+    {
+      "code": 1023,
+      "name": "nano/controls/model-unavailable"
+    },
+    {
+      "code": 1024,
+      "name": "nano/controls/permission-rejected"
+    },
+    {
+      "code": 1025,
+      "name": "nano/controls/command-failed"
+    },
+    {
+      "code": 1026,
+      "name": "nano/controls/unavailable"
+    },
+    {
+      "code": 1027,
+      "name": "nano/shell/exec-failed"
+    },
+    {
+      "code": 1028,
+      "name": "nano/jobs/not-found"
+    },
+    {
+      "code": 1034,
+      "name": "nano/attachments/receipt-unknown"
+    },
+    {
+      "code": 1035,
+      "name": "nano/attachments/receipt-committed"
+    },
+    {
+      "code": 1036,
+      "name": "nano/attachments/receipt-incomplete"
+    },
+    {
+      "code": 1037,
+      "name": "nano/attachments/chunk-sequence"
+    },
+    {
+      "code": 1038,
+      "name": "nano/attachments/image-invalid"
+    },
+    {
+      "code": 1039,
+      "name": "nano/attachments/model-no-images"
+    },
+    {
+      "code": 1040,
+      "name": "nano/attachments/limit"
+    },
+    {
+      "code": 1041,
+      "name": "nano/attachments/file-failed"
+    },
+    {
+      "code": 1042,
+      "name": "nano/file-references/failed"
+    },
+    {
+      "code": 1043,
+      "name": "nano/decisions/unknown-request"
+    },
+    {
+      "code": 1044,
+      "name": "nano/decisions/answer-invalid"
+    },
+    {
+      "code": 1045,
+      "name": "nano/decisions/reply-queued"
+    },
+    {
+      "code": 1046,
       "name": "nano/decisions/answer-failed"
     }
   ],
@@ -271,8 +368,41 @@
       "rootSessionId": "string",
       "session": "sessionFacts",
       "capabilities": "capabilityMap",
-      "limits": "limits"
+      "limits": "limits",
+      "attachmentLimits": "attachmentLimits?"
     },
+    "attachmentLimits": {
+      "maxImageBytes": "integer",
+      "maxImagesPerMessage": "integer",
+      "maxMessageImageBytes": "integer",
+      "maxImagePixels": "integer",
+      "maxImageDimension": "integer",
+      "mediaTypes": "array:string",
+      "maxChunkBytes": "integer",
+      "fileAdmission": "enum:verbatim|unsupported"
+    },
+    "fileReferenceCandidate": {
+      "path": "string",
+      "kind": "enum:file|directory"
+    },
+    "fileAttachmentRef": {
+      "attachmentId": "string",
+      "name": "string",
+      "bytes": "integer"
+    },
+    "attachmentImageSummary": {
+      "mediaType": "enum:image/png|image/jpeg|image/webp|image/gif",
+      "bytes": "integer"
+    },
+    "attachmentReceipt": {
+      "receiptId": "string",
+      "kind": "enum:image|file",
+      "ready": "boolean",
+      "file": "fileAttachmentRef?",
+      "image": "attachmentImageSummary?"
+    },
+    "conversationContentBlock": "text {type,text} | image {type,receiptId} | file {type,receiptId}",
+    "conversationSubmitContent": "ordered array:conversationContentBlock",
     "startupError": {
       "code": "enum:occupied|startup-failed|cleanup-failed|unsupported",
       "holderPid": "integer?",
@@ -331,6 +461,222 @@
       "seq": "integer",
       "status": "enum:idle|running",
       "inbox": "conversationInbox"
+    },
+    "skillSummary": {
+      "name": "string",
+      "description": "string",
+      "whenToUse": "string?",
+      "modelInvocable": "boolean",
+      "userInvocable": "boolean",
+      "path": "string?",
+      "source": "string",
+      "provider": "string",
+      "shadowedByCommand": "boolean"
+    },
+    "skillList": {
+      "address": "address",
+      "complete": "boolean",
+      "commands": "array:string",
+      "skills": "array:skillSummary"
+    },
+    "skillPreview": {
+      "address": "address",
+      "name": "string",
+      "path": "string",
+      "text": "string",
+      "truncated": "boolean",
+      "bytes": "integer",
+      "limit": "integer"
+    },
+    "instructionSource": {
+      "path": "string",
+      "action": "enum:set|replace|remove"
+    },
+    "instructionSnapshot": {
+      "address": "address",
+      "available": "boolean",
+      "baseline": "boolean?",
+      "loadedAt": "integer?",
+      "sources": "array:instructionSource",
+      "budgetNotice": "string?",
+      "truncated": "boolean?"
+    },
+    "sessionSummary": {
+      "sessionId": "string",
+      "title": "string?",
+      "createdAt": "integer",
+      "updatedAt": "integer?",
+      "agentAvailable": "boolean",
+      "running": "boolean",
+      "blank": "boolean?",
+      "cwd": "string?",
+      "formatStatus": "enum:current|migration-required?",
+      "origin": "enum:subagent?",
+      "parentSessionId": "string?",
+      "current": "boolean"
+    },
+    "sessionsContext": {
+      "sessionId": "string",
+      "asOfSeq": "integer",
+      "approximate": "boolean",
+      "projectedTokens": "integer?",
+      "contextWindow": "integer?",
+      "pressureTokens": "integer?",
+      "pressureAt": "integer?",
+      "contextWindowAt": "integer?",
+      "tokenUsage?": {
+        "uncachedInputTokens": "integer",
+        "outputTokens": "integer",
+        "cacheReadTokens": "integer",
+        "cacheWriteTokens": "integer"
+      },
+      "contextBreakdown?": {
+        "systemTokens": "integer",
+        "toolsTokens": "integer",
+        "messageTokens": "integer"
+      }
+    },
+    "sessionsCompact": {
+      "commandId": "string?",
+      "kind": "enum:success|error",
+      "text": "string?",
+      "sourceEventSeq": "integer?"
+    },
+    "controlsSelection": {
+      "provider": "string",
+      "model": "string",
+      "reasoningEffort": "string?"
+    },
+    "controlsModelState": {
+      "lastUsed": "controlsSelection?",
+      "next": "controlsSelection?"
+    },
+    "controlsEffort": {
+      "id": "string",
+      "name": "string",
+      "description": "string?"
+    },
+    "controlsReasoning": {
+      "efforts": "array:controlsEffort",
+      "defaultEffort": "string?"
+    },
+    "controlsCatalogModel": {
+      "id": "string",
+      "name": "string",
+      "description": "string?",
+      "reasoning": "controlsReasoning?"
+    },
+    "controlsProviderGroup": {
+      "id": "string",
+      "name": "string",
+      "models": "array:controlsCatalogModel"
+    },
+    "controlsCatalogFailure": {
+      "id": "string",
+      "name": "string",
+      "message": "string"
+    },
+    "controlsModelCatalog": {
+      "default": "controlsSelection",
+      "routableProviders": "array:string",
+      "groups": "array:controlsProviderGroup",
+      "failures": "array:controlsCatalogFailure"
+    },
+    "controlsPresetOption": {
+      "value": "string",
+      "name": "string",
+      "description": "string?",
+      "sandbox": "string?",
+      "approval": "string?"
+    },
+    "controlsPermissionCatalog": {
+      "options": "array:controlsPresetOption",
+      "defaultOptions": "array:controlsPresetOption",
+      "defaultPreset": "string"
+    },
+    "controlsPermissionState": {
+      "available": "boolean?",
+      "current": "string?",
+      "catalog": "controlsPermissionCatalog"
+    },
+    "controlsCommand": {
+      "name": "string",
+      "description": "string",
+      "inputHint": "string?",
+      "definitionId": "string?"
+    },
+    "controlsState": {
+      "address": "address",
+      "model": "controlsModelState",
+      "permission": "controlsPermissionState",
+      "commands": "array:controlsCommand"
+    },
+    "controlsCommandExecution": {
+      "executed": "boolean",
+      "commandId": "string?",
+      "kind": "enum:success|error?",
+      "text": "string?",
+      "permission": "controlsPermissionState?"
+    },
+    "collectedOutput": {
+      "text": "string",
+      "truncated": "boolean",
+      "spillPath": "string?"
+    },
+    "shellResult": {
+      "exitCode": "integer|null",
+      "signal": "string|null",
+      "timedOut": "boolean",
+      "aborted": "boolean",
+      "stdout": "collectedOutput",
+      "stderr": "collectedOutput",
+      "sandbox": "object?",
+      "policy": "object?",
+      "injectedMessageId": "string?",
+      "injectError": "string?"
+    },
+    "jobToolCall": {
+      "callId": "string",
+      "rootCallId": "string"
+    },
+    "jobOutput": {
+      "total": "integer",
+      "earliest": "integer",
+      "spillPaths": "array:string?"
+    },
+    "jobView": {
+      "id": "string",
+      "kind": "string",
+      "label": "string",
+      "owner": "string?",
+      "status": "enum:running|stopping|completed|killed|failed",
+      "progress": "string?",
+      "detail": "string?",
+      "startedAt": "integer",
+      "finishedAt": "integer?",
+      "output": "jobOutput",
+      "toolCall": "jobToolCall?"
+    },
+    "jobChunk": {
+      "at": "integer",
+      "text": "string",
+      "channel": "enum:stdout|stderr|log?",
+      "gapBefore": "boolean?"
+    },
+    "jobsEvent": {
+      "address": "address",
+      "seq": "integer",
+      "type": "enum:registered|progress|stopping|settled|removed",
+      "job": "jobView",
+      "cause": "enum:producer|kill|teardown?",
+      "awaited": "boolean?"
+    },
+    "jobsOutput": {
+      "address": "address",
+      "seq": "integer",
+      "jobId": "string",
+      "owner": "string?",
+      "total": "integer"
     },
     "decisionQuestion": {
       "id": "string",
@@ -645,23 +991,34 @@
       }
     },
     {
-      "name": "nano.decisions.snapshot",
+      "name": "nano.attachment.begin",
       "direction": "client-to-host",
       "kind": "request",
-      "owner": "S03",
+      "owner": "S06",
       "status": "implemented",
       "params": {
         "required": [
-          "address"
+          "address",
+          "receiptId",
+          "kind"
         ],
-        "optional": []
+        "optional": [
+          "name",
+          "mediaType",
+          "bytes"
+        ]
+      },
+      "paramsSemantics": {
+        "kind": "enum:image|file",
+        "mediaType": "enum:image/png|image/jpeg|image/webp|image/gif",
+        "bytes": "declared exact source byte length; checked at finish"
       },
       "result": {
+        "shape": "attachmentReceipt",
         "required": [
-          "address",
-          "approvals",
-          "questions",
-          "projection"
+          "receiptId",
+          "kind",
+          "ready"
         ],
         "optional": []
       }
@@ -671,7 +1028,7 @@
       "direction": "client-to-host",
       "kind": "request",
       "owner": "S06",
-      "status": "reserved",
+      "status": "implemented",
       "params": {
         "required": [
           "receiptId",
@@ -682,6 +1039,80 @@
       },
       "paramsSemantics": {
         "bytes": "base64; maxRawBytes=49152"
+      },
+      "result": {
+        "required": [
+          "receiptId",
+          "received",
+          "nextSequence"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.attachment.finish",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S06",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "receiptId"
+        ],
+        "optional": []
+      },
+      "result": {
+        "shape": "attachmentReceipt",
+        "required": [
+          "receiptId",
+          "kind",
+          "ready"
+        ],
+        "optional": [
+          "file",
+          "image"
+        ]
+      }
+    },
+    {
+      "name": "nano.attachment.discard",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S06",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "receiptId"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "discarded"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.fileReferences.list",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S06",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address",
+          "query"
+        ],
+        "optional": [
+          "limit"
+        ]
+      },
+      "result": {
+        "required": [
+          "candidates"
+        ],
+        "optional": []
       }
     },
     {
@@ -698,6 +1129,9 @@
           "content"
         ],
         "optional": []
+      },
+      "paramsSemantics": {
+        "content": "conversationSubmitContent; staged image/file blocks carry receiptId, never bytes"
       },
       "result": {
         "required": [
@@ -812,6 +1246,426 @@
         ],
         "optional": []
       }
+    },
+    {
+      "name": "nano.skills.list",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S05",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address"
+        ],
+        "optional": []
+      },
+      "result": {
+        "shape": "skillList",
+        "required": [
+          "address",
+          "complete",
+          "commands",
+          "skills"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.skills.preview",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S05",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address",
+          "name"
+        ],
+        "optional": []
+      },
+      "result": {
+        "shape": "skillPreview",
+        "required": [
+          "address",
+          "name",
+          "path",
+          "text",
+          "truncated",
+          "bytes",
+          "limit"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.instructions.snapshot",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S05",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address"
+        ],
+        "optional": []
+      },
+      "result": {
+        "shape": "instructionSnapshot",
+        "required": [
+          "address",
+          "available",
+          "sources"
+        ],
+        "optional": [
+          "baseline",
+          "loadedAt",
+          "budgetNotice",
+          "truncated"
+        ]
+      }
+    },
+    {
+      "name": "nano.sessions.list",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S07",
+      "status": "implemented",
+      "params": {
+        "required": [],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "sessions"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.sessions.rename",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S07",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "sessionId",
+          "title"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "title",
+          "seq"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.sessions.context",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S07",
+      "status": "implemented",
+      "params": {
+        "required": [],
+        "optional": []
+      },
+      "result": {
+        "shape": "sessionsContext",
+        "required": [
+          "sessionId",
+          "asOfSeq",
+          "approximate"
+        ],
+        "optional": [
+          "projectedTokens",
+          "contextWindow",
+          "pressureTokens",
+          "pressureAt",
+          "contextWindowAt",
+          "tokenUsage",
+          "contextBreakdown"
+        ]
+      }
+    },
+    {
+      "name": "nano.sessions.compact",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S07",
+      "status": "implemented",
+      "params": {
+        "required": [],
+        "optional": [
+          "input"
+        ]
+      },
+      "result": {
+        "shape": "sessionsCompact",
+        "required": [
+          "kind"
+        ],
+        "optional": [
+          "commandId",
+          "text",
+          "sourceEventSeq"
+        ]
+      }
+    },
+    {
+      "name": "nano.sessions.compactCancel",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S07",
+      "status": "implemented",
+      "params": {
+        "required": [],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "cancelled"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.controls.state",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S04",
+      "status": "implemented",
+      "params": {
+        "required": [],
+        "optional": []
+      },
+      "result": {
+        "shape": "controlsState",
+        "required": [
+          "address",
+          "model",
+          "permission",
+          "commands"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.controls.modelCatalog",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S04",
+      "status": "implemented",
+      "params": {
+        "required": [],
+        "optional": []
+      },
+      "result": {
+        "shape": "controlsModelCatalog",
+        "required": [
+          "default",
+          "routableProviders",
+          "groups",
+          "failures"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.controls.selectModel",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S04",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "provider",
+          "model"
+        ],
+        "optional": [
+          "reasoningEffort"
+        ]
+      },
+      "result": {
+        "required": [
+          "selected"
+        ],
+        "optional": [],
+        "shape": "controlsSelection"
+      }
+    },
+    {
+      "name": "nano.controls.setPermission",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S04",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "preset"
+        ],
+        "optional": []
+      },
+      "result": {
+        "shape": "controlsCommandExecution",
+        "required": [
+          "executed"
+        ],
+        "optional": [
+          "commandId",
+          "kind",
+          "text",
+          "permission"
+        ]
+      }
+    },
+    {
+      "name": "nano.controls.executeCommand",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S04",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "line"
+        ],
+        "optional": []
+      },
+      "result": {
+        "shape": "controlsCommandExecution",
+        "required": [
+          "executed"
+        ],
+        "optional": [
+          "commandId",
+          "kind",
+          "text",
+          "permission"
+        ]
+      }
+    },
+    {
+      "name": "nano.shell.exec",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S08",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address",
+          "command"
+        ],
+        "optional": [
+          "inject"
+        ]
+      },
+      "paramsSemantics": {
+        "inject": "boolean; false for `!!` (no context injection)"
+      },
+      "result": {
+        "shape": "shellResult",
+        "required": [
+          "exitCode",
+          "signal",
+          "timedOut",
+          "aborted",
+          "stdout",
+          "stderr"
+        ],
+        "optional": [
+          "sandbox",
+          "policy",
+          "injectedMessageId",
+          "injectError"
+        ]
+      }
+    },
+    {
+      "name": "nano.jobs.snapshot",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S08",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "seq",
+          "jobs"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.jobs.follow",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S08",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address",
+          "jobId",
+          "from"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "chunks",
+          "next",
+          "lossy"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.jobs.kill",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S08",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address",
+          "jobId"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "outcome"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.decisions.snapshot",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S03",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "address",
+          "approvals",
+          "questions",
+          "projection"
+        ],
+        "optional": []
+      }
     }
   ],
   "eventKinds": [
@@ -854,6 +1708,82 @@
       "payload": {
         "address": "address",
         "frame": "conversationStreamFrame"
+      }
+    },
+    {
+      "kind": "controls.model",
+      "owner": "S04",
+      "status": "implemented",
+      "payload": {
+        "address": "address",
+        "model": "controlsModelState"
+      }
+    },
+    {
+      "kind": "controls.permission",
+      "owner": "S04",
+      "status": "implemented",
+      "payload": {
+        "address": "address",
+        "permission": "controlsPermissionState"
+      }
+    },
+    {
+      "kind": "sessions.context",
+      "owner": "S07",
+      "status": "implemented",
+      "payload": "sessionsContext"
+    },
+    {
+      "kind": "skills.changed",
+      "owner": "S05",
+      "status": "implemented",
+      "payload": {
+        "address": "address",
+        "reason": "enum:skills|commands"
+      }
+    },
+    {
+      "kind": "instructions.changed",
+      "owner": "S05",
+      "status": "implemented",
+      "payload": {
+        "shape": "instructionSnapshot"
+      }
+    },
+    {
+      "kind": "jobs.event",
+      "owner": "S08",
+      "status": "implemented",
+      "payload": {
+        "shape": "jobsEvent",
+        "required": [
+          "address",
+          "seq",
+          "type",
+          "job"
+        ],
+        "optional": [
+          "cause",
+          "awaited"
+        ]
+      }
+    },
+    {
+      "kind": "jobs.output",
+      "owner": "S08",
+      "status": "implemented",
+      "payload": {
+        "shape": "jobsOutput",
+        "required": [
+          "address",
+          "seq",
+          "jobId",
+          "total"
+        ],
+        "optional": [
+          "owner"
+        ]
       }
     },
     {
@@ -942,7 +1872,7 @@
       "params": {
         "protocol": {
           "major": 1,
-          "minor": 0
+          "minor": 1
         },
         "runtimeId": "rt-fixture",
         "generation": 1,
@@ -965,6 +1895,13 @@
           "agent": {
             "status": "supported"
           },
+          "attachments": {
+            "status": "supported",
+            "mode": "images+files"
+          },
+          "fileReferences": {
+            "status": "supported"
+          },
           "schedule": {
             "status": "unsupported",
             "detail": "S11 mounts the schedule backend"
@@ -978,6 +1915,21 @@
           "maxFrameBytes": 33554432,
           "maxPendingRequests": 64,
           "maxAttachmentChunkBytes": 49152
+        },
+        "attachmentLimits": {
+          "maxImageBytes": 20971520,
+          "maxImagesPerMessage": 20,
+          "maxMessageImageBytes": 209715200,
+          "maxImagePixels": 64000000,
+          "maxImageDimension": 8192,
+          "mediaTypes": [
+            "image/png",
+            "image/jpeg",
+            "image/webp",
+            "image/gif"
+          ],
+          "maxChunkBytes": 49152,
+          "fileAdmission": "verbatim"
         }
       }
     },
@@ -1073,6 +2025,32 @@
         ]
       }
     },
+    "conversationSubmitAttachments": {
+      "jsonrpc": "2.0",
+      "id": "req-5",
+      "method": "nano.conversation.submit",
+      "params": {
+        "address": {
+          "rootSessionId": "session-fixture"
+        },
+        "requestId": "request-fixture-2",
+        "delivery": "queue",
+        "content": [
+          {
+            "type": "text",
+            "text": "see "
+          },
+          {
+            "type": "image",
+            "receiptId": "receipt-image-fixture"
+          },
+          {
+            "type": "file",
+            "receiptId": "receipt-file-fixture"
+          }
+        ]
+      }
+    },
     "conversationEvent": {
       "jsonrpc": "2.0",
       "method": "nano.event",
@@ -1087,6 +2065,282 @@
             "rootSessionId": "session-fixture"
           },
           "status": "running"
+        }
+      }
+    },
+    "skillsList": {
+      "jsonrpc": "2.0",
+      "id": "req-5",
+      "method": "nano.skills.list",
+      "params": {
+        "address": {
+          "rootSessionId": "session-fixture"
+        }
+      }
+    },
+    "skillsListResult": {
+      "jsonrpc": "2.0",
+      "id": "req-5",
+      "result": {
+        "address": {
+          "rootSessionId": "session-fixture"
+        },
+        "complete": true,
+        "commands": [
+          "compact",
+          "model"
+        ],
+        "skills": [
+          {
+            "name": "hello-skill",
+            "description": "A fixture skill",
+            "whenToUse": "When testing",
+            "modelInvocable": false,
+            "userInvocable": true,
+            "path": "/tmp/skills/hello-skill/SKILL.md",
+            "source": "project-agents",
+            "provider": "filesystem",
+            "shadowedByCommand": false
+          }
+        ]
+      }
+    },
+    "skillPreviewResult": {
+      "jsonrpc": "2.0",
+      "id": "req-6",
+      "result": {
+        "address": {
+          "rootSessionId": "session-fixture"
+        },
+        "name": "hello-skill",
+        "path": "/tmp/skills/hello-skill/SKILL.md",
+        "text": "# hello-skill\n",
+        "truncated": false,
+        "bytes": 15,
+        "limit": 65536
+      }
+    },
+    "instructionsEvent": {
+      "jsonrpc": "2.0",
+      "method": "nano.event",
+      "params": {
+        "runtimeId": "rt-fixture",
+        "generation": 1,
+        "subscriptionId": "sub-1",
+        "sequence": 1,
+        "kind": "instructions.changed",
+        "payload": {
+          "address": {
+            "rootSessionId": "session-fixture"
+          },
+          "available": true,
+          "baseline": true,
+          "loadedAt": 1792331608209,
+          "sources": [
+            {
+              "path": "AGENTS.md",
+              "action": "set"
+            }
+          ],
+          "budgetNotice": "Workspace instruction budget 65536 bytes: omitted AGENTS.global.md"
+        }
+      }
+    },
+    "sessionsList": {
+      "jsonrpc": "2.0",
+      "id": "req-5",
+      "result": {
+        "sessions": [
+          {
+            "sessionId": "session-fixture",
+            "title": "示例会话",
+            "createdAt": 1760000000000,
+            "updatedAt": 1760000100000,
+            "agentAvailable": true,
+            "running": false,
+            "blank": false,
+            "cwd": "/work",
+            "formatStatus": "current",
+            "current": true
+          }
+        ]
+      }
+    },
+    "sessionsContextEvent": {
+      "jsonrpc": "2.0",
+      "method": "nano.event",
+      "params": {
+        "runtimeId": "rt-fixture",
+        "generation": 1,
+        "subscriptionId": "sub-1",
+        "sequence": 0,
+        "kind": "sessions.context",
+        "payload": {
+          "sessionId": "session-fixture",
+          "asOfSeq": 12,
+          "approximate": true,
+          "projectedTokens": 1200,
+          "contextWindow": 128000,
+          "pressureTokens": 1100,
+          "pressureAt": 1760000100000,
+          "contextWindowAt": 1760000100000,
+          "tokenUsage": {
+            "uncachedInputTokens": 1000,
+            "outputTokens": 200,
+            "cacheReadTokens": 0,
+            "cacheWriteTokens": 0
+          },
+          "contextBreakdown": {
+            "systemTokens": 100,
+            "toolsTokens": 200,
+            "messageTokens": 900
+          }
+        }
+      }
+    },
+    "controlsState": {
+      "jsonrpc": "2.0",
+      "id": "req-5",
+      "method": "nano.controls.state",
+      "result": {
+        "address": {
+          "rootSessionId": "session-fixture"
+        },
+        "model": {
+          "lastUsed": {
+            "provider": "deepseek-official",
+            "model": "deepseek-flash"
+          },
+          "next": {
+            "provider": "deepseek-official",
+            "model": "deepseek-flash",
+            "reasoningEffort": "high"
+          }
+        },
+        "permission": {
+          "available": true,
+          "current": "workspace-write",
+          "catalog": {
+            "options": [
+              {
+                "value": "workspace-write",
+                "name": "workspace-write",
+                "sandbox": "workspace-write",
+                "approval": "ask"
+              },
+              {
+                "value": "danger-full-access",
+                "name": "danger-full-access",
+                "sandbox": "danger-full-access",
+                "approval": "never"
+              }
+            ],
+            "defaultOptions": [
+              {
+                "value": "workspace-write",
+                "name": "workspace-write",
+                "sandbox": "workspace-write",
+                "approval": "ask"
+              }
+            ],
+            "defaultPreset": "workspace-write"
+          }
+        },
+        "commands": [
+          {
+            "name": "permission",
+            "description": "Switch the permission preset",
+            "inputHint": "<preset>"
+          }
+        ]
+      }
+    },
+    "controlsCatalog": {
+      "jsonrpc": "2.0",
+      "id": "req-6",
+      "method": "nano.controls.modelCatalog",
+      "result": {
+        "default": {
+          "provider": "deepseek-official",
+          "model": "deepseek-flash"
+        },
+        "routableProviders": [
+          "deepseek-official"
+        ],
+        "groups": [
+          {
+            "id": "deepseek-official",
+            "name": "DeepSeek",
+            "models": [
+              {
+                "id": "deepseek-flash",
+                "name": "DeepSeek-V4.1-Flash",
+                "reasoning": {
+                  "efforts": [
+                    {
+                      "id": "low",
+                      "name": "Low"
+                    },
+                    {
+                      "id": "high",
+                      "name": "High"
+                    }
+                  ],
+                  "defaultEffort": "high"
+                }
+              }
+            ]
+          }
+        ],
+        "failures": [
+          {
+            "id": "third-party",
+            "name": "Third Party",
+            "message": "no credentials"
+          }
+        ]
+      }
+    },
+    "shellExec": {
+      "jsonrpc": "2.0",
+      "id": "req-5",
+      "method": "nano.shell.exec",
+      "params": {
+        "address": {
+          "rootSessionId": "session-fixture"
+        },
+        "command": "printf hello"
+      }
+    },
+    "jobsEvent": {
+      "jsonrpc": "2.0",
+      "method": "nano.event",
+      "params": {
+        "runtimeId": "rt-fixture",
+        "generation": 1,
+        "subscriptionId": "sub-1",
+        "sequence": 1,
+        "kind": "jobs.event",
+        "payload": {
+          "address": {
+            "rootSessionId": "session-fixture"
+          },
+          "seq": 1,
+          "type": "settled",
+          "cause": "producer",
+          "awaited": false,
+          "job": {
+            "id": "bash-0123456789abcdef",
+            "kind": "bash",
+            "label": "sleep 30",
+            "status": "completed",
+            "startedAt": 1,
+            "finishedAt": 2,
+            "output": {
+              "total": 12,
+              "earliest": 0
+            }
+          }
         }
       }
     },
@@ -1153,6 +2407,7 @@
     "sessionPersistence",
     "sessionQuery",
     "attachments",
+    "fileReferences",
     "userQuestions",
     "approval",
     "jobs",
@@ -1161,7 +2416,12 @@
     "monitor",
     "terminal",
     "tool-ask-user",
-    "networkListener"
+    "networkListener",
+    "skills",
+    "modelSelection",
+    "permissionPresets",
+    "commands",
+    "shell"
   ],
   "shutdownSteps": [
     "accepting",

@@ -68,20 +68,46 @@ fn every_event_kind_is_covered_by_the_contract_shape() {
         .iter()
         .map(|entry| entry["kind"].as_str().unwrap())
         .collect();
-    for kind in &kinds {
-        assert!(
-            [
-                "session.event",
-                "conversation.status",
-                "conversation.inbox",
-                "conversation.stream",
-                "decisions.approval",
-                "decisions.question",
-                "decisions.projection"
-            ]
-            .contains(kind),
-            "unexpected event kind {kind}"
-        );
+    // Exact set/order, not a subset: a future unknown kind must fail this
+    // contract test instead of silently widening what the conversation model
+    // accepts.
+    assert_eq!(
+        kinds,
+        vec![
+            "session.event",
+            "conversation.status",
+            "conversation.inbox",
+            "conversation.stream",
+            "controls.model",
+            "controls.permission",
+            "sessions.context",
+            "skills.changed",
+            "instructions.changed",
+            "jobs.event",
+            "jobs.output",
+            "decisions.approval",
+            "decisions.question",
+            "decisions.projection"
+        ]
+    );
+    for (owner, kind) in [
+        ("S04", "controls.model"),
+        ("S04", "controls.permission"),
+        ("S07", "sessions.context"),
+        ("S05", "skills.changed"),
+        ("S05", "instructions.changed"),
+        ("S08", "jobs.event"),
+        ("S08", "jobs.output"),
+        ("S03", "decisions.approval"),
+        ("S03", "decisions.question"),
+        ("S03", "decisions.projection"),
+    ] {
+        let event = contract["eventKinds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|event| event["kind"] == kind)
+            .unwrap();
+        assert_eq!(event["owner"], owner, "{kind} owner");
     }
-    assert_eq!(kinds.len(), 7);
 }

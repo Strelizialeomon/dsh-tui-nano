@@ -192,7 +192,7 @@ def main():
     send("\r")
     pump(10 if os.environ.get("NANO_ROUTE") == "1" else 2)
     now = screen.text()
-    checks.append(("echo visible", "你（" in now))
+    checks.append(("echo visible", ("你（" in now) or ("\n你\n" in now)))
     checks.append(("input cleared", "second line" not in now.split("输入")[-1].split("└")[0]))
     checks.append(("turn failure surfaced", "回合（失败）" in now))
     snapshot = now

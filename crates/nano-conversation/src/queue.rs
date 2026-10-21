@@ -169,8 +169,8 @@ pub fn text_of(content: Option<&Value>) -> String {
                     text.push_str(value);
                 }
             }
-            Some("image") => text.push_str("[image]"),
-            Some("file") => text.push_str("[file]"),
+            Some("image") => push_attachment_label(&mut text, "图片", block),
+            Some("file") => push_attachment_label(&mut text, "文件", block),
             Some(other) => {
                 text.push('[');
                 text.push_str(other);
@@ -180,6 +180,21 @@ pub fn text_of(content: Option<&Value>) -> String {
         }
     }
     text
+}
+
+/// Render one attachment label with its official display name when present.
+fn push_attachment_label(text: &mut String, label: &str, block: &Value) {
+    text.push('[');
+    text.push_str(label);
+    if let Some(name) = block
+        .get("attachment")
+        .and_then(|attachment| attachment.get("name"))
+        .and_then(Value::as_str)
+    {
+        text.push(' ');
+        text.push_str(name);
+    }
+    text.push(']');
 }
 
 /// Read the official `user-rpc` correlation id from a message source.
@@ -239,6 +254,6 @@ mod tests {
         .unwrap();
         assert!(item.has_attachment);
         assert!(!item.editable());
-        assert_eq!(item.text, "x[image]");
+        assert_eq!(item.text, "x[图片]");
     }
 }

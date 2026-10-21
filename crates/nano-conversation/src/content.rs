@@ -17,7 +17,23 @@ pub enum ContentPart {
         /// Original text; control characters are not rewritten here.
         text: String,
     },
-    /// An attachment whose upload receipt belongs to S06.
+    /// A ready image attachment whose staged bytes belong to S06.
+    Image {
+        /// S06 receipt identity, not a path.
+        receipt_id: String,
+        /// Display name, stripped of local path information.
+        name: String,
+        /// Declared source media type.
+        media_type: String,
+    },
+    /// A ready generic-file attachment whose durable receipt belongs to S06.
+    File {
+        /// S06 receipt identity, not a path.
+        receipt_id: String,
+        /// Display name, stripped of local path information.
+        name: String,
+    },
+    /// An attachment placeholder that has not completed its S06 upload.
     Attachment {
         /// S06 receipt identity, not a path.
         attachment_id: String,
@@ -67,7 +83,29 @@ impl OrderedContent {
         self.parts.push(ContentPart::Text { text: text.into() });
     }
 
-    /// Append one attachment placeholder.
+    /// Append one ready image attachment.
+    pub fn push_image(
+        &mut self,
+        receipt_id: impl Into<String>,
+        name: impl Into<String>,
+        media_type: impl Into<String>,
+    ) {
+        self.parts.push(ContentPart::Image {
+            receipt_id: receipt_id.into(),
+            name: name.into(),
+            media_type: media_type.into(),
+        });
+    }
+
+    /// Append one ready generic-file attachment.
+    pub fn push_file(&mut self, receipt_id: impl Into<String>, name: impl Into<String>) {
+        self.parts.push(ContentPart::File {
+            receipt_id: receipt_id.into(),
+            name: name.into(),
+        });
+    }
+
+    /// Append one not-ready attachment placeholder.
     pub fn push_attachment(&mut self, attachment_id: impl Into<String>) {
         self.parts.push(ContentPart::Attachment {
             attachment_id: attachment_id.into(),
@@ -88,14 +126,14 @@ impl OrderedContent {
     pub fn has_attachment(&self) -> bool {
         self.parts
             .iter()
-            .any(|part| matches!(part, ContentPart::Attachment { .. }))
+            .any(|part| !matches!(part, ContentPart::Text { .. }))
     }
 
     /// Whether the list carries non-whitespace text.
     pub fn has_text(&self) -> bool {
         self.parts.iter().any(|part| match part {
             ContentPart::Text { text } => text.chars().any(|character| !character.is_whitespace()),
-            ContentPart::Attachment { .. } => false,
+            _ => false,
         })
     }
 
@@ -105,7 +143,7 @@ impl OrderedContent {
             .iter()
             .map(|part| match part {
                 ContentPart::Text { text } => text.len(),
-                ContentPart::Attachment { .. } => 0,
+                _ => 0,
             })
             .sum()
     }
@@ -121,6 +159,16 @@ impl OrderedContent {
         for part in &self.parts {
             match part {
                 ContentPart::Text { text: value } => text.push_str(value),
+                ContentPart::Image { name, .. } => {
+                    text.push_str("[图片 ");
+                    text.push_str(name);
+                    text.push(']');
+                }
+                ContentPart::File { name, .. } => {
+                    text.push_str("[文件 ");
+                    text.push_str(name);
+                    text.push(']');
+                }
                 ContentPart::Attachment { attachment_id } => {
                     text.push_str("[attachment ");
                     text.push_str(attachment_id);
@@ -144,9 +192,38 @@ impl OrderedContent {
             .iter()
             .filter_map(|part| match part {
                 ContentPart::Text { text } => Some(json!({ "type": "text", "text": text })),
-                ContentPart::Attachment { .. } => None,
+                _ => None,
             })
             .collect())
+    }
+
+    /// Convert to the wire `content` array for a submission with attachments.
+    /// A not-yet-ready placeholder refuses the whole submission.
+    pub fn to_wire_blocks(&self) -> Result<Vec<Value>, ContentError> {
+        if !self.has_text() && !self.has_attachment() {
+            return Err(ContentError::Empty);
+        }
+        let mut blocks = Vec::with_capacity(self.parts.len());
+        for part in &self.parts {
+            match part {
+                ContentPart::Text { text } => {
+                    if !text.is_empty() {
+                        blocks.push(json!({ "type": "text", "text": text }));
+                    }
+                }
+                ContentPart::Image { receipt_id, .. } => {
+                    blocks.push(json!({ "type": "image", "receiptId": receipt_id }));
+                }
+                ContentPart::File { receipt_id, .. } => {
+                    blocks.push(json!({ "type": "file", "receiptId": receipt_id }));
+                }
+                ContentPart::Attachment { .. } => return Err(ContentError::AttachmentNotReady),
+            }
+        }
+        if blocks.is_empty() {
+            return Err(ContentError::Empty);
+        }
+        Ok(blocks)
     }
 
     /// Convert a single text value into ordered content.

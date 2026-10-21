@@ -278,13 +278,35 @@ name = "nano-app"
 version = "0.1.0"
 dependencies = [
  "crossterm",
+ "nano-attachments",
+ "nano-controls",
  "nano-conversation",
  "nano-decisions",
+ "nano-jobs",
  "nano-runtime",
+ "nano-sessions",
+ "nano-skills",
  "nano-transcript",
  "ratatui",
  "serde_json",
  "unicode-width 0.2.0",
+]
+
+[[package]]
+name = "nano-attachments"
+version = "0.1.0"
+dependencies = [
+ "nano-conversation",
+ "nano-runtime",
+ "serde_json",
+]
+
+[[package]]
+name = "nano-controls"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -307,6 +329,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "nano-jobs"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "nano-runtime"
 version = "0.1.0"
 dependencies = [
@@ -316,6 +346,23 @@ dependencies = [
  "serde_json",
  "signal-hook",
  "tempfile",
+]
+
+[[package]]
+name = "nano-sessions"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "nano-skills"
+version = "0.1.0"
+dependencies = [
+ "nano-conversation",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

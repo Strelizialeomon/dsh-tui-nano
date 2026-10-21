@@ -10,11 +10,15 @@ const SERVICE_CAPABILITIES = Object.freeze({
   sessionPersistence: 'sessionPersistence',
   sessionQuery: 'sessionQuery',
   attachments: 'attachments',
+  fileReferences: 'fileReferences',
   userQuestions: 'userQuestions',
   approval: 'approval',
   jobs: 'jobs',
+  shell: 'shell',
   subagents: 'subagents',
   terminal: 'terminalController',
+  permissionPresets: 'permissionPresets',
+  commands: 'commands',
 })
 
 /**
@@ -32,15 +36,36 @@ export function buildCapabilities(ctx, config) {
       : { status: 'unsupported', detail: `${serviceKey} is not composed in this profile` }
   }
 
-  // S03 composes the single answerer for each seam. When the seam exists, the
-  // card path is real: a missing answerer is no longer a capability gap.
-  capabilities.approval = capabilities.approval ?? {
-    status: 'unsupported',
-    detail: 'approval is not composed in this profile',
+  // `!` also needs the per-call policy service; without it the executor cannot
+  // be asked for the user-permission policy and the command must not run.
+  if (ctx.get('shell') !== undefined && ctx.get('sandboxPolicy') === undefined) {
+    capabilities.shell = {
+      status: 'unsupported',
+      detail: 'sandboxPolicy is not composed; the user-permission policy cannot be resolved',
+    }
   }
-  capabilities.userQuestions = capabilities.userQuestions ?? {
-    status: 'unsupported',
-    detail: 'userQuestions is not composed in this profile',
+
+  // Model selection is served either by the Web session controller or by the
+  // official CLI primitives (llm registry + agentDefaultModel + selection hooks).
+  const modelSelection =
+    ctx.get('sessionController') !== undefined ||
+    (ctx.get('llm') !== undefined && ctx.get('agentDefaultModel') !== undefined)
+  capabilities.modelSelection = modelSelection
+    ? { status: 'supported' }
+    : { status: 'unsupported', detail: 'the official model registry is not composed' }
+
+  if (capabilities.attachments?.status === 'supported') {
+    capabilities.attachments = {
+      status: 'supported',
+      mode: 'images+files',
+      detail: 'images are admitted at submit time; generic files use session-bound receipts',
+    }
+  }
+  if (capabilities.fileReferences?.status === 'supported') {
+    capabilities.fileReferences = {
+      status: 'supported',
+      detail: 'path-only @file candidates from the official provider',
+    }
   }
   capabilities['tool-ask-user'] = {
     status: ctx.get('userQuestions') === undefined ? 'unsupported' : 'supported',
@@ -60,6 +85,14 @@ export function buildCapabilities(ctx, config) {
     status: 'unsupported',
     detail: 'the Monitor backend belongs to S10',
   }
+
+  // S05 reads the official registry; when the registry row is absent the
+  // catalog and preview methods report `nano/unsupported` instead of an empty
+  // list that would look like "no skills installed".
+  capabilities.skills =
+    ctx.get('skills') === undefined
+      ? { status: 'unsupported', detail: 'the official skill registry is not composed' }
+      : { status: 'supported' }
 
   // This profile mounts no HTTP/WebServer plugin; keep a negative capability so
   // the Rust side can assert the no-listener property instead of inferring it.

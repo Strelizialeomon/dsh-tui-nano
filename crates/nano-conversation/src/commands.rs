@@ -118,7 +118,7 @@ impl<'a> CommandRouter<'a> {
 
     fn route_slash(&self, text: &str) -> InputRoute {
         let (token, args) = split_first_token(text);
-        let name = token.trim_start_matches('/').to_string();
+        let name = token.strip_prefix('/').unwrap_or(token).to_string();
         let raw = text.to_string();
         if let Some(contribution) = self.registry.command_owner(&self.scene, token) {
             return InputRoute::Command {
@@ -215,6 +215,24 @@ mod tests {
                 name: "commit-msg".into(),
                 args: " --force".into(),
                 raw: "/commit-msg --force".into()
+            }
+        );
+    }
+
+    #[test]
+    fn a_double_slash_is_not_a_command_name() {
+        let mut registry = FeatureRegistry::new();
+        registry.register(
+            FeatureContribution::new("S04", SceneId::conversation()).with_command("/compact"),
+        );
+        registry.register(FeatureContribution::new("S05", SceneId::conversation()).with_skills());
+        let router = CommandRouter::new(&registry, SceneId::conversation());
+        assert_eq!(
+            router.route("//compact"),
+            InputRoute::Skill {
+                name: "/compact".into(),
+                args: String::new(),
+                raw: "//compact".into()
             }
         );
     }

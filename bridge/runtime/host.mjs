@@ -16,6 +16,12 @@ import { claimMount, releaseMount } from './ledger.mjs'
 import { SubscriptionHub } from './events.mjs'
 import { ConversationService } from '../conversation/service.mjs'
 import { DecisionService } from '../decisions/service.mjs'
+import { AttachmentService } from '../attachments/service.mjs'
+import { SessionsService } from '../sessions/service.mjs'
+import { ShellService } from '../shell/service.mjs'
+import { JobsService } from '../jobs/service.mjs'
+import { ControlsService } from '../controls/service.mjs'
+import { SkillsService } from '../skills/service.mjs'
 import { buildCapabilities } from './capabilities.mjs'
 import { IMPLEMENTED_REQUEST_METHODS } from './methods.mjs'
 
@@ -40,6 +46,12 @@ export function startHost(ctx, config) {
     hub: undefined,
     conversation: undefined,
     decisions: undefined,
+    attachments: undefined,
+    sessions: undefined,
+    shell: undefined,
+    jobs: undefined,
+    controls: undefined,
+    skills: undefined,
     agentHandle: undefined,
     session: undefined,
     claim: undefined,
@@ -124,6 +136,8 @@ async function runStartup(state, config) {
     throw new StartupError('startup-failed', 'the official agent or session service is not composed')
   }
 
+  await inspectRootSession(ctx, state.config.sessionMode, state.config.rootSessionId)
+
   const route = agentRoute(state.config)
   try {
     state.agentHandle =
@@ -142,7 +156,15 @@ async function runStartup(state, config) {
       throw new StartupError('startup-failed', 'startup was aborted')
     }
   } catch (error) {
-    throw new StartupError('startup-failed', `could not ${state.config.sessionMode} root session: ${describe(error)}`, {
+    if (error?.name === 'SessionAlreadyOwnedError') {
+      // The official persistence write lock is held by another process. There
+      // is no pid in that error; the Nano ledger covers same-machine windows
+      // before this point, so this is an external writer. Never downgrade to a
+      // new session.
+      throw new StartupError('occupied', `session/writer-held: ${describe(error)}`, { cause: error })
+    }
+    const detail = error?.name === undefined ? describe(error) : `${error.name}: ${describe(error)}`
+    throw new StartupError('startup-failed', `could not ${state.config.sessionMode} root session: ${detail}`, {
       cause: error,
     })
   }
@@ -198,12 +220,21 @@ async function runStartup(state, config) {
     nonce: state.config.nonce,
     nonceRequired: state.transport.nonceRequired,
   })
+  state.attachments = new AttachmentService({
+    ctx,
+    agent: state.agentHandle.agent,
+    session,
+    rootSessionId: state.config.rootSessionId,
+    dataRoot: state.config.dataRoot,
+    config: state.config,
+  })
   state.conversation = new ConversationService({
     ctx,
     hub: state.hub,
     agent: state.agentHandle.agent,
     session,
     rootSessionId: state.config.rootSessionId,
+    attachments: state.attachments,
   })
   state.decisions = new DecisionService({
     ctx,
@@ -212,7 +243,42 @@ async function runStartup(state, config) {
     session,
     rootSessionId: state.config.rootSessionId,
   })
+  state.sessions = new SessionsService({
+    ctx,
+    hub: state.hub,
+    agent: state.agentHandle.agent,
+    session,
+    rootSessionId: state.config.rootSessionId,
+  })
+  state.controls = new ControlsService({
+    ctx,
+    hub: state.hub,
+    agent: state.agentHandle.agent,
+    session,
+    rootSessionId: state.config.rootSessionId,
+  })
+  state.skills = new SkillsService({
+    ctx,
+    hub: state.hub,
+    agent: state.agentHandle.agent,
+    session,
+    rootSessionId: state.config.rootSessionId,
+    cwd,
+  })
+  state.shell = new ShellService({
+    ctx,
+    agent: state.agentHandle.agent,
+    session,
+    rootSessionId: state.config.rootSessionId,
+  })
+  state.jobs = new JobsService({
+    ctx,
+    hub: state.hub,
+    session,
+    rootSessionId: state.config.rootSessionId,
+  })
 
+  const attachmentLimits = state.attachments.helloLimits()
   const hello = {
     jsonrpc: '2.0',
     method: 'nano.hello',
@@ -238,6 +304,7 @@ async function runStartup(state, config) {
         maxPendingRequests: LIMITS.maxPendingRequests,
         maxAttachmentChunkBytes: LIMITS.maxAttachmentChunkBytes,
       },
+      ...(attachmentLimits === undefined ? {} : { attachmentLimits }),
     },
   }
   await state.writer.sendControl(
@@ -286,6 +353,40 @@ function agentRoute(config) {
   const route = { provider: config.provider, model: config.model }
   if (config.reasoningEffort !== undefined) route.reasoningEffort = config.reasoningEffort
   return route
+}
+
+/**
+ * Check root-session existence before create/resume. Resume must never invent
+ * a same-id empty session, and create must never write over an existing log.
+ * `stat` is the official header-only persistence read; it does not open the log
+ * body or activate a cold agent.
+ * @param {object} ctx - host context.
+ * @param {'create'|'resume'} mode - requested lifecycle.
+ * @param {string} rootSessionId - exact official identity.
+ * @returns {Promise<void>} resolves when the identity is usable for the mode.
+ */
+async function inspectRootSession(ctx, mode, rootSessionId) {
+  const persistence = ctx.get('sessionPersistence')
+  if (persistence === undefined) return
+  let stored
+  try {
+    stored = await persistence.stat(rootSessionId)
+  } catch (error) {
+    throw new StartupError(
+      'startup-failed',
+      `could not inspect root session ${rootSessionId}: ${describe(error)}`,
+      { cause: error },
+    )
+  }
+  if (mode === 'resume' && stored === undefined) {
+    throw new StartupError('startup-failed', `session/not-found: no stored session ${rootSessionId}`)
+  }
+  if (mode === 'create' && stored !== undefined) {
+    throw new StartupError(
+      'startup-failed',
+      `session identity ${rootSessionId} already exists; refusing to create over it`,
+    )
+  }
 }
 
 function prepareDataRoots(dataRoot, rootSessionId) {
@@ -388,7 +489,12 @@ function handleLine(state, line) {
   }
   const entry = {
     method: frame.method,
-    cancellable: frame.method === 'nano.subscribe',
+    // Manual compaction settles through the official command's cancellation
+    // text, so it is a cancellable wait like a subscription replay.
+    cancellable:
+      frame.method === 'nano.subscribe' ||
+      frame.method === 'nano.fileReferences.list' ||
+      frame.method === 'nano.sessions.compact',
     controller: new AbortController(),
   }
   state.inFlight.set(frame.id, entry)
@@ -442,8 +548,33 @@ async function dispatchRequest(state, frame) {
       await sendResult(state, id, { cancelled: true })
       return undefined
     }
+    case 'nano.attachment.begin': {
+      await sendResult(state, id, state.attachments.begin(params))
+      return undefined
+    }
+    case 'nano.attachment.chunk': {
+      await sendResult(state, id, state.attachments.chunk(params))
+      return undefined
+    }
+    case 'nano.attachment.finish': {
+      await sendResult(state, id, await state.attachments.finish(params))
+      return undefined
+    }
+    case 'nano.attachment.discard': {
+      await sendResult(state, id, state.attachments.discard(params))
+      return undefined
+    }
+    case 'nano.fileReferences.list': {
+      const entry = state.inFlight.get(id)
+      await sendResult(
+        state,
+        id,
+        await state.attachments.listReferences(params, entry?.controller.signal),
+      )
+      return undefined
+    }
     case 'nano.conversation.submit': {
-      await sendResult(state, id, state.conversation.submit(params))
+      await sendResult(state, id, await state.conversation.submit(params))
       return undefined
     }
     case 'nano.conversation.editQueued': {
@@ -476,6 +607,75 @@ async function dispatchRequest(state, frame) {
     }
     case 'nano.decisions.snapshot': {
       await sendResult(state, id, state.decisions.snapshot(params))
+      return undefined
+    }
+    case 'nano.sessions.list': {
+      await sendResult(state, id, await state.sessions.list())
+      return undefined
+    }
+    case 'nano.sessions.rename': {
+      await sendResult(state, id, state.sessions.rename(params))
+      return undefined
+    }
+    case 'nano.sessions.context': {
+      await sendResult(state, id, state.sessions.context())
+      return undefined
+    }
+    case 'nano.sessions.compact': {
+      const signal = state.inFlight.get(id)?.controller.signal
+      await sendResult(state, id, await state.sessions.compact(params, signal))
+      return undefined
+    }
+    case 'nano.sessions.compactCancel': {
+      await sendResult(state, id, state.sessions.cancelCompact())
+      return undefined
+    }
+    case 'nano.shell.exec': {
+      await sendResult(state, id, await state.shell.exec(params))
+      return undefined
+    }
+    case 'nano.jobs.snapshot': {
+      await sendResult(state, id, state.jobs.snapshot(params))
+      return undefined
+    }
+    case 'nano.jobs.follow': {
+      await sendResult(state, id, state.jobs.follow(params))
+      return undefined
+    }
+    case 'nano.jobs.kill': {
+      await sendResult(state, id, state.jobs.kill(params))
+      return undefined
+    }
+    case 'nano.controls.state': {
+      await sendResult(state, id, state.controls.state())
+      return undefined
+    }
+    case 'nano.controls.modelCatalog': {
+      await sendResult(state, id, await state.controls.modelCatalog())
+      return undefined
+    }
+    case 'nano.controls.selectModel': {
+      await sendResult(state, id, await state.controls.selectModel(params))
+      return undefined
+    }
+    case 'nano.controls.setPermission': {
+      await sendResult(state, id, await state.controls.setPermission(params))
+      return undefined
+    }
+    case 'nano.controls.executeCommand': {
+      await sendResult(state, id, await state.controls.executeCommand(params))
+      return undefined
+    }
+    case 'nano.skills.list': {
+      await sendResult(state, id, await state.skills.list(params))
+      return undefined
+    }
+    case 'nano.skills.preview': {
+      await sendResult(state, id, await state.skills.preview(params))
+      return undefined
+    }
+    case 'nano.instructions.snapshot': {
+      await sendResult(state, id, state.skills.snapshot(params))
       return undefined
     }
     default: {
@@ -556,10 +756,22 @@ async function runShutdown(state, reason) {
   steps.push({ name: 'accepting', status: 'stopped' })
 
   steps.push(await runStep('subscriptions', deadline, () => {
+    state.controls?.close()
+    state.controls = undefined
     state.decisions?.close()
     state.decisions = undefined
     state.conversation?.close()
     state.conversation = undefined
+    state.attachments?.close()
+    state.attachments = undefined
+    state.sessions?.close()
+    state.sessions = undefined
+    state.skills?.close()
+    state.skills = undefined
+    state.shell?.close()
+    state.shell = undefined
+    state.jobs?.close()
+    state.jobs = undefined
     state.hub?.closeAll(reason)
   }, faults))
 
@@ -669,6 +881,14 @@ async function failStartup(state, error) {
   let code = startupError.code
   let message = startupError.message
   const cleanupFailures = []
+  if (state.controls !== undefined) {
+    try {
+      state.controls.close()
+      state.controls = undefined
+    } catch (cleanupError) {
+      cleanupFailures.push(`controls: ${describe(cleanupError)}`)
+    }
+  }
   if (state.decisions !== undefined) {
     try {
       state.decisions.close()
@@ -683,6 +903,46 @@ async function failStartup(state, error) {
       state.conversation = undefined
     } catch (cleanupError) {
       cleanupFailures.push(`conversation: ${describe(cleanupError)}`)
+    }
+  }
+  if (state.attachments !== undefined) {
+    try {
+      state.attachments.close()
+      state.attachments = undefined
+    } catch (cleanupError) {
+      cleanupFailures.push(`attachments: ${describe(cleanupError)}`)
+    }
+  }
+  if (state.sessions !== undefined) {
+    try {
+      state.sessions.close()
+      state.sessions = undefined
+    } catch (cleanupError) {
+      cleanupFailures.push(`sessions: ${describe(cleanupError)}`)
+    }
+  }
+  if (state.skills !== undefined) {
+    try {
+      state.skills.close()
+      state.skills = undefined
+    } catch (cleanupError) {
+      cleanupFailures.push(`skills: ${describe(cleanupError)}`)
+    }
+  }
+  if (state.shell !== undefined) {
+    try {
+      state.shell.close()
+      state.shell = undefined
+    } catch (cleanupError) {
+      cleanupFailures.push(`shell: ${describe(cleanupError)}`)
+    }
+  }
+  if (state.jobs !== undefined) {
+    try {
+      state.jobs.close()
+      state.jobs = undefined
+    } catch (cleanupError) {
+      cleanupFailures.push(`jobs: ${describe(cleanupError)}`)
     }
   }
   if (state.hub !== undefined) {
