@@ -16,6 +16,19 @@ use nano_runtime::{
 };
 use serde_json::Value;
 
+/// Every event kind this window subscribes to, in one place so the initial
+/// subscription and a later rebuild cannot drift apart.
+pub const SUBSCRIPTION_KINDS: [&str; 8] = [
+    "session.event",
+    "conversation.status",
+    "conversation.inbox",
+    "conversation.stream",
+    "skills.changed",
+    "instructions.changed",
+    "controls.model",
+    "controls.permission",
+];
+
 /// How a request failed, for deciding whether a result is explicitly failed or
 /// merely unknown. Only an RPC error or a local pre-send rejection is a fact;
 /// a transport failure may have delivered the request.
@@ -124,19 +137,10 @@ impl HostLink {
                 root_session_id: hello.root_session_id.clone(),
                 child_session_id: None,
             };
-            let mut kinds = vec![
-                "session.event".to_string(),
-                "conversation.status".to_string(),
-                "conversation.inbox".to_string(),
-                "conversation.stream".to_string(),
-            ];
-            // Only ask for job events when the composed host reports the
-            // capability; an older bridge would reject the unknown kind and
-            // turn a degraded jobs panel into a startup failure.
-            if jobs_supported(&hello) {
-                kinds.push("jobs.event".to_string());
-                kinds.push("jobs.output".to_string());
-            }
+            let kinds = subscription_kinds(&hello)
+                .into_iter()
+                .map(str::to_string)
+                .collect();
             let _subscription = match startup_host.subscribe(address, Some(kinds), Some(from_seq)) {
                 Ok(subscription) => subscription,
                 Err(error) => {
@@ -270,13 +274,22 @@ pub fn jobs_supported(hello: &Hello) -> bool {
         .is_some_and(|capability| capability.status == CapabilityStatus::Supported)
 }
 
+/// The subscription used at handshake and after a rebuild. The stable kinds
+/// come from the shared list; job events are only requested when the composed
+/// host reports the capability, so an older bridge fails soft instead of
+/// refusing the whole subscription.
+pub fn subscription_kinds(hello: &Hello) -> Vec<&'static str> {
+    let mut kinds = SUBSCRIPTION_KINDS.to_vec();
+    if jobs_supported(hello) {
+        kinds.push("jobs.event");
+        kinds.push("jobs.output");
+    }
+    kinds
+}
+
 /// Classify a request failure without losing the fact that it may have been
 /// delivered. The app must not restore the draft or claim failure for Unknown.
 fn classify_request_error(error: HostError) -> RequestError {
-    let code = match &error {
-        HostError::Rpc(rpc) => Some(rpc.code),
-        _ => None,
-    };
     let kind = match &error {
         HostError::Rpc(_) => RequestErrorKind::Rpc,
         HostError::PendingLimit
@@ -289,6 +302,10 @@ fn classify_request_error(error: HostError) -> RequestError {
             RequestErrorKind::Unknown
         }
         HostError::Io(_) | HostError::Spawn(_) => RequestErrorKind::Unknown,
+    };
+    let code = match &error {
+        HostError::Rpc(body) => Some(body.code),
+        _ => None,
     };
     RequestError {
         kind,

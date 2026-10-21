@@ -77,8 +77,28 @@ fn every_event_kind_is_covered_by_the_contract_shape() {
             "conversation.status",
             "conversation.inbox",
             "conversation.stream",
+            "skills.changed",
+            "instructions.changed",
+            "controls.model",
+            "controls.permission",
             "jobs.event",
             "jobs.output"
         ]
     );
+    for (owner, kind) in [
+        ("S04", "controls.model"),
+        ("S04", "controls.permission"),
+        ("S05", "skills.changed"),
+        ("S05", "instructions.changed"),
+        ("S08", "jobs.event"),
+        ("S08", "jobs.output"),
+    ] {
+        let event = contract["eventKinds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|event| event["kind"] == kind)
+            .unwrap();
+        assert_eq!(event["owner"], owner, "{kind} owner");
+    }
 }

@@ -2,13 +2,13 @@
 
 ## 已执行
 
-- `cargo test --workspace`：nano-app 43 项、nano-conversation 51 + 契约 5 项、nano-jobs 契约 13 项、nano-runtime 单元 18 + 契约 10 + preflight 2 项全绿；nano-runtime 的 15 项真实宿主回归默认 ignored。
-- `npm run test:bridge`：90 项通过，含 shell 服务 13 项、jobs 服务 11 项与协议契约夹具。
+- `cargo test --workspace`：nano-app 77 项（含 S08 的面板/错误/快照/follow 测试）、nano-conversation 52 + 契约 5、nano-controls 27 + 契约 2、nano-jobs 契约 13、nano-runtime 18 + 契约 10 + preflight 2、nano-skills 20 + 契约 5，全绿；nano-runtime 的 15 项真实宿主回归默认 ignored。
+- `npm run test:bridge`：133 项通过（合并 S04/S05 后），含 shell 服务 13 项、jobs 服务 11 项与协议契约夹具。
 - `NANO_E2E=1 node --test bridge/test/integration/host.test.mjs`：3 项通过。真实宿主验证 `!` 的 per-call `danger-full-access` 策略、`<bash-input>/<bash-stdout>/<bash-stderr>` 注入、`bash-mode` source、不唤醒驱动（状态保持 idle）、不分配 job ID、每命令新 shell 且 cwd 固定；`nano.jobs.*` 的空列表、非消费 follow 与 not-found 路径。输出见 `host-e2e.txt`。
 - `scripts/pty-evidence-s08.sh`：真实 PTY（tmux 150×45）启动真实 dsh profile。首次 `!` 显示「用户权限、不是 Agent 授权」并要求二次 Enter；退出码 0/7、stderr 分节、运行中状态、任务面板（官方 jobs 空列表）与 Ctrl+C 干净退出可见。快照见 `manual-shell-terminal.txt`。
 - jobs 观察层用官方投影夹具覆盖：`job/registered` 的所属调用关联、`jobs.event` 的 registered/progress/stopping/settled/removed、`readAt` 非消费 offset、`lossy`/`gapBefore` 缺口标记、ring 裁剪、`requested`/`already-finished` 与 not-found 区分、人类停止原因固定为 `cancelled by the user`。
 - **真实模型会话（用户授权，deepseek-official / deepseek-flash）**：模型用 bash 工具在后台启动 `sh -c 'echo s08-start; sleep 40; echo s08-end'`；S08 通过官方投影看到 `bash-1e69…` 运行中，`readAt(0)` 非消费读到 `s08-start`，`nano.jobs.kill` 返回 `requested`，官方终态 `killed` + `signal: SIGTERM; cancelled by the user`，`cause: kill`、`awaited: false`；随后完成通知在 2 个观测帧（splice + inbox 投影）里出现，但 **message id 只有一个**，且带人工停止原因。输出见 `real-model-jobs.txt`。该会话使用用户真实 `~/.dsh` 凭据（未复制），profile 安装到 `~/.dsh/profiles/nano-s08-evidence-*` 并在退出后删除；数据根与 cwd 是临时目录。证据运行把 `tool-jobs` 的 `completionDelivery` 设为 `quiet`，避免再开一个 wake 模型回合；通知渠道本身仍是官方 `dsh-tool-jobs`。
-- **真实 TUI + 真实模型（用户再次授权）**：在真实 `nano` 里让模型前台运行 `sh -c 'echo s08-promo; sleep 30'` 且 `timeoutMs: 1000`；官方工具结果出现 `still running after 1000ms; moved to background job bash-bd90…`，同一 job id 随即出现在 Ctrl+T 任务面板（运行中，带所属调用），Enter 详情非消费读到 `s08-promo`，k 停止后显示官方终态 `被终止 · signal: SIGTERM; cancelled by the user`。这把 promotion 成功路径和 TUI 任务面板/详情/停止一起覆盖。输出见 `real-tui-promotion.txt`，官方会话日志摘录见 `promotion-session.txt`（同一 notice id `cf78…` 同时出现在 `agent/inbox/spliced` 与 `user/message`，是同一通知的两种观测，不是两次投递）。临时 `DSH_HOME` 只符号链接真实凭据文件（未复制），运行前后 sha 校验一致；运行使用临时 profile，结束后删除。
+- **真实 TUI + 真实模型（用户再次授权）**：在真实 `nano` 里让模型前台运行 `sh -c 'echo s08-promo; sleep 30'` 且 `timeoutMs: 1000`；官方工具结果出现 `still running after 1000ms; moved to background job bash-f6ff…`，同一 job id 随即出现在 Ctrl+T 任务面板（运行中，带所属调用），Enter 详情非消费读到 `s08-promo`，k 停止后显示官方终态 `被终止 · signal: SIGTERM; cancelled by the user`。这把 promotion 成功路径和 TUI 任务面板/详情/停止一起覆盖。输出见 `real-tui-promotion.txt`，官方会话日志摘录见 `promotion-session.txt`（同一 notice id `1468…` 同时出现在 `agent/inbox/spliced` 与 `user/message`，是同一通知的两种观测，不是两次投递）。临时 `DSH_HOME` 只符号链接真实凭据文件（未复制），运行前后 sha 校验一致；运行使用临时 profile，结束后删除。
 
 ## 未执行（不得勾选）
 

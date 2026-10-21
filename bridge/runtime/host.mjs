@@ -17,6 +17,8 @@ import { SubscriptionHub } from './events.mjs'
 import { ConversationService } from '../conversation/service.mjs'
 import { ShellService } from '../shell/service.mjs'
 import { JobsService } from '../jobs/service.mjs'
+import { ControlsService } from '../controls/service.mjs'
+import { SkillsService } from '../skills/service.mjs'
 import { buildCapabilities } from './capabilities.mjs'
 import { IMPLEMENTED_REQUEST_METHODS } from './methods.mjs'
 
@@ -42,6 +44,8 @@ export function startHost(ctx, config) {
     conversation: undefined,
     shell: undefined,
     jobs: undefined,
+    controls: undefined,
+    skills: undefined,
     agentHandle: undefined,
     session: undefined,
     claim: undefined,
@@ -206,6 +210,21 @@ async function runStartup(state, config) {
     agent: state.agentHandle.agent,
     session,
     rootSessionId: state.config.rootSessionId,
+  })
+  state.controls = new ControlsService({
+    ctx,
+    hub: state.hub,
+    agent: state.agentHandle.agent,
+    session,
+    rootSessionId: state.config.rootSessionId,
+  })
+  state.skills = new SkillsService({
+    ctx,
+    hub: state.hub,
+    agent: state.agentHandle.agent,
+    session,
+    rootSessionId: state.config.rootSessionId,
+    cwd,
   })
   state.shell = new ShellService({
     ctx,
@@ -489,6 +508,38 @@ async function dispatchRequest(state, frame) {
       await sendResult(state, id, state.jobs.kill(params))
       return undefined
     }
+    case 'nano.controls.state': {
+      await sendResult(state, id, state.controls.state())
+      return undefined
+    }
+    case 'nano.controls.modelCatalog': {
+      await sendResult(state, id, await state.controls.modelCatalog())
+      return undefined
+    }
+    case 'nano.controls.selectModel': {
+      await sendResult(state, id, await state.controls.selectModel(params))
+      return undefined
+    }
+    case 'nano.controls.setPermission': {
+      await sendResult(state, id, await state.controls.setPermission(params))
+      return undefined
+    }
+    case 'nano.controls.executeCommand': {
+      await sendResult(state, id, await state.controls.executeCommand(params))
+      return undefined
+    }
+    case 'nano.skills.list': {
+      await sendResult(state, id, await state.skills.list(params))
+      return undefined
+    }
+    case 'nano.skills.preview': {
+      await sendResult(state, id, await state.skills.preview(params))
+      return undefined
+    }
+    case 'nano.instructions.snapshot': {
+      await sendResult(state, id, state.skills.snapshot(params))
+      return undefined
+    }
     default: {
       const reserved = RESERVED_METHODS.get(method)
       if (reserved !== undefined) {
@@ -567,8 +618,12 @@ async function runShutdown(state, reason) {
   steps.push({ name: 'accepting', status: 'stopped' })
 
   steps.push(await runStep('subscriptions', deadline, () => {
+    state.controls?.close()
+    state.controls = undefined
     state.conversation?.close()
     state.conversation = undefined
+    state.skills?.close()
+    state.skills = undefined
     state.shell?.close()
     state.shell = undefined
     state.jobs?.close()
@@ -682,12 +737,28 @@ async function failStartup(state, error) {
   let code = startupError.code
   let message = startupError.message
   const cleanupFailures = []
+  if (state.controls !== undefined) {
+    try {
+      state.controls.close()
+      state.controls = undefined
+    } catch (cleanupError) {
+      cleanupFailures.push(`controls: ${describe(cleanupError)}`)
+    }
+  }
   if (state.conversation !== undefined) {
     try {
       state.conversation.close()
       state.conversation = undefined
     } catch (cleanupError) {
       cleanupFailures.push(`conversation: ${describe(cleanupError)}`)
+    }
+  }
+  if (state.skills !== undefined) {
+    try {
+      state.skills.close()
+      state.skills = undefined
+    } catch (cleanupError) {
+      cleanupFailures.push(`skills: ${describe(cleanupError)}`)
     }
   }
   if (state.shell !== undefined) {

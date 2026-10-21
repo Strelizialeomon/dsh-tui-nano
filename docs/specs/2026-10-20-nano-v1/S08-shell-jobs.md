@@ -123,7 +123,7 @@
 | 13 | minor | 官方事件不可解析时静默、`last_error` 是死代码 | 面板/状态行显示 `jobs.last_error`；解析失败不再静默 |
 | 14 | minor | 详情 ring 总量/最早保留字节陈旧 | `jobs.output` 事件与 follow 都更新投影 `output.total` |
 | 15 | minor | `attachController('nano-jobs')` 是清单外机制，会改变缺 controller 的组合行为 | 移除；S08 只观察，不改变官方「无 controller 退回 deadline kill」 |
-| 16 | minor | not-found 提示用 message 匹配，永远不命中 | `RequestError` 保留 JSON-RPC code，按 1020 判定；Unknown 单独显示「结果未知」 |
+| 16 | minor | not-found 提示用 message 匹配，永远不命中 | `RequestError` 保留 JSON-RPC code，按 1028 判定；Unknown 单独显示「结果未知」 |
 | 17 | minor | 75s 等待上限与可配置 executor deadline 脱钩 | 桥在请求上显式 `timeoutMs: 60000`，Rust 75s 等待对应这个 deadline |
 | 18 | minor | S02 契约测试被放宽；跨 owner 改动未说明 | 契约测试恢复精确事件集合；跨 owner 改动仅限协议/runtime/app 接入，未实现 S03/S04/S10 |
 | 19 | minor | 使用已废弃的 `session.snapshotEvents()` | 移除初始历史索引；job/registered 只走 live `session/event`，桥在握手前已挂载 |

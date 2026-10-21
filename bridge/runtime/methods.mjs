@@ -18,6 +18,14 @@ export const IMPLEMENTED_REQUEST_METHODS = Object.freeze([
   'nano.jobs.snapshot',
   'nano.jobs.follow',
   'nano.jobs.kill',
+  'nano.skills.list',
+  'nano.skills.preview',
+  'nano.instructions.snapshot',
+  'nano.controls.state',
+  'nano.controls.modelCatalog',
+  'nano.controls.selectModel',
+  'nano.controls.setPermission',
+  'nano.controls.executeCommand',
 ])
 
 /** Notifications this host can emit. */

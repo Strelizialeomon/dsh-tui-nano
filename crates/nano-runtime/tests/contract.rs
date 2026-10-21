@@ -138,7 +138,8 @@ fn implemented_methods_match() {
         );
         match method["status"].as_str().unwrap() {
             "implemented" => assert!(
-                ["S01", "S02", "S08"].contains(&method["owner"].as_str().unwrap()),
+                ["S01", "S02", "S04", "S05", "S08"]
+                    .contains(&method["owner"].as_str().unwrap()),
                 "{name} is implemented by an owner this contract test does not know"
             ),
             "reserved" => assert_ne!(method["owner"], "S01", "{name} is reserved but owned by S01"),

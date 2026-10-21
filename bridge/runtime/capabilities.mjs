@@ -16,6 +16,8 @@ const SERVICE_CAPABILITIES = Object.freeze({
   shell: 'shell',
   subagents: 'subagents',
   terminal: 'terminalController',
+  permissionPresets: 'permissionPresets',
+  commands: 'commands',
 })
 
 /**
@@ -41,6 +43,15 @@ export function buildCapabilities(ctx, config) {
       detail: 'sandboxPolicy is not composed; the user-permission policy cannot be resolved',
     }
   }
+
+  // Model selection is served either by the Web session controller or by the
+  // official CLI primitives (llm registry + agentDefaultModel + selection hooks).
+  const modelSelection =
+    ctx.get('sessionController') !== undefined ||
+    (ctx.get('llm') !== undefined && ctx.get('agentDefaultModel') !== undefined)
+  capabilities.modelSelection = modelSelection
+    ? { status: 'supported' }
+    : { status: 'unsupported', detail: 'the official model registry is not composed' }
 
   // The seams are composed, but S01 registers no answerer. Reporting them as
   // supported would claim an interaction path that cannot answer; S03 owns the
@@ -68,6 +79,14 @@ export function buildCapabilities(ctx, config) {
     status: 'unsupported',
     detail: 'the Monitor backend belongs to S10',
   }
+
+  // S05 reads the official registry; when the registry row is absent the
+  // catalog and preview methods report `nano/unsupported` instead of an empty
+  // list that would look like "no skills installed".
+  capabilities.skills =
+    ctx.get('skills') === undefined
+      ? { status: 'unsupported', detail: 'the official skill registry is not composed' }
+      : { status: 'supported' }
 
   // This profile mounts no HTTP/WebServer plugin; keep a negative capability so
   // the Rust side can assert the no-listener property instead of inferring it.

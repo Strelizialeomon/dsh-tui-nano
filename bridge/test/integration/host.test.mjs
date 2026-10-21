@@ -368,12 +368,12 @@ test(
       jobId: 'bash-0000000000000000',
       from: 0,
     })
-    assert.equal(missingFollow.error.code, 1020)
+    assert.equal(missingFollow.error.code, 1028)
     const missingKill = await call('nano.jobs.kill', {
       address,
       jobId: 'bash-0000000000000000',
     })
-    assert.equal(missingKill.error.code, 1020)
+    assert.equal(missingKill.error.code, 1028)
 
     const wrongAddress = await call('nano.shell.exec', {
       address: { rootSessionId: 'other-session' },
