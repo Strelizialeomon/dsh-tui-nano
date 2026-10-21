@@ -6,13 +6,13 @@ test result: ok. 52 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fin
      Running tests/contract.rs (target/debug/deps/contract-d59cde89ab36d397)
 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
      Running unittests src/lib.rs (target/debug/deps/nano_runtime-7d0849fc23948764)
-test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.67s
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.65s
      Running tests/contract.rs (target/debug/deps/contract-21fa318daf1a1f24)
 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
      Running tests/integration.rs (target/debug/deps/integration-2d092d642fa50042)
 test result: ok. 0 passed; 0 failed; 15 ignored; 0 measured; 0 filtered out; finished in 0.00s
      Running tests/preflight.rs (target/debug/deps/preflight-e737557dd06cfb53)
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
      Running unittests src/lib.rs (target/debug/deps/nano_skills-a7b2f2a38e58f842)
 test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
      Running tests/contract.rs (target/debug/deps/contract-c7f1c807d8e7f074)
@@ -27,9 +27,12 @@ $ node --test bridge/test/*.test.mjs
 ℹ fail 0
 
 $ NANO_E2E=1 node --test bridge/test/integration/*.test.mjs
-✔ malformed frame is reported, subscription replays, shutdown is clean (1518.898625ms)
-✔ conversation surface submits, dedupes, and keeps official identity (1840.63425ms)
-✔ real host discovers, previews, invalidates, and injects skills (1900.293375ms)
-ℹ tests 3
-ℹ pass 3
+✔ malformed frame is reported, subscription replays, shutdown is clean (1477.939792ms)
+✔ conversation surface submits, dedupes, and keeps official identity (1996.395875ms)
+✔ nested instructions and the resumed instruction baseline (2349.982375ms)
+✔ a root-marker failure surfaces the official error and builds no sources (1209.183584ms)
+✔ an unreadable rule file is skipped without fabricating sources (1265.349625ms)
+✔ real host discovers, previews, invalidates, and injects skills (1847.920417ms)
+ℹ tests 6
+ℹ pass 6
 ℹ fail 0
