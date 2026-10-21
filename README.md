@@ -15,6 +15,8 @@ S02「对话与输入」已实施（执行单 [#5](https://github.com/Strelizial
 
 S06「引用与图片」已实施（执行单 [#9](https://github.com/Strelizialeomon/dsh-tui-nano/issues/9)）：输入框支持 `@file` 补全（只插入路径，不读文件内容）、Alt+A 附加本地图片/通用文件、Alt+Backspace 移除本地卡片；图片在提交时交给官方 `ctx.attachments.admitPromptContent` 校验、规范化并持久化；通用文件经 chunk 上传，`finish` 时由官方 `saveFileStream` 生成 `FileAttachmentRef`，提交时校验归属并转交。附件的顺序与文本一致，失败保留草稿和卡片。
 
+S05「技能与规矩」已实施（执行单 [#8](https://github.com/Strelizialeomon/dsh-tui-nano/issues/8)）：`Alt+K` 打开官方用户可调用技能目录（含仅用户可调用标记与官方路径），`P` 只读预览 `SKILL.md`，`Enter` 把字面量 `/name` 填入输入框；官方 provider watcher 变化后只订阅 `skills/change` 并重拉目录。`Alt+R` 显示官方 `agent-instructions` 实际加载的全局链/项目链、去重后的来源、最近一次加载时间与预算省略/截断提示。与官方命令同名的 `/name` 在成为 prompt 前被拦下（命令入口属 S04，尚未接入）。
+
 ## 结构
 
 | 路径 | 内容 |
@@ -23,9 +25,11 @@ S06「引用与图片」已实施（执行单 [#9](https://github.com/Strelizial
 | `bridge/runtime/` | Cordis 插件、fd 3/4 传输、会话挂载账本、订阅、关停；profile 安装器 |
 | `bridge/conversation/` | 对话宿主：提交、官方 inbox、队列编辑/删除/插话、停止、快照、实时流 |
 | `bridge/attachments/` | 附件宿主：chunk 暂存、会话绑定回执、官方图片准入、通用文件保存、`@file` 发现 |
+| `bridge/skills/` | 技能目录/预览与规矩来源投影；只读官方 `ctx.skills`、官方命令名与 `agent-instructions` 持久消息 |
 | `crates/nano-runtime/` | Rust 侧：preflight、启动、握手、请求/事件、生命周期、关停四事实 |
 | `crates/nano-conversation/` | 输入缓冲、按地址草稿、提交状态机、队列投影、流式预览、消息历史、场景/焦点 |
 | `crates/nano-attachments/` | `@file` 语法、图片本地检查、有序附件卡片、补全取消与陈旧响应防护 |
+| `crates/nano-skills/` | 技能目录（保留上次可用、可能不完整）、命令优先裁决、预览、规矩来源、`/name` 注入事实 |
 | `crates/nano-app/` | `nano` 终端应用：键位、渲染、宿主连接与退出 |
 | `docs/specs/2026-10-20-nano-v1/` | 已合并的规格 |
 
@@ -47,14 +51,17 @@ cargo test -p nano-runtime --test integration -- --ignored --test-threads=1 --sk
 # 10s + 3s 关停预算的慢测试
 NANO_E2E_SLOW=1 cargo test -p nano-runtime --test integration -- --ignored --exact shutdown_budget_is_bounded_when_cleanup_hangs
 
-# 桥接侧真实宿主测试（错误 JSON 后连接仍可用；对话 submit/去重/resume 重放）
-NANO_E2E=1 node --test bridge/test/integration/host.test.mjs
+# 桥接侧真实宿主测试（错误 JSON 后连接仍可用；对话 submit/去重/resume 重放；技能发现/预览/watcher/注入）
+NANO_E2E=1 node --test bridge/test/integration/*.test.mjs
 
 # 真实 PTY 证据（输入、粘贴、提交、失败可见、干净退出）
 python3 scripts/pty-evidence.py
 
-# S06 真实 PTY 证据（@ 补全、附件选择、图片上传、顺序回显、干净退出）
+# S06 真实 PTY 证据（@ 补全、附件选择、图片上传、顺序/重排回显、干净退出）
 python3 scripts/pty-evidence-attachments.py
+
+# S05 真实 PTY 证据（技能面板/预览/watcher/注入/规矩来源与预算提示；使用本机 mock 模型，无真实费用）
+python3 scripts/pty-evidence-s05.py
 
 # S06 真实宿主测试（官方附件服务、文件保存、顺序准入、恢复重放）
 NANO_E2E=1 node --test bridge/test/integration/attachments.test.mjs
@@ -69,6 +76,7 @@ NANO_E2E=1 node --test bridge/test/integration/attachments.test.mjs
 - 调度（S11）、Monitor（S10）、PTY（S09）在 hello 里报 `unsupported`；审批与问卷的官方 seam 已组合，但 S01 不注册回答者，因此报 `unavailable`（回答者属 S03）。不是静默缺省。
 - 官方升级不在验证矩阵内时启动直接拒绝；不猜字段、不降级。
 - 当前没有模型选择界面（S04）；`--provider/--model` 只是启动时的初始路由，是用户批准的最小范围例外（S04 仍拥有模型选择业务与切换）。没有路由或凭据时，官方回合会明确失败，界面不会伪造回答。
+- 命令面板与命令执行属 S04，当前未接入；`/name` 与官方命令同名时会被明确拦下并保留草稿，不会误发成技能。远程技能 provider 未验证；技能目录不完整时保留上次可用结果并标注。
 - 对话区的纯文本 feed 是 S02 的可运行占位，不是 S03 的阅读层级；样式、折叠、差异与问卷/审批由 S03 接替。
 - 诊断只保留版本、方法、状态、计数、延迟和错误分类；宿主 stderr 只保留有界尾部用于启动失败定位，不写入日志文件，不主动记录用户正文/参数/环境值。
 - 凭据只在官方 provider 内解析；Nano 不复制凭据，不改 `$DSH_HOME` 的凭据、全局指令或 `storages/`。官方 profile 支持的凭据读取/迁移行为沿用官方实现，首次使用时应按官方说明核对。

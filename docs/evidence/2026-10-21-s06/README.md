@@ -47,17 +47,17 @@
 
 `bridge/test/attachments.test.mjs` 覆盖：
 
-- chunk 顺序错误 → `nano/attachments/chunk-sequence`（1022）；
+- chunk 顺序错误 → `nano/attachments/chunk-sequence`（1031）；
 - 非 canonical base64 → `jsonrpc/invalid-params`；
 - 单 chunk 超过 48 KiB → `nano/frame-too-large`；
-- 声明字节数与实际不符 → `nano/attachments/receipt-incomplete`（1021）；
-- 官方图片准入失败保留稳定 reason（如 `IMAGE_TYPE_MISMATCH`）→ 1023；
-- 模型明确不支持图片 → `MODEL_DOES_NOT_SUPPORT_IMAGES` / 1024；
-- 未完成、未知、已 commit 的回执不能再次提交 → 1021/1019/1020；
+- 声明字节数与实际不符 → `nano/attachments/receipt-incomplete`（1030）；
+- 官方图片准入失败保留稳定 reason（如 `IMAGE_TYPE_MISMATCH`）→ 1032；
+- 模型明确不支持图片 → `MODEL_DOES_NOT_SUPPORT_IMAGES` / 1033；
+- 未完成、未知、已 commit 的回执不能再次提交 → 1030/1028/1029；
 - 跨会话地址 → 1011；
 - 子代理地址通用文件被拒绝（1008），图片可暂存；
 - 回执 id/显示名不能夹带本地路径；
-- 0 字节通用文件可保存；每消息图片总量超限 → 1025；
+- 0 字节通用文件可保存；每消息图片总量超限 → 1034；
 - 同一 requestId 并发提交只准入一次、只产生一条消息；
 - `bindPrompt` 在 Agent 同步 inbox 事件前生效；durable user message / discarded 也会退休回执；
 - 上传失败不自动重发；传输丢失标「结果未知」（Rust app 测试）；
@@ -67,7 +67,7 @@
 
 ## 5. 实测限额
 
-真实宿主报告并据此校验的官方默认值：单图 20 MiB、每条消息 20 张、总量 200 MiB、6400 万像素、单边 8192 像素，格式 PNG/JPEG/WebP/GIF。界面不写死来源上限；`hello.attachmentLimits` 缺失或不完整时，Rust 不猜测限额并明确拒绝图片入口，bridge 保留 64 MiB 的本地暂存硬上限，官方准入仍是最终判定。`fileAdmission` 对随附 `dsh-attachment-local` 声明 `verbatim`；换用不支持文件保存的 store 时 `finish` 会以 1026 明确失败。
+真实宿主报告并据此校验的官方默认值：单图 20 MiB、每条消息 20 张、总量 200 MiB、6400 万像素、单边 8192 像素，格式 PNG/JPEG/WebP/GIF。界面不写死来源上限；`hello.attachmentLimits` 缺失或不完整时，Rust 不猜测限额并明确拒绝图片入口，bridge 保留 64 MiB 的本地暂存硬上限，官方准入仍是最终判定。`fileAdmission` 对随附 `dsh-attachment-local` 声明 `verbatim`；换用不支持文件保存的 store 时 `finish` 会以 1035 明确失败。
 
 ## 6. 未测 / 边界
 

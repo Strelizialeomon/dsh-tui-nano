@@ -4,9 +4,10 @@
 
 - 方法名、方向、实现状态（`implemented` / `reserved`）；S02 的对话方法为 `nano.conversation.submit|editQueued|deleteQueued|steerQueued|cancel|snapshot`；S06 的附件方法为 `nano.attachment.begin|chunk|finish|discard` 与 `nano.fileReferences.list`；
 - S02 的事件 kind：`conversation.status`、`conversation.inbox`（完整投影；超帧上限时降级为有界预览，带 `truncated`/`total`/`omitted`）、`conversation.stream`（start/chunk/end 帧）；
+- S05 的方法：`nano.skills.list`（用户可调用技能目录 + 官方命令名）、`nano.skills.preview`（有界只读预览）、`nano.instructions.snapshot`（规矩来源投影）；事件 `skills.changed`（仅刷新信号）与 `instructions.changed`（完整投影）；
 - 帧必需字段、错误码、生命周期边、事件 kind；
 - 容量上限（frame、pending、chunk、背压队列、退出预算、单次提交 32 KiB）；S06 的 `hello.attachmentLimits` 是可选的部署图片限额（类型、字节、像素、边长、每消息数量与总量、chunk 大小）与 `fileAdmission` 能力声明；
-- `fixtures` 里的样本必须能被双方解析，包括 `conversationSubmit` 与 `conversationEvent`。
+- `fixtures` 里的样本必须能被双方解析，包括 `conversationSubmit`、`conversationSubmitAttachments`、`conversationEvent`、`skillsListResult`、`skillPreviewResult` 与 `instructionsEvent`。
 
 `@dsh-tui-nano/protocol` 是它最小的 Node 包装（只读、深冻结、零依赖）。Rust 侧在 `crates/nano-runtime/tests/contract.rs` 里用 `include_str!` 读取同一份 JSON。
 

@@ -81,7 +81,7 @@ pub const LIFECYCLE_TRANSITIONS: [(&str, &str); 15] = [
 ];
 
 /// Error code names shared with the bridge contract.
-pub const ERROR_CODE_NAMES: [(&str, i64); 32] = [
+pub const ERROR_CODE_NAMES: [(&str, i64); 35] = [
     ("jsonrpc/parse-error", -32700),
     ("jsonrpc/invalid-request", -32600),
     ("jsonrpc/method-not-found", -32601),
@@ -105,19 +105,22 @@ pub const ERROR_CODE_NAMES: [(&str, i64); 32] = [
     ("nano/conversation/steer-unavailable", 1016),
     ("nano/conversation/rejected", 1017),
     ("nano/conversation/too-large", 1018),
-    ("nano/attachments/receipt-unknown", 1019),
-    ("nano/attachments/receipt-committed", 1020),
-    ("nano/attachments/receipt-incomplete", 1021),
-    ("nano/attachments/chunk-sequence", 1022),
-    ("nano/attachments/image-invalid", 1023),
-    ("nano/attachments/model-no-images", 1024),
-    ("nano/attachments/limit", 1025),
-    ("nano/attachments/file-failed", 1026),
-    ("nano/file-references/failed", 1027),
+    ("nano/skills/not-found", 1019),
+    ("nano/skills/no-preview", 1020),
+    ("nano/skills/preview-failed", 1021),
+    ("nano/attachments/receipt-unknown", 1028),
+    ("nano/attachments/receipt-committed", 1029),
+    ("nano/attachments/receipt-incomplete", 1030),
+    ("nano/attachments/chunk-sequence", 1031),
+    ("nano/attachments/image-invalid", 1032),
+    ("nano/attachments/model-no-images", 1033),
+    ("nano/attachments/limit", 1034),
+    ("nano/attachments/file-failed", 1035),
+    ("nano/file-references/failed", 1036),
 ];
 
 /// Method names implemented by this generation.
-pub const IMPLEMENTED_METHODS: [&str; 19] = [
+pub const IMPLEMENTED_METHODS: [&str; 22] = [
     "nano.hello",
     "nano.startupError",
     "nano.shutdown",
@@ -137,14 +140,19 @@ pub const IMPLEMENTED_METHODS: [&str; 19] = [
     "nano.conversation.steerQueued",
     "nano.conversation.cancel",
     "nano.conversation.snapshot",
+    "nano.skills.list",
+    "nano.skills.preview",
+    "nano.instructions.snapshot",
 ];
 
 /// Event kinds this client accepts.
-pub const EVENT_KINDS: [&str; 4] = [
+pub const EVENT_KINDS: [&str; 6] = [
     "session.event",
     "conversation.status",
     "conversation.inbox",
     "conversation.stream",
+    "skills.changed",
+    "instructions.changed",
 ];
 
 /// Shutdown report step names, in report order.

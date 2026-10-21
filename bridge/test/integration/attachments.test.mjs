@@ -409,7 +409,7 @@ test(
       content: [{ type: 'image', receiptId: imageReceipt }],
     })
     assert.ok(
-      reused.error?.code === 1019 || reused.error?.code === 1020,
+      reused.error?.code === 1028 || reused.error?.code === 1029,
       JSON.stringify(reused),
     )
 

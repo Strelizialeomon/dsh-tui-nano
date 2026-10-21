@@ -16,6 +16,7 @@ import { claimMount, releaseMount } from './ledger.mjs'
 import { SubscriptionHub } from './events.mjs'
 import { ConversationService } from '../conversation/service.mjs'
 import { AttachmentService } from '../attachments/service.mjs'
+import { SkillsService } from '../skills/service.mjs' 
 import { buildCapabilities } from './capabilities.mjs'
 import { IMPLEMENTED_REQUEST_METHODS } from './methods.mjs'
 
@@ -40,6 +41,7 @@ export function startHost(ctx, config) {
     hub: undefined,
     conversation: undefined,
     attachments: undefined,
+    skills: undefined,
     agentHandle: undefined,
     session: undefined,
     claim: undefined,
@@ -213,6 +215,14 @@ async function runStartup(state, config) {
     session,
     rootSessionId: state.config.rootSessionId,
     attachments: state.attachments,
+  })
+  state.skills = new SkillsService({
+    ctx,
+    hub: state.hub,
+    agent: state.agentHandle.agent,
+    session,
+    rootSessionId: state.config.rootSessionId,
+    cwd,
   })
 
   const attachmentLimits = state.attachments.helloLimits()
@@ -495,6 +505,18 @@ async function dispatchRequest(state, frame) {
       await sendResult(state, id, state.conversation.snapshot(params))
       return undefined
     }
+    case 'nano.skills.list': {
+      await sendResult(state, id, await state.skills.list(params))
+      return undefined
+    }
+    case 'nano.skills.preview': {
+      await sendResult(state, id, await state.skills.preview(params))
+      return undefined
+    }
+    case 'nano.instructions.snapshot': {
+      await sendResult(state, id, state.skills.snapshot(params))
+      return undefined
+    }
     default: {
       const reserved = RESERVED_METHODS.get(method)
       if (reserved !== undefined) {
@@ -577,6 +599,8 @@ async function runShutdown(state, reason) {
     state.conversation = undefined
     state.attachments?.close()
     state.attachments = undefined
+    state.skills?.close()
+    state.skills = undefined
     state.hub?.closeAll(reason)
   }, faults))
 
@@ -700,6 +724,14 @@ async function failStartup(state, error) {
       state.attachments = undefined
     } catch (cleanupError) {
       cleanupFailures.push(`attachments: ${describe(cleanupError)}`)
+    }
+  }
+  if (state.skills !== undefined) {
+    try {
+      state.skills.close()
+      state.skills = undefined
+    } catch (cleanupError) {
+      cleanupFailures.push(`skills: ${describe(cleanupError)}`)
     }
   }
   if (state.hub !== undefined) {

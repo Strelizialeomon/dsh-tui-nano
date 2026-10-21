@@ -17,6 +17,7 @@
     "runtime/**/*.mjs",
     "conversation/**/*.mjs",
     "attachments/**/*.mjs",
+    "skills/**/*.mjs",
     "profile/**/*.mjs",
     "cordis.patch.yml",
     "README.md"

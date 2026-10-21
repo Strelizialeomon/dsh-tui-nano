@@ -185,11 +185,11 @@ test('receipts are session-bound and cannot be reused after commit', async () =>
 
   await assert.rejects(
     service.admitContent(ADDRESS, [{ type: 'image', receiptId: 'r-img' }]),
-    (error) => error.code === 1020,
+    (error) => error.code === 1029,
   )
   assert.throws(
     () => service.begin({ address: ADDRESS, receiptId: 'r-img', kind: 'image', mediaType: 'image/png' }),
-    (error) => error.code === 1020,
+    (error) => error.code === 1029,
   )
   assert.throws(
     () => beginImage(service, 'r-other', { address: { rootSessionId: 'other' } }),
@@ -235,11 +235,11 @@ test('an incomplete receipt cannot be submitted', async () => {
   service.chunk({ receiptId: 'r-img', sequence: 0, bytes: 'AA==' })
   await assert.rejects(
     service.admitContent(ADDRESS, [{ type: 'image', receiptId: 'r-img' }]),
-    (error) => error.code === 1021,
+    (error) => error.code === 1030,
   )
   assert.throws(
     () => service.chunk({ receiptId: 'missing', sequence: 0, bytes: 'AA==' }),
-    (error) => error.code === 1019,
+    (error) => error.code === 1028,
   )
 })
 
@@ -248,7 +248,7 @@ test('chunk order, canonical base64, and chunk size are enforced', async () => {
   beginImage(service)
   assert.throws(
     () => service.chunk({ receiptId: 'r-img', sequence: 1, bytes: 'AA==' }),
-    (error) => error.code === 1022,
+    (error) => error.code === 1031,
   )
   assert.throws(
     () => service.chunk({ receiptId: 'r-img', sequence: 0, bytes: 'AA' }),
@@ -265,7 +265,7 @@ test('declared byte length is checked at finish', async () => {
   const { service } = serviceFor()
   beginImage(service, 'r-img', { bytes: 10 })
   service.chunk({ receiptId: 'r-img', sequence: 0, bytes: 'AA==' })
-  await assert.rejects(service.finish({ receiptId: 'r-img' }), (error) => error.code === 1021)
+  await assert.rejects(service.finish({ receiptId: 'r-img' }), (error) => error.code === 1030)
 })
 
 test('official image admission failures keep their stable reason', async () => {
@@ -278,7 +278,7 @@ test('official image admission failures keep their stable reason', async () => {
   await service.finish({ receiptId: 'r-img' })
   await assert.rejects(
     service.admitContent(ADDRESS, [{ type: 'image', receiptId: 'r-img' }]),
-    (error) => error.code === 1023 && error.data.reason === 'IMAGE_TYPE_MISMATCH',
+    (error) => error.code === 1032 && error.data.reason === 'IMAGE_TYPE_MISMATCH',
   )
   assert.equal(service.receipts.get('r-img').state, 'ready')
 })
@@ -296,7 +296,7 @@ test('an explicit no-image model refusal is reported before send', async () => {
   await service.finish({ receiptId: 'r-img' })
   await assert.rejects(
     service.admitContent(ADDRESS, [{ type: 'image', receiptId: 'r-img' }]),
-    (error) => error.code === 1024 && error.data.reason === 'MODEL_DOES_NOT_SUPPORT_IMAGES',
+    (error) => error.code === 1033 && error.data.reason === 'MODEL_DOES_NOT_SUPPORT_IMAGES',
   )
 })
 
@@ -322,7 +322,7 @@ test('per-message image count and total bytes are bounded', async () => {
       { type: 'image', receiptId: 'i-1' },
       { type: 'image', receiptId: 'i-2' },
     ]),
-    (error) => error.code === 1025,
+    (error) => error.code === 1034,
   )
   assert.equal(service.receipts.get('i-1').state, 'ready')
   assert.equal(service.receipts.get('i-2').state, 'ready')
@@ -332,7 +332,7 @@ test('a generic-file save failure is definite and leaves no reusable receipt', a
   const { service } = serviceFor({ store: fakeStore({ files: false }) })
   service.begin({ address: ADDRESS, receiptId: 'r-file', kind: 'file', name: 'a.txt', bytes: 1 })
   service.chunk({ receiptId: 'r-file', sequence: 0, bytes: 'eA==' })
-  await assert.rejects(service.finish({ receiptId: 'r-file' }), (error) => error.code === 1026)
+  await assert.rejects(service.finish({ receiptId: 'r-file' }), (error) => error.code === 1035)
   assert.equal(service.receipts.get('r-file').state, 'failed')
 })
 
@@ -368,7 +368,7 @@ test('per-message total image bytes are bounded', async () => {
       { type: 'image', receiptId: 'i-1' },
       { type: 'image', receiptId: 'i-2' },
     ]),
-    (error) => error.code === 1025,
+    (error) => error.code === 1034,
   )
 })
 
@@ -460,7 +460,7 @@ test('inbox observation retires committed receipts', async () => {
   assert.equal(service.receipts.has('r-file'), false)
   assert.throws(
     () => service.chunk({ receiptId: 'r-file', sequence: 0, bytes: 'eA==' }),
-    (error) => error.code === 1019,
+    (error) => error.code === 1028,
   )
 })
 
