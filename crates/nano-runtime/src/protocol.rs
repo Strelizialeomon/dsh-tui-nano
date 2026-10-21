@@ -486,7 +486,7 @@ pub fn encode_value(value: &Value) -> Result<Vec<u8>, ProtocolError> {
 }
 
 /// Capability names this build understands.
-pub const KNOWN_CAPABILITIES: [&str; 16] = [
+pub const KNOWN_CAPABILITIES: [&str; 17] = [
     "agent",
     "sessionPersistence",
     "sessionQuery",
@@ -503,6 +503,7 @@ pub const KNOWN_CAPABILITIES: [&str; 16] = [
     "modelSelection",
     "permissionPresets",
     "commands",
+    "skills",
 ];
 
 /// Convenience for tests and diagnostics.

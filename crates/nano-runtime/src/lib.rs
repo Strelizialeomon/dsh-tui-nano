@@ -81,7 +81,7 @@ pub const LIFECYCLE_TRANSITIONS: [(&str, &str); 15] = [
 ];
 
 /// Error code names shared with the bridge contract.
-pub const ERROR_CODE_NAMES: [(&str, i64); 28] = [
+pub const ERROR_CODE_NAMES: [(&str, i64); 31] = [
     ("jsonrpc/parse-error", -32700),
     ("jsonrpc/invalid-request", -32600),
     ("jsonrpc/method-not-found", -32601),
@@ -105,15 +105,18 @@ pub const ERROR_CODE_NAMES: [(&str, i64); 28] = [
     ("nano/conversation/steer-unavailable", 1016),
     ("nano/conversation/rejected", 1017),
     ("nano/conversation/too-large", 1018),
-    ("nano/controls/writer-held", 1019),
-    ("nano/controls/model-unavailable", 1020),
-    ("nano/controls/permission-rejected", 1021),
-    ("nano/controls/command-failed", 1022),
-    ("nano/controls/unavailable", 1023),
+    ("nano/skills/not-found", 1019),
+    ("nano/skills/no-preview", 1020),
+    ("nano/skills/preview-failed", 1021),
+    ("nano/controls/writer-held", 1022),
+    ("nano/controls/model-unavailable", 1023),
+    ("nano/controls/permission-rejected", 1024),
+    ("nano/controls/command-failed", 1025),
+    ("nano/controls/unavailable", 1026),
 ];
 
 /// Method names implemented by this generation.
-pub const IMPLEMENTED_METHODS: [&str; 19] = [
+pub const IMPLEMENTED_METHODS: [&str; 22] = [
     "nano.hello",
     "nano.startupError",
     "nano.shutdown",
@@ -128,6 +131,9 @@ pub const IMPLEMENTED_METHODS: [&str; 19] = [
     "nano.conversation.steerQueued",
     "nano.conversation.cancel",
     "nano.conversation.snapshot",
+    "nano.skills.list",
+    "nano.skills.preview",
+    "nano.instructions.snapshot",
     "nano.controls.state",
     "nano.controls.modelCatalog",
     "nano.controls.selectModel",
@@ -136,11 +142,13 @@ pub const IMPLEMENTED_METHODS: [&str; 19] = [
 ];
 
 /// Event kinds this client accepts.
-pub const EVENT_KINDS: [&str; 6] = [
+pub const EVENT_KINDS: [&str; 8] = [
     "session.event",
     "conversation.status",
     "conversation.inbox",
     "conversation.stream",
+    "skills.changed",
+    "instructions.changed",
     "controls.model",
     "controls.permission",
 ];

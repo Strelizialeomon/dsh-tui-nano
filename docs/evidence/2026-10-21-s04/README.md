@@ -2,8 +2,8 @@
 
 ## 已执行
 
-- `cargo test --workspace`：nano-controls 27 项 + 契约 2 项、nano-app 44 项、nano-conversation 51 项 + 契约 5 项、nano-runtime 18 项 + 契约 10 项 + preflight 2 项，全绿；15 项真实宿主集成测试保持 `--ignored`。
-- `node --test bridge/test/*.test.mjs`：89 项通过，含控制服务 24 项与协议契约。
+- `cargo test --workspace`：nano-controls 27 项 + 契约 2 项、nano-app 59 项、nano-conversation 52 项 + 契约 5 项、nano-runtime 18 项 + 契约 10 项 + preflight 2 项、nano-skills 20 项 + 契约 5 项，全绿；15 项真实宿主集成测试保持 `--ignored`。
+- `node --test bridge/test/*.test.mjs`：108 项通过（含 S05 技能/规矩用例），`NANO_E2E=1 node --test bridge/test/integration/host.test.mjs` 2 项真实宿主通过。
 - 真实 PTY（120×40，macOS）：`NANO_COLD_PROMPT=1 python3 scripts/pty-controls-evidence.py` 24 项全通过。使用用户真实 `~/.dsh` 凭据（未复制），数据根与 cwd 是临时目录；用户在会话中授权了一次极小的真实请求（「只回复 ok」）。快照与官方日志摘录见 `controls-session.txt`。
 - 真实官方事实：
   - 命令面板（`Ctrl+P`）列出官方命令（含 `/permission`）；命令列表来自官方 `commands.list(agent)`。

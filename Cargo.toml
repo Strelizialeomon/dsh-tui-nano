@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/nano-runtime", "crates/nano-conversation", "crates/nano-controls", "crates/nano-app"]
+members = ["crates/nano-runtime", "crates/nano-conversation", "crates/nano-controls", "crates/nano-skills", "crates/nano-app"]
 resolver = "2"
 
 [workspace.package]

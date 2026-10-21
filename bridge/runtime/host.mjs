@@ -16,6 +16,7 @@ import { claimMount, releaseMount } from './ledger.mjs'
 import { SubscriptionHub } from './events.mjs'
 import { ConversationService } from '../conversation/service.mjs'
 import { ControlsService } from '../controls/service.mjs'
+import { SkillsService } from '../skills/service.mjs'
 import { buildCapabilities } from './capabilities.mjs'
 import { IMPLEMENTED_REQUEST_METHODS } from './methods.mjs'
 
@@ -39,6 +40,7 @@ export function startHost(ctx, config) {
     writer: undefined,
     hub: undefined,
     conversation: undefined,
+    skills: undefined,
     agentHandle: undefined,
     session: undefined,
     claim: undefined,
@@ -210,6 +212,14 @@ async function runStartup(state, config) {
     agent: state.agentHandle.agent,
     session,
     rootSessionId: state.config.rootSessionId,
+  })
+  state.skills = new SkillsService({
+    ctx,
+    hub: state.hub,
+    agent: state.agentHandle.agent,
+    session,
+    rootSessionId: state.config.rootSessionId,
+    cwd,
   })
 
   const hello = {
@@ -485,6 +495,18 @@ async function dispatchRequest(state, frame) {
       await sendResult(state, id, await state.controls.executeCommand(params))
       return undefined
     }
+    case 'nano.skills.list': {
+      await sendResult(state, id, await state.skills.list(params))
+      return undefined
+    }
+    case 'nano.skills.preview': {
+      await sendResult(state, id, await state.skills.preview(params))
+      return undefined
+    }
+    case 'nano.instructions.snapshot': {
+      await sendResult(state, id, state.skills.snapshot(params))
+      return undefined
+    }
     default: {
       const reserved = RESERVED_METHODS.get(method)
       if (reserved !== undefined) {
@@ -567,6 +589,8 @@ async function runShutdown(state, reason) {
     state.controls = undefined
     state.conversation?.close()
     state.conversation = undefined
+    state.skills?.close()
+    state.skills = undefined
     state.hub?.closeAll(reason)
   }, faults))
 
@@ -690,6 +714,14 @@ async function failStartup(state, error) {
       state.conversation = undefined
     } catch (cleanupError) {
       cleanupFailures.push(`conversation: ${describe(cleanupError)}`)
+    }
+  }
+  if (state.skills !== undefined) {
+    try {
+      state.skills.close()
+      state.skills = undefined
+    } catch (cleanupError) {
+      cleanupFailures.push(`skills: ${describe(cleanupError)}`)
     }
   }
   if (state.hub !== undefined) {

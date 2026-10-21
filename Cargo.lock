@@ -281,6 +281,7 @@ dependencies = [
  "nano-controls",
  "nano-conversation",
  "nano-runtime",
+ "nano-skills",
  "ratatui",
  "serde_json",
  "unicode-width 0.2.0",
@@ -313,6 +314,15 @@ dependencies = [
  "serde_json",
  "signal-hook",
  "tempfile",
+]
+
+[[package]]
+name = "nano-skills"
+version = "0.1.0"
+dependencies = [
+ "nano-conversation",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

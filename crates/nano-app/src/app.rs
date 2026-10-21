@@ -11,7 +11,10 @@ use nano_conversation::{
     SceneState, SessionAddress, SubmitError,
 };
 use nano_runtime::{CapabilityStatus, Hello};
-use serde_json::Value;
+use nano_skills::{
+    InstructionState, InvocationFact, InvocationTracker, NameResolution, SkillCatalog, SkillPreview,
+};
+use serde_json::{json, Value};
 
 use crate::cli::Cli;
 use crate::link::{HostLink, LinkEvent, RequestError, RequestErrorKind};
@@ -39,6 +42,16 @@ impl Connection {
             Self::Failed(_) => "失败",
         }
     }
+}
+
+/// Focus identity for the S05 skills panel.
+fn skills_focus() -> FocusId {
+    FocusId::new("skills")
+}
+
+/// Focus identity for the S05 workspace-instruction panel.
+fn instructions_focus() -> FocusId {
+    FocusId::new("instructions")
 }
 
 /// A request awaiting its response.
@@ -72,6 +85,15 @@ pub enum Pending {
     Snapshot,
     /// Rebuild the observable subscription after `streamEnded failed`.
     Resubscribe,
+    /// Refresh the user-invocable skill catalog.
+    SkillsList,
+    /// Preview one skill's instruction file.
+    SkillPreview {
+        /// Skill name whose preview was requested.
+        name: String,
+    },
+    /// Read the absolute workspace-instruction projection.
+    InstructionsSnapshot,
     /// One item of a clear-and-stop batch.
     ClearStopDelete {
         /// Batch generation; stale responses are ignored.
@@ -169,6 +191,28 @@ pub struct App {
     pub controls: ControlsModel,
     /// Command palette and selection panes.
     pub panel: Panel,
+    /// Last-good skill catalog and command names.
+    pub skills: SkillCatalog,
+    /// Selected row in the skills panel.
+    pub skill_selection: usize,
+    /// One opened skill preview.
+    pub skill_preview: Option<SkillPreview>,
+    /// Why the last preview failed.
+    pub skill_preview_error: Option<String>,
+    /// Skill name whose preview is currently requested or shown.
+    pub skill_preview_target: Option<String>,
+    /// A catalog refresh is in flight.
+    pub skills_refresh_in_flight: bool,
+    /// A refresh arrived while one was in flight.
+    pub skills_refresh_queued: bool,
+    /// Official workspace-instruction projection.
+    pub instructions: InstructionState,
+    /// Scroll offset in the instructions panel, in lines.
+    pub instructions_scroll: usize,
+    /// Largest useful instructions scroll offset, measured at draw time.
+    pub instructions_max_scroll: usize,
+    /// Submitted `/name` facts until the official injection decision.
+    pub invocation: InvocationTracker,
 }
 
 impl App {
@@ -187,6 +231,7 @@ impl App {
                 .with_command("/permission")
                 .with_key("ctrl+p"),
         );
+        registry.register(nano_skills::contribution());
         let mut scene = SceneState::conversation();
         scene.set_address(address.clone());
         Self {
@@ -222,6 +267,17 @@ impl App {
             edit_after_snapshot: None,
             controls: ControlsModel::new(),
             panel: Panel::new(),
+            skills: SkillCatalog::new(),
+            skill_selection: 0,
+            skill_preview: None,
+            skill_preview_error: None,
+            skill_preview_target: None,
+            skills_refresh_in_flight: false,
+            skills_refresh_queued: false,
+            instructions: InstructionState::new(),
+            instructions_scroll: 0,
+            instructions_max_scroll: 0,
+            invocation: InvocationTracker::new(),
         }
     }
 
@@ -442,19 +498,20 @@ impl App {
             }
             _ => {
                 if self.controls.find_command(name).is_none() {
-                    if let Some(error) = self.controls.state_error() {
-                        self.error = Some(format!(
-                            "命令列表未知（{error}）；/{name} 未发送，草稿已保留"
-                        ));
+                    let reason = if let Some(error) = self.controls.state_error() {
+                        format!("命令列表未知（{error}）；/{name} 未发送，草稿已保留")
                     } else if !self.controls.commands_available() {
-                        self.error = Some(
-                            "官方命令服务未组合；命令未发送，草稿已保留".to_string(),
-                        );
+                        format!("官方命令服务未组合；/{name} 未发送，草稿已保留")
                     } else {
-                        self.error = Some(format!(
-                            "命令 /{name} 不在官方命令服务中；草稿已保留"
-                        ));
-                    }
+                        format!("命令 /{name} 不在官方命令服务中；草稿已保留")
+                    };
+                    self.error = Some(
+                        if self.skills.resolve(name) == NameResolution::Command {
+                            format!("/{name} 是宿主命令，命令优先；{reason}")
+                        } else {
+                            reason
+                        },
+                    );
                     return;
                 }
                 self.drafts.current_mut().take();
@@ -575,6 +632,14 @@ impl App {
         if self.panel.is_open() {
             return self.handle_panel_key(key);
         }
+        // S05 panels own every key while focused, including PageUp/PageDown
+        // and Tab; the feed/queue shortcuts must not leak underneath them.
+        if self.skills_panel_open() {
+            return self.handle_skills_key(key);
+        }
+        if self.instructions_panel_open() {
+            return self.handle_instructions_key(key);
+        }
         if matches!(key.code, KeyCode::PageUp) {
             self.scroll_back = self
                 .scroll_back
@@ -591,8 +656,8 @@ impl App {
             self.toggle_focus();
             return true;
         }
-        // Only the top focus receives keys. Queue focus must not leak Alt or
-        // control shortcuts into the hidden input draft.
+        // Only the top focus receives keys. The queue dock must not leak
+        // shortcuts into the hidden input draft; S05 panels were handled above.
         if !self.scene.focus().input_focused() {
             return self.handle_queue_key(key);
         }
@@ -642,6 +707,14 @@ impl App {
                 }
                 KeyCode::Char('x') | KeyCode::Char('X') => {
                     self.clear_and_stop();
+                    return true;
+                }
+                KeyCode::Char('k') | KeyCode::Char('K') => {
+                    self.open_skills_panel();
+                    return true;
+                }
+                KeyCode::Char('r') | KeyCode::Char('R') => {
+                    self.open_instructions_panel();
                     return true;
                 }
                 KeyCode::Enter => {
@@ -734,6 +807,8 @@ impl App {
                 self.notice = Some("已连接官方会话".to_string());
                 self.refresh_snapshot();
                 self.refresh_controls_state();
+                self.refresh_skills();
+                self.refresh_instructions();
                 true
             }
             LinkEvent::Host(event) => self.handle_host_event(event),
@@ -768,6 +843,19 @@ impl App {
             HostEvent::Event(params) => {
                 if params.kind == "session.event" {
                     self.resubscribe_attempts = 0;
+                    self.observe_invocation(&params.payload);
+                }
+                if params.kind == "skills.changed" {
+                    // The official registry invalidated its catalog; only the
+                    // signal is consumed. `refresh_skills` coalesces a signal
+                    // that arrives while one request is already in flight.
+                    self.refresh_skills();
+                }
+                if params.kind == "instructions.changed" {
+                    let root = self.model.address().root_session_id.clone();
+                    if let Err(error) = self.instructions.apply(&params.payload, &root) {
+                        self.error = Some(format!("项目规矩投影无效：{error}"));
+                    }
                 }
                 let changed = self.model.apply_event(&params.kind, &params.payload);
                 let controls_changed = self.controls.apply_event(&params.kind, &params.payload);
@@ -778,7 +866,12 @@ impl App {
                     self.stop_pending = false;
                     self.notice = Some("官方已确认停止".to_string());
                 }
-                if self.model.inbox().is_empty() && !self.scene.focus().input_focused() {
+                // Only the queue dock is dismissed by an empty inbox. S05
+                // panels share the focus stack but are explicit overlays; a
+                // stream chunk or a catalog invalidation must not close them.
+                if self.model.inbox().is_empty()
+                    && self.scene.focus().top() == Some(&FocusId::queue())
+                {
                     self.scene.focus_mut().pop();
                 }
                 if changed {
@@ -862,10 +955,16 @@ impl App {
                     | Pending::ControlsSelectModel { .. }
                     | Pending::ControlsSetPermission { .. }
                     | Pending::ControlsCommand { .. }
+                    | Pending::SkillsList
+                    | Pending::SkillPreview { .. }
+                    | Pending::InstructionsSnapshot
             )
         {
             self.resubscribing = false;
             self.clear_stop_remaining = 0;
+            self.skills_refresh_in_flight = false;
+            self.skills_refresh_queued = false;
+            self.clear_skill_preview();
             return;
         }
         match pending {
@@ -889,6 +988,7 @@ impl App {
                             .submit_accepted(&request_id, &message_id, duplicate);
                         self.submit_backups.remove(&request_id);
                     } else {
+                        self.invocation.clear();
                         self.model.submit_failed(&request_id, "官方未接受");
                         self.restore_draft(&request_id, &text);
                     }
@@ -896,6 +996,7 @@ impl App {
                 Err(error)
                     if matches!(error.kind, RequestErrorKind::Rpc | RequestErrorKind::Local) =>
                 {
+                    self.invocation.clear();
                     self.model.submit_failed(&request_id, error.message.clone());
                     self.restore_draft(&request_id, &text);
                     self.error = Some(format!("发送失败：{}", error.message));
@@ -987,6 +1088,8 @@ impl App {
                     Ok(_) => {
                         self.notice = Some("订阅已重建；正在对齐官方 baseline".to_string());
                         self.refresh_snapshot();
+                        self.refresh_skills();
+                        self.refresh_instructions();
                     }
                     Err(error) => {
                         let root = self.model.address().root_session_id.clone();
@@ -1181,6 +1284,63 @@ impl App {
                     }
                 },
             },
+            Pending::SkillsList => {
+                self.skills_refresh_in_flight = false;
+                let root = self.model.address().root_session_id.clone();
+                match result {
+                    Ok(value) => {
+                        if let Err(error) = self.skills.apply_list(&value, &root) {
+                            self.skills.apply_failure(format!("技能目录无效：{error}"));
+                        }
+                    }
+                    Err(error) => {
+                        self.skills
+                            .apply_failure(format!("技能目录刷新失败：{}", error.message));
+                    }
+                }
+                self.clamp_skill_selection();
+                self.reconcile_skill_preview();
+                if self.skills_refresh_queued {
+                    self.skills_refresh_queued = false;
+                    self.refresh_skills();
+                }
+            }
+            Pending::SkillPreview { name } => {
+                if self.skill_preview_target.as_deref() != Some(name.as_str()) {
+                    // The panel was closed or the selection moved on.
+                    return;
+                }
+                match result {
+                    Ok(value) => {
+                        let root = self.model.address().root_session_id.clone();
+                        match SkillPreview::parse(&value, &root) {
+                            Ok(preview) => {
+                                self.skill_preview = Some(preview);
+                                self.skill_preview_error = None;
+                            }
+                            Err(error) => {
+                                self.skill_preview_error = Some(format!("预览无效：{error}"));
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        self.skill_preview_error = Some(error.message);
+                    }
+                }
+            }
+            Pending::InstructionsSnapshot => {
+                let root = self.model.address().root_session_id.clone();
+                match result {
+                    Ok(value) => {
+                        if let Err(error) = self.instructions.apply(&value, &root) {
+                            self.error = Some(format!("项目规矩投影无效：{error}"));
+                        }
+                    }
+                    Err(error) => {
+                        self.error = Some(format!("读取项目规矩来源失败：{}", error.message));
+                    }
+                }
+            }
         }
     }
 
@@ -1227,6 +1387,7 @@ impl App {
             return;
         }
         let route = CommandRouter::new(&self.registry, self.scene.active().clone()).route(&text);
+        let mut skill_name = None;
         match route {
             InputRoute::Prompt { .. } => {}
             InputRoute::Bash { .. } => {
@@ -1246,9 +1407,16 @@ impl App {
                 self.error = Some(format!("命令入口 {owner} 尚未接入；草稿已保留"));
                 return;
             }
-            InputRoute::Skill { .. } => {
-                self.error = Some("技能入口（S05）尚未接入；草稿已保留".to_string());
-                return;
+            InputRoute::Skill { name, args, raw } => {
+                // Commands win before the line ever becomes a prompt. The line
+                // is submitted literally in every other case, including an
+                // unknown or deleted name; only the turn's own events may say
+                // whether the official host injected a body.
+                if self.skills.resolve(&name) == NameResolution::Command {
+                    self.dispatch_controls_line(&name, &args, &raw);
+                    return;
+                }
+                skill_name = Some(name);
             }
             InputRoute::Unregistered {
                 owner: _,
@@ -1279,10 +1447,15 @@ impl App {
                 self.submit_backups
                     .insert(plan.request_id.clone(), text.clone());
                 let Some(link) = &self.link else {
+                    self.invocation.clear();
                     self.model
                         .submit_unknown(&plan.request_id, "宿主连接已关闭");
                     return;
                 };
+                if let Some(name) = skill_name {
+                    self.invocation
+                        .note_submission(name, plan.request_id.clone());
+                }
                 match link.request("nano.conversation.submit", plan.params) {
                     Ok(id) => {
                         self.pending.insert(
@@ -1294,6 +1467,7 @@ impl App {
                         );
                     }
                     Err(message) => {
+                        self.invocation.clear();
                         self.model.submit_unknown(&plan.request_id, message);
                     }
                 }
@@ -1361,6 +1535,264 @@ impl App {
         };
         if let Ok(id) = link.request("nano.conversation.snapshot", self.model.snapshot_params()) {
             self.pending.insert(id, Pending::Snapshot);
+        }
+    }
+
+    /// Ask for the official workspace-instruction projection.
+    pub fn refresh_instructions(&mut self) {
+        if !self.ready {
+            return;
+        }
+        let Some(link) = &self.link else {
+            return;
+        };
+        let params = json!({ "address": self.model.address().wire_value() });
+        if let Ok(id) = link.request("nano.instructions.snapshot", params) {
+            self.pending.insert(id, Pending::InstructionsSnapshot);
+        }
+    }
+
+    /// Ask for the user-invocable skill catalog. Concurrent signals coalesce
+    /// into one follow-up refresh instead of a request storm.
+    pub fn refresh_skills(&mut self) {
+        if !self.ready {
+            return;
+        }
+        if self.skills_refresh_in_flight {
+            self.skills_refresh_queued = true;
+            return;
+        }
+        let Some(link) = &self.link else {
+            return;
+        };
+        let params = json!({ "address": self.model.address().wire_value() });
+        match link.request("nano.skills.list", params) {
+            Ok(id) => {
+                self.pending.insert(id, Pending::SkillsList);
+                self.skills_refresh_in_flight = true;
+            }
+            Err(message) => {
+                self.skills
+                    .apply_failure(format!("技能目录请求失败：{message}"));
+            }
+        }
+    }
+
+    /// Open the skills panel over the conversation scene.
+    pub fn open_skills_panel(&mut self) {
+        self.scene.focus_mut().push(skills_focus());
+        self.clear_skill_preview();
+        self.clamp_skill_selection();
+        self.refresh_skills();
+    }
+
+    /// Open the workspace-instruction sources panel.
+    pub fn open_instructions_panel(&mut self) {
+        self.scene.focus_mut().push(instructions_focus());
+        self.instructions_scroll = 0;
+        self.instructions_max_scroll = 0;
+        self.refresh_instructions();
+    }
+
+    /// Whether the skills panel currently owns focus.
+    pub fn skills_panel_open(&self) -> bool {
+        self.scene.focus().top() == Some(&skills_focus())
+    }
+
+    /// Whether the instructions panel currently owns focus.
+    pub fn instructions_panel_open(&self) -> bool {
+        self.scene.focus().top() == Some(&instructions_focus())
+    }
+
+    fn clear_skill_preview(&mut self) {
+        self.skill_preview = None;
+        self.skill_preview_error = None;
+        self.skill_preview_target = None;
+    }
+
+    fn clamp_skill_selection(&mut self) {
+        let last = self.skills.entries().len().saturating_sub(1);
+        if self.skill_selection > last {
+            self.skill_selection = last;
+        }
+    }
+
+    /// Drop an open preview whose skill disappeared or whose official path
+    /// changed. A catalog refresh must not leave an old body under a new
+    /// catalog (S05 §6.6).
+    fn reconcile_skill_preview(&mut self) {
+        let Some(target) = self.skill_preview_target.clone() else {
+            return;
+        };
+        let current = self
+            .skills
+            .find(&target)
+            .and_then(|entry| entry.path.clone());
+        match &self.skill_preview {
+            Some(preview) => {
+                if current.as_deref() != Some(preview.path.as_str()) {
+                    self.clear_skill_preview();
+                }
+            }
+            None => {
+                if current.is_none() && self.skill_preview_error.is_none() {
+                    self.clear_skill_preview();
+                }
+            }
+        }
+    }
+
+    fn close_panel(&mut self) {
+        self.scene.focus_mut().pop();
+        self.clear_skill_preview();
+    }
+
+    fn handle_skills_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Esc => {
+                self.close_panel();
+                true
+            }
+            KeyCode::Up => {
+                if self.skill_selection > 0 {
+                    self.skill_selection -= 1;
+                    self.clear_skill_preview();
+                }
+                true
+            }
+            KeyCode::Down => {
+                if self.skill_selection + 1 < self.skills.entries().len() {
+                    self.skill_selection += 1;
+                    self.clear_skill_preview();
+                }
+                true
+            }
+            KeyCode::Enter => {
+                self.insert_selected_skill();
+                true
+            }
+            KeyCode::Char('p') | KeyCode::Char('P') | KeyCode::Right => {
+                self.toggle_skill_preview();
+                true
+            }
+            KeyCode::Left => {
+                self.clear_skill_preview();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn handle_instructions_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Esc => {
+                self.close_panel();
+                true
+            }
+            KeyCode::Up => {
+                self.instructions_scroll = self.instructions_scroll.saturating_sub(1);
+                true
+            }
+            KeyCode::Down => {
+                self.instructions_scroll = self
+                    .instructions_scroll
+                    .saturating_add(1)
+                    .min(self.instructions_max_scroll);
+                true
+            }
+            KeyCode::PageUp => {
+                self.instructions_scroll = self.instructions_scroll.saturating_sub(10);
+                true
+            }
+            KeyCode::PageDown => {
+                self.instructions_scroll = self
+                    .instructions_scroll
+                    .saturating_add(10)
+                    .min(self.instructions_max_scroll);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Insert the selected skill as a literal, editable `/name` token.
+    fn insert_selected_skill(&mut self) {
+        let Some(entry) = self.skills.entries().get(self.skill_selection) else {
+            self.error = Some("技能目录为空，没有可填入的技能".to_string());
+            return;
+        };
+        let name = entry.name.clone();
+        let token = format!("/{name} ");
+        let current = self.drafts.current().text().to_string();
+        let text = if current.is_empty() {
+            token
+        } else if current.ends_with(char::is_whitespace) {
+            format!("{current}{token}")
+        } else {
+            format!("{current} {token}")
+        };
+        self.drafts.current_mut().set_text(text);
+        self.notice = Some(format!(
+            "已填入 /{name}；发送后官方注入正文，会计入模型成本"
+        ));
+        self.close_panel();
+    }
+
+    /// Request the selected skill's instruction file, or close an open preview.
+    fn toggle_skill_preview(&mut self) {
+        if self.skill_preview_target.is_some() {
+            self.clear_skill_preview();
+            return;
+        }
+        let Some(entry) = self.skills.entries().get(self.skill_selection) else {
+            return;
+        };
+        let name = entry.name.clone();
+        if entry.path.is_none() {
+            self.skill_preview_target = Some(name.clone());
+            self.skill_preview_error = Some(format!("/{name} 没有文件路径，不能预览"));
+            return;
+        }
+        if !self.ready {
+            self.skill_preview_target = Some(name);
+            self.skill_preview_error = Some("宿主未就绪，暂时不能预览".to_string());
+            return;
+        }
+        let Some(link) = &self.link else {
+            self.skill_preview_target = Some(name);
+            self.skill_preview_error = Some("宿主连接已关闭".to_string());
+            return;
+        };
+        let params = json!({ "address": self.model.address().wire_value(), "name": name });
+        match link.request("nano.skills.preview", params) {
+            Ok(id) => {
+                self.skill_preview = None;
+                self.skill_preview_error = None;
+                self.skill_preview_target = Some(name.clone());
+                self.pending.insert(id, Pending::SkillPreview { name });
+            }
+            Err(message) => {
+                self.skill_preview_target = Some(name);
+                self.skill_preview_error = Some(message);
+            }
+        }
+    }
+
+    /// Track one submitted `/name` through the official pre-step decision.
+    fn observe_invocation(&mut self, payload: &Value) {
+        let event_type = payload
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let data = payload.get("data").unwrap_or(&Value::Null);
+        match self.invocation.observe(event_type, data) {
+            Some(InvocationFact::Injected(name)) => {
+                self.notice = Some(format!("技能正文已注入：/{name}"));
+            }
+            Some(InvocationFact::NotInjected(name)) => {
+                self.notice = Some(format!("/{name} 未注入：官方按普通文本处理"));
+            }
+            None => {}
         }
     }
 
@@ -1626,15 +2058,20 @@ impl App {
             return notice.to_string();
         }
         if !self.scene.focus().input_focused() {
+            if self.skills_panel_open() {
+                return "技能面板：↑↓ 选择 · Enter 填入 /name · P 预览 · Esc 关闭".to_string();
+            }
+            if self.instructions_panel_open() {
+                return "项目规矩：↑↓ / PageUp / PageDown 滚动 · Esc 关闭".to_string();
+            }
             return "队列焦点：↑↓ 选择 · Enter 编辑 · d 删除 · s 插话 · x 清空并停止 · Tab 返回"
                 .to_string();
         }
         if let Some(message_id) = &self.edit_target {
             return format!("编辑队列项 {message_id}：Enter 应用，Esc 取消");
         }
-        // Idle hints live in the input-box title; the bottom keeps only the
-        // resident fields and a transient message.
-        String::new()
+        "Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行 · Esc 停止 · Alt+K 技能 · Alt+R 规矩 · Ctrl+Y 复制原文 · Ctrl+C 退出"
+            .to_string()
     }
 }
 
@@ -1673,14 +2110,9 @@ impl App {
         let Some(link) = &self.link else {
             return;
         };
-        let (params, replay_truncated) = self.model.resubscribe_params(&[
-            "session.event",
-            "conversation.status",
-            "conversation.inbox",
-            "conversation.stream",
-            "controls.model",
-            "controls.permission",
-        ]);
+        let (params, replay_truncated) = self
+            .model
+            .resubscribe_params(&crate::link::SUBSCRIPTION_KINDS);
         if replay_truncated {
             self.notice = Some("重连回放窗口超过上限；从较新的 seq 开始重建".to_string());
         }
@@ -2218,12 +2650,12 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_command_keeps_the_draft_and_never_becomes_a_prompt() {
+    fn an_unknown_controls_command_keeps_the_draft_and_never_becomes_a_prompt() {
         let mut app = app();
         app.ready = true;
         app.controls.set_capabilities(true, true, true);
         app.drafts.current_mut().set_text("/nope");
-        assert!(app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
+        app.dispatch_controls_line("nope", "", "/nope");
         assert_eq!(app.drafts.current().text(), "/nope");
         assert!(app.error.as_deref().unwrap().contains("不在官方命令服务中"));
         assert!(app.model.submissions().echoes().is_empty());
@@ -2505,5 +2937,309 @@ mod tests {
         });
         assert!(!app.model.apply_event("conversation.inbox", &payload));
         assert!(app.model.inbox().is_empty());
+    }
+
+    fn skill_entry(name: &str, shadowed: bool) -> Value {
+        json!({
+            "name": name,
+            "description": format!("{name} description"),
+            "modelInvocable": true,
+            "userInvocable": true,
+            "path": format!("/tmp/{name}/SKILL.md"),
+            "source": "project-agents",
+            "provider": "filesystem",
+            "shadowedByCommand": shadowed,
+        })
+    }
+
+    fn install_catalog(app: &mut App, skills: Value, commands: Value) {
+        app.skills
+            .apply_list(
+                &json!({
+                    "address": {"rootSessionId": "root"},
+                    "complete": true,
+                    "commands": commands,
+                    "skills": skills,
+                }),
+                "root",
+            )
+            .unwrap();
+    }
+
+    fn session_event(app: &mut App, event_type: &str, data: Value) {
+        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::Event(
+            nano_runtime::protocol::EventParams {
+                runtime_id: "rt".into(),
+                generation: 1,
+                subscription_id: "sub-1".into(),
+                sequence: 1,
+                kind: "session.event".into(),
+                payload: json!({
+                    "address": {"rootSessionId": "root"},
+                    "seq": 1,
+                    "type": event_type,
+                    "data": data,
+                }),
+            },
+        )));
+    }
+
+    #[test]
+    fn alt_k_opens_the_catalog_and_enter_inserts_a_literal_token() {
+        let mut app = app();
+        install_catalog(&mut app, json!([skill_entry("hello", false)]), json!([]));
+        app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::ALT));
+        assert!(app.skills_panel_open());
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.drafts.current().text(), "/hello ");
+        assert!(app.scene.focus().input_focused());
+        assert!(app.notice.as_deref().unwrap().contains("模型成本"));
+    }
+
+    #[test]
+    fn a_same_name_command_blocks_the_skill_submission() {
+        let mut app = app();
+        app.ready = true;
+        install_catalog(
+            &mut app,
+            json!([skill_entry("compact", true)]),
+            json!(["compact"]),
+        );
+        app.drafts.current_mut().set_text("/compact");
+        app.submit_draft(Delivery::Queue);
+        assert_eq!(app.drafts.current().text(), "/compact");
+        assert!(app.error.as_deref().unwrap().contains("命令优先"));
+        assert!(app.model.live().echoes.is_empty());
+    }
+
+    #[test]
+    fn an_unknown_slash_name_is_submitted_literally_and_tracked() {
+        let mut app = app();
+        app.ready = true;
+        install_catalog(&mut app, json!([skill_entry("hello", false)]), json!([]));
+        app.drafts.current_mut().set_text("/gone now");
+        app.submit_draft(Delivery::Queue);
+        assert!(app.drafts.current().is_empty());
+        assert_eq!(app.model.live().echoes[0].text, "/gone now");
+        assert_eq!(app.skills.resolve("gone"), NameResolution::Unknown);
+    }
+
+    #[test]
+    fn a_failed_preview_keeps_the_error_visible() {
+        let mut app = app();
+        app.ready = true;
+        install_catalog(&mut app, json!([skill_entry("hello", false)]), json!([]));
+        app.open_skills_panel();
+        app.skill_preview_target = Some("hello".into());
+        app.pending.insert(
+            7,
+            Pending::SkillPreview {
+                name: "hello".into(),
+            },
+        );
+        app.handle_request_done(
+            7,
+            Err(RequestError {
+                kind: RequestErrorKind::Rpc,
+                code: None,
+                message: "skill path is unreadable".into(),
+            }),
+        );
+        assert!(app.skill_preview_target.is_some());
+        assert!(app
+            .skill_preview_error
+            .as_deref()
+            .unwrap()
+            .contains("unreadable"));
+    }
+
+    #[test]
+    fn a_foreign_preview_response_is_rejected() {
+        let mut app = app();
+        app.ready = true;
+        app.skill_preview_target = Some("hello".into());
+        app.pending.insert(
+            8,
+            Pending::SkillPreview {
+                name: "hello".into(),
+            },
+        );
+        app.handle_request_done(
+            8,
+            Ok(json!({
+                "address": {"rootSessionId": "other"},
+                "name": "hello",
+                "path": "/tmp/hello/SKILL.md",
+                "text": "body",
+                "truncated": false,
+                "bytes": 4,
+                "limit": 65536,
+            })),
+        );
+        assert!(app.skill_preview.is_none());
+        assert!(app
+            .skill_preview_error
+            .as_deref()
+            .unwrap()
+            .contains("belongs to root session"));
+    }
+
+    #[test]
+    fn a_catalog_refresh_drops_a_removed_preview() {
+        let mut app = app();
+        install_catalog(&mut app, json!([skill_entry("hello", false)]), json!([]));
+        app.skill_preview_target = Some("hello".into());
+        app.skill_preview = Some(
+            SkillPreview::parse(
+                &json!({
+                    "address": {"rootSessionId": "root"},
+                    "name": "hello",
+                    "path": "/tmp/hello/SKILL.md",
+                    "text": "body",
+                    "truncated": false,
+                    "bytes": 4,
+                    "limit": 65536,
+                }),
+                "root",
+            )
+            .unwrap(),
+        );
+        install_catalog(&mut app, json!([skill_entry("other", false)]), json!([]));
+        app.reconcile_skill_preview();
+        assert!(app.skill_preview_target.is_none());
+        assert!(app.skill_preview.is_none());
+    }
+
+    #[test]
+    fn a_pathless_skill_is_still_submitted_literally() {
+        let mut app = app();
+        app.ready = true;
+        let mut entry = skill_entry("virtual", false);
+        entry.as_object_mut().unwrap().remove("path");
+        install_catalog(&mut app, json!([entry]), json!([]));
+        app.drafts.current_mut().set_text("/virtual");
+        app.submit_draft(Delivery::Queue);
+        assert!(app.drafts.current().is_empty());
+        assert_eq!(app.model.live().echoes[0].text, "/virtual");
+    }
+
+    #[test]
+    fn an_official_injection_clears_the_pending_skill_fact() {
+        let mut app = app();
+        app.ready = true;
+        install_catalog(&mut app, json!([skill_entry("hello", false)]), json!([]));
+        app.drafts.current_mut().set_text("/hello");
+        app.submit_draft(Delivery::Queue);
+        let request_id = app.model.live().echoes[0].request_id.clone();
+        // The unit environment has no live host link; simulate the accepted
+        // submission that would have armed the official-message tracker.
+        app.invocation.note_submission("hello", request_id.clone());
+        session_event(
+            &mut app,
+            "user/message",
+            json!({"source": {"kind": "user", "rpcId": request_id}, "content": []}),
+        );
+        session_event(
+            &mut app,
+            "user/message",
+            json!({"source": {"kind": "skill-invocation", "name": "hello"}, "content": []}),
+        );
+        assert!(app.notice.as_deref().unwrap().contains("已注入"));
+        assert_eq!(app.invocation.pending(), None);
+    }
+
+    #[test]
+    fn a_turn_end_without_injection_reports_not_injected() {
+        let mut app = app();
+        app.ready = true;
+        install_catalog(&mut app, json!([skill_entry("hello", false)]), json!([]));
+        app.drafts.current_mut().set_text("/hello");
+        app.submit_draft(Delivery::Queue);
+        let request_id = app.model.live().echoes[0].request_id.clone();
+        app.invocation.note_submission("hello", request_id.clone());
+        session_event(
+            &mut app,
+            "user/message",
+            json!({"source": {"kind": "user", "rpcId": request_id}, "content": []}),
+        );
+        session_event(
+            &mut app,
+            "turn/end",
+            json!({"turn": 1, "reason": {"kind": "completed"}}),
+        );
+        assert!(app.notice.as_deref().unwrap().contains("未注入"));
+    }
+
+    #[test]
+    fn page_keys_scroll_the_rules_panel_instead_of_the_feed() {
+        let mut app = app();
+        app.open_instructions_panel();
+        app.instructions_max_scroll = 100;
+        let before = app.scroll_back;
+        app.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+        assert_eq!(app.instructions_scroll, 10);
+        assert_eq!(app.scroll_back, before);
+        assert!(app.instructions_panel_open());
+    }
+
+    #[test]
+    fn subscription_kinds_cover_every_contracted_event_kind() {
+        let mut ours = crate::link::SUBSCRIPTION_KINDS.to_vec();
+        ours.sort_unstable();
+        let mut expected = nano_runtime::EVENT_KINDS.to_vec();
+        expected.sort_unstable();
+        assert_eq!(ours, expected);
+    }
+
+    #[test]
+    fn a_stream_event_does_not_close_the_skills_panel() {
+        let mut app = app();
+        app.open_skills_panel();
+        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::Event(
+            nano_runtime::protocol::EventParams {
+                runtime_id: "rt".into(),
+                generation: 1,
+                subscription_id: "sub-1".into(),
+                sequence: 1,
+                kind: "conversation.status".into(),
+                payload: json!({"address": {"rootSessionId": "root"}, "status": "idle"}),
+            },
+        )));
+        assert!(app.skills_panel_open());
+    }
+
+    #[test]
+    fn tab_does_not_close_the_skills_panel() {
+        let mut app = app();
+        app.open_skills_panel();
+        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert!(app.skills_panel_open());
+    }
+
+    #[test]
+    fn alt_r_opens_the_instruction_sources_panel() {
+        let mut app = app();
+        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::Event(
+            nano_runtime::protocol::EventParams {
+                runtime_id: "rt".into(),
+                generation: 1,
+                subscription_id: "sub-1".into(),
+                sequence: 1,
+                kind: "instructions.changed".into(),
+                payload: json!({
+                    "address": {"rootSessionId": "root"},
+                    "available": true,
+                    "baseline": true,
+                    "loadedAt": 1_000_000,
+                    "sources": [{"path": "AGENTS.md", "action": "set"}],
+                    "budgetNotice": "Workspace instruction budget 65536 bytes: omitted CLAUDE.md",
+                }),
+            },
+        )));
+        assert_eq!(app.instructions.sources.len(), 1);
+        app.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::ALT));
+        assert!(app.instructions_panel_open());
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.scene.focus().input_focused());
     }
 }
