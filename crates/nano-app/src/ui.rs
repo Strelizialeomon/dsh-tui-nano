@@ -5,6 +5,7 @@
 //! be exercised in a real terminal before the reading layer exists.
 
 use nano_conversation::{ConversationItem, MessageKind, PreviewView, ToolPreview, ToolStatus};
+use nano_sessions::{format_clock, Occupancy};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -36,7 +37,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         .split(area);
 
     draw_header(frame, app, layout[0]);
-    draw_feed(frame, app, layout[1]);
+    if app.panel.open {
+        draw_sessions(frame, app, layout[1]);
+    } else {
+        draw_feed(frame, app, layout[1]);
+    }
     if queue_height > 0 {
         draw_queue(frame, app, layout[2]);
     }
@@ -66,11 +71,16 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         Connection::Starting => Color::Cyan,
         Connection::Disconnected | Connection::Failed(_) => Color::Red,
     };
+    let connection_label = if app.switch.busy() {
+        "切换中"
+    } else {
+        app.connection.label()
+    };
     let mut spans = vec![
         Span::styled(" nano ", Style::default().fg(Color::Black).bg(Color::Cyan)),
         Span::raw(format!(" {cwd} ")),
         Span::raw("· "),
-        Span::styled(app.connection.label(), Style::default().fg(status_color)),
+        Span::styled(connection_label, Style::default().fg(status_color)),
         Span::raw(" · "),
         Span::styled(
             app.model.status().label(),
@@ -84,6 +94,29 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
             app.model.inbox().total_count()
         )),
     ];
+    if let Some(meter) = &app.context {
+        let occupancy = meter.occupancy();
+        let colour = match occupancy.percent() {
+            Some(percent) if percent >= 80 => Color::Red,
+            Some(percent) if percent >= 60 => Color::Yellow,
+            Some(_) => Color::Green,
+            None => Color::DarkGray,
+        };
+        spans.push(Span::raw(" · "));
+        spans.push(Span::styled(
+            format!("ctx {}", occupancy.label()),
+            Style::default().fg(colour),
+        ));
+        spans.push(Span::styled(
+            " · 参考",
+            Style::default().fg(Color::DarkGray),
+        ));
+    } else if let Some(error) = &app.context_error {
+        spans.push(Span::styled(
+            format!(" · ctx 未知（{error}）"),
+            Style::default().fg(Color::Yellow),
+        ));
+    }
     if app.replay_truncated {
         spans.push(Span::styled(
             " · 更早记录未回放",
@@ -91,6 +124,199 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         ));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// Session panel: the official list plus context provenance and the last
+/// compaction outcome. Every number is labelled with its source; occupancy is
+/// never shown as exact usage.
+fn draw_sessions(frame: &mut Frame, app: &App, area: Rect) {
+    let title = match &app.panel.rename {
+        Some(_) => " 会话 · 输入新标题 · Enter 应用，Esc 取消 ".to_string(),
+        None => " 会话 · ↑↓ 选择 · Enter 切换 · n 改名 · c 压缩 · r 刷新 · Esc 关闭 ".to_string(),
+    };
+    let block = Block::default().borders(Borders::ALL).title(title);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let mut rows: Vec<Line<'static>> = Vec::new();
+    if app.panel.loading {
+        rows.push(Line::from(Span::styled(
+            "正在读取官方会话列表…",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    if let Some(error) = &app.panel.error {
+        rows.push(Line::from(Span::styled(
+            error.clone(),
+            Style::default().fg(Color::Red),
+        )));
+    }
+    let prefix_rows = rows.len();
+    push_session_row(
+        &mut rows,
+        app.panel.selected == 0,
+        "＋ 新建会话（Nano 生成新 ID）".to_string(),
+    );
+    for (index, row) in app.panel.rows.iter().enumerate() {
+        let activity = row
+            .updated_at
+            .map(short_clock)
+            .unwrap_or_else(|| "最近活动未知".to_string());
+        let state = row.state_label();
+        let id: String = row.session_id.chars().take(8).collect();
+        let mut line = format!("{} · {} · {}", row.display_title(), activity, id);
+        if !state.is_empty() {
+            line.push_str(&format!(" · {state}"));
+        }
+        if row.blank == Some(true) {
+            line.push_str(" · 空白");
+        }
+        if !row.switchable() {
+            line.push_str(" · 子代理（不可作主会话）");
+        }
+        push_session_row(&mut rows, app.panel.selected == index + 1, line);
+    }
+    if let Some(rename) = &app.panel.rename {
+        rows.push(Line::from(Span::styled(
+            format!("新标题：{}", rename.buffer.text()),
+            Style::default().fg(Color::Cyan),
+        )));
+    }
+    let mut footer: Vec<Line<'static>> = vec![Line::from("")];
+    push_context_details(&mut footer, app);
+    if let Some(compact) = &app.compact {
+        footer.push(Line::from(Span::styled(
+            format!("压缩：{}", compact.display_text()),
+            Style::default().fg(if compact.kind == nano_sessions::CompactionKind::Success {
+                Color::Green
+            } else {
+                Color::Yellow
+            }),
+        )));
+    }
+    if app.compact_in_flight {
+        footer.push(Line::from(Span::styled(
+            "压缩：等待官方结果…（Esc 取消等待，历史以后端为准）",
+            Style::default().fg(Color::Yellow),
+        )));
+    }
+    if app.switch.state().failed() {
+        footer.push(Line::from(Span::styled(
+            format!(
+                "{}；Alt+R 重试 / Alt+B 返回上一会话",
+                app.switch.state().label()
+            ),
+            Style::default().fg(Color::Red),
+        )));
+    } else if app.switch.busy() {
+        footer.push(Line::from(Span::styled(
+            app.switch.state().label(),
+            Style::default().fg(Color::Cyan),
+        )));
+    }
+
+    // Keep the selected row visible while reserving room for the context and
+    // compaction footer. A long session list scrolls instead of hiding the
+    // cursor.
+    let viewport = inner.height as usize;
+    let footer_height = footer.len().min(viewport.saturating_sub(1));
+    let row_viewport = viewport.saturating_sub(footer_height).max(1);
+    let selected_line = prefix_rows + app.panel.selected;
+    let start = selected_line.saturating_add(1).saturating_sub(row_viewport);
+    let visible: Vec<Line<'static>> = rows
+        .into_iter()
+        .skip(start)
+        .take(row_viewport)
+        .chain(footer.into_iter().take(footer_height))
+        .collect();
+    frame.render_widget(Paragraph::new(Text::from(visible)), inner);
+}
+
+fn push_session_row(lines: &mut Vec<Line<'static>>, selected: bool, text: String) {
+    let marker = if selected { "▶ " } else { "  " };
+    let style = if selected {
+        Style::default().fg(Color::Black).bg(Color::Cyan)
+    } else {
+        Style::default()
+    };
+    lines.push(Line::from(Span::styled(
+        format!("{marker}{}", truncate(&text, 120)),
+        style,
+    )));
+}
+
+fn push_context_details(lines: &mut Vec<Line<'static>>, app: &App) {
+    match &app.context {
+        Some(meter) => {
+            let occupancy = meter.occupancy();
+            lines.push(Line::from(Span::styled(
+                format!("上下文占用（参考值）：{}", occupancy.label()),
+                Style::default().fg(match occupancy {
+                    Occupancy::Known { .. } => Color::Cyan,
+                    Occupancy::Unknown => Color::Yellow,
+                }),
+            )));
+            if occupancy == Occupancy::Unknown {
+                lines.push(Line::from(Span::styled(
+                    "  缺 projectedTokens 或 contextWindow；不补零、不用累计用量冒充",
+                    Style::default().fg(Color::Yellow),
+                )));
+            }
+            lines.push(Line::from(Span::styled(
+                format!("  {}", meter.provenance_label(now_ms())),
+                Style::default().fg(Color::DarkGray),
+            )));
+            let usage = meter.token_usage;
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "计费用量（整个日志）：输入 {} + 输出 {} + 缓存读 {} / 写 {} = {}",
+                    usage.uncached_input_tokens,
+                    usage.output_tokens,
+                    usage.cache_read_tokens,
+                    usage.cache_write_tokens,
+                    usage.total()
+                ),
+                Style::default().fg(Color::DarkGray),
+            )));
+            if let Some(breakdown) = meter.breakdown {
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        "估算构成（启发式，CJK/JSON 可能低估）：系统 {} · 工具 {} · 消息 {}",
+                        breakdown.system_tokens, breakdown.tools_tokens, breakdown.message_tokens
+                    ),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+            if let Some(pressure) = meter.pressure_tokens {
+                lines.push(Line::from(Span::styled(
+                    format!("最近一次 provider 压力：{} tokens（非当前占用）", pressure),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+        }
+        None => {
+            lines.push(Line::from(Span::styled(
+                match &app.context_error {
+                    Some(error) => format!("上下文：未知（{error}）"),
+                    None => "上下文：尚未读取".to_string(),
+                },
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+    }
+}
+
+/// Current wall clock in Unix epoch milliseconds, for provenance ages.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// HH:MM from an official durable event time.
+fn short_clock(epoch_ms: u64) -> String {
+    let text = format_clock(epoch_ms);
+    text.get(0..5).map(str::to_string).unwrap_or(text)
 }
 
 fn draw_feed(frame: &mut Frame, app: &mut App, area: Rect) {

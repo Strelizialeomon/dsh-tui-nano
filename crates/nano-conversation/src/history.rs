@@ -189,6 +189,13 @@ impl ConversationHistory {
     /// Apply one official durable event.
     pub fn apply(&mut self, event: &SessionEvent) -> HistoryEffect {
         let mut effect = HistoryEffect::default();
+        // A compaction summary is appended as a user message with a surface
+        // `replace` operation. Drop the shadowed display rows first so the feed
+        // matches the official current surface instead of keeping stale items.
+        if let Some((start, end)) = event.replacement_range() {
+            self.items
+                .retain(|item| !(start..=end).contains(&item_seq(item)));
+        }
         match event.event_type.as_str() {
             "user/message" => {
                 if let Some(message) = self.user_message(event.seq, &event.data) {
@@ -451,6 +458,14 @@ fn is_synthetic_bash(text: &str) -> bool {
     TAGS.iter().any(|tag| text.contains(tag))
 }
 
+/// Durable sequence of one display item.
+fn item_seq(item: &ConversationItem) -> u64 {
+    match item {
+        ConversationItem::Message(message) => message.seq,
+        ConversationItem::ToolCall(call) => call.seq,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -465,8 +480,11 @@ mod tests {
                 mode: None,
             },
             seq,
+            time: None,
             event_type: event_type.into(),
             data,
+            surface_op: None,
+            source_event_seqs: None,
         }
     }
 
@@ -618,6 +636,61 @@ mod tests {
             panic!("expected message");
         };
         assert_eq!(message.kind, MessageKind::User);
+    }
+
+    #[test]
+    fn a_compaction_replacement_drops_the_shadowed_rows() {
+        let mut history = ConversationHistory::default();
+        for seq in 1..=5 {
+            history.apply(&event(
+                seq,
+                "user/message",
+                json!({
+                    "id": format!("u-{seq}"),
+                    "role": "user",
+                    "content": [{"type": "text", "text": format!("message {seq}")}],
+                    "source": {"kind": "user"}
+                }),
+            ));
+        }
+        let mut replacement = event(
+            6,
+            "user/message",
+            json!({
+                "id": "summary",
+                "role": "user",
+                "content": [{"type": "text", "text": "summary of 3..4"}],
+                "source": {"kind": "compact-checkpoint", "compactionId": "c-1"}
+            }),
+        );
+        replacement.surface_op = Some(json!({"op": "replace", "startSeq": 3, "endSeq": 4}));
+        history.apply(&replacement);
+        let seqs: Vec<u64> = history.items().iter().map(item_seq).collect();
+        assert_eq!(seqs, vec![1, 2, 5, 6]);
+        let ConversationItem::Message(summary) = &history.items()[3] else {
+            panic!("expected summary message");
+        };
+        assert_eq!(summary.kind, MessageKind::Injected);
+        assert_eq!(summary.text, "summary of 3..4");
+    }
+
+    #[test]
+    fn an_unknown_surface_operation_is_ignored() {
+        let mut history = ConversationHistory::default();
+        history.apply(&event(
+            1,
+            "user/message",
+            json!({
+                "id": "u-1",
+                "role": "user",
+                "content": [{"type": "text", "text": "one"}],
+                "source": {"kind": "user"}
+            }),
+        ));
+        let mut future = event(2, "user/message", json!({"id": "u-2", "content": []}));
+        future.surface_op = Some(json!({"op": "future", "startSeq": 1, "endSeq": 1}));
+        history.apply(&future);
+        assert_eq!(history.items().len(), 2);
     }
 
     #[test]

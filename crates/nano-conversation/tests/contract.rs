@@ -74,11 +74,13 @@ fn every_event_kind_is_covered_by_the_contract_shape() {
                 "session.event",
                 "conversation.status",
                 "conversation.inbox",
-                "conversation.stream"
+                "conversation.stream",
+                // S07-owned; the app consumes it before the conversation model.
+                "sessions.context"
             ]
             .contains(kind),
             "unexpected event kind {kind}"
         );
     }
-    assert_eq!(kinds.len(), 4);
+    assert_eq!(kinds.len(), 5);
 }

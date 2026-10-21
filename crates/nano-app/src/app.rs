@@ -1,6 +1,7 @@
 //! Application state and key handling.
 
 use std::collections::HashMap;
+use std::sync::mpsc::{channel, Receiver};
 use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -9,8 +10,12 @@ use nano_conversation::{
     FocusId, InputBuffer, InputEvent, InputOutcome, InputRoute, OrderedContent, SceneId,
     SceneState, SessionAddress, SubmitError,
 };
-use nano_runtime::Hello;
-use serde_json::Value;
+use nano_runtime::{Hello, SessionMode};
+use nano_sessions::{
+    CompactionOutcome, ContextMeter, RenameOutcome, SessionSummary, SwitchMachine, SwitchTarget,
+    TargetMode,
+};
+use serde_json::{json, Value};
 
 use crate::cli::Cli;
 use crate::link::{HostLink, LinkEvent, RequestError, RequestErrorKind};
@@ -78,6 +83,72 @@ pub enum Pending {
         /// Official message id being deleted.
         message_id: String,
     },
+    /// Read the official session list.
+    SessionsList,
+    /// Rename the active root session.
+    Rename {
+        /// Official session identity being renamed.
+        session_id: String,
+        /// Submitted title, kept to restore the editor on failure.
+        title: String,
+    },
+    /// Read the context-occupancy projection.
+    Context,
+    /// The official `/compact` command is running.
+    Compact,
+    /// Cancel the running `/compact` wait.
+    CompactCancel,
+}
+
+/// Inline rename editor inside the session panel.
+#[derive(Debug, Clone)]
+pub struct RenameInput {
+    /// Official session identity; only the active root is accepted by the host.
+    pub session_id: String,
+    /// Editable title buffer.
+    pub buffer: InputBuffer,
+}
+
+/// Session panel state. Rows are official summaries only.
+#[derive(Debug, Clone, Default)]
+pub struct SessionPanel {
+    /// Whether the panel owns the keyboard.
+    pub open: bool,
+    /// A list request is in flight.
+    pub loading: bool,
+    /// Official rows, newest first.
+    pub rows: Vec<SessionSummary>,
+    /// Selected row; index 0 is the "new session" row, rows start at 1.
+    pub selected: usize,
+    /// Last panel-level error.
+    pub error: Option<String>,
+    /// Active rename editor.
+    pub rename: Option<RenameInput>,
+}
+
+impl SessionPanel {
+    /// Close the panel and drop transient state.
+    pub fn close(&mut self) {
+        self.open = false;
+        self.loading = false;
+        self.rename = None;
+        self.error = None;
+    }
+
+    /// Selected official row, when the cursor is not on "new session".
+    pub fn selected_row(&self) -> Option<&SessionSummary> {
+        self.selected
+            .checked_sub(1)
+            .and_then(|index| self.rows.get(index))
+    }
+
+    /// Keep the selection inside the list.
+    pub fn clamp(&mut self) {
+        let max = self.rows.len();
+        if self.selected > max {
+            self.selected = max;
+        }
+    }
 }
 
 /// One frame of application state.
@@ -143,6 +214,20 @@ pub struct App {
     /// After a truncated queue projection, reopen this item's editor once a
     /// full snapshot arrives.
     pub edit_after_snapshot: Option<String>,
+    /// Explicit main-session switch phase.
+    pub switch: SwitchMachine,
+    /// Latest official context-occupancy reference.
+    pub context: Option<ContextMeter>,
+    /// Why the last context read failed, when it did.
+    pub context_error: Option<String>,
+    /// Official session list panel.
+    pub panel: SessionPanel,
+    /// Restart worker events, while a controlled restart owns the old link.
+    pub restart_rx: Option<Receiver<LinkEvent>>,
+    /// Latest settled manual-compaction outcome.
+    pub compact: Option<CompactionOutcome>,
+    /// A `/compact` request is in flight.
+    pub compact_in_flight: bool,
 }
 
 impl App {
@@ -186,6 +271,13 @@ impl App {
             clear_stop_failed: false,
             clear_after_snapshot: false,
             edit_after_snapshot: None,
+            switch: SwitchMachine::new(),
+            context: None,
+            context_error: None,
+            panel: SessionPanel::default(),
+            restart_rx: None,
+            compact: None,
+            compact_in_flight: false,
         }
     }
 
@@ -205,6 +297,45 @@ impl App {
         {
             self.should_quit = true;
             return true;
+        }
+        // After a failed switch this window has no host. The retry and back
+        // entries stay reachable even though no session is connected.
+        if self.switch.state().failed() {
+            if key.modifiers.contains(KeyModifiers::ALT) {
+                match key.code {
+                    KeyCode::Char('r') | KeyCode::Char('R') => {
+                        self.retry_switch();
+                        return true;
+                    }
+                    KeyCode::Char('b') | KeyCode::Char('B') => {
+                        self.back_after_failure();
+                        return true;
+                    }
+                    _ => {}
+                }
+            }
+            return self.handle_failed_switch_key(key);
+        }
+        if self.switch.busy() {
+            // A switch owns the host lifecycle; new work waits for it.
+            self.notice = Some(self.switch.state().label());
+            return false;
+        }
+        if self.panel.open {
+            return self.handle_panel_key(key);
+        }
+        if key.modifiers.contains(KeyModifiers::ALT) {
+            match key.code {
+                KeyCode::Char('o') | KeyCode::Char('O') => {
+                    self.open_session_panel();
+                    return true;
+                }
+                KeyCode::Char('c') | KeyCode::Char('C') => {
+                    self.request_compact();
+                    return true;
+                }
+                _ => {}
+            }
         }
         if matches!(key.code, KeyCode::PageUp) {
             self.scroll_back = self
@@ -283,7 +414,9 @@ impl App {
             }
         }
         if matches!(key.code, KeyCode::Esc) {
-            if self.edit_target.is_some() {
+            if self.compact_in_flight {
+                self.cancel_compact();
+            } else if self.edit_target.is_some() {
                 self.cancel_queue_edit();
             } else {
                 self.stop_turn();
@@ -350,14 +483,31 @@ impl App {
     pub fn handle_link(&mut self, event: LinkEvent) -> bool {
         match event {
             LinkEvent::Ready { hello, truncated } => {
+                let expected = self.model.address().root_session_id.clone();
+                if hello.root_session_id != expected {
+                    let message = format!(
+                        "宿主返回了错误的会话：期望 {expected}，收到 {}",
+                        hello.root_session_id
+                    );
+                    self.link = None;
+                    self.fail_switch(None, None, message);
+                    return true;
+                }
                 self.ready = true;
                 self.connection = Connection::Ready;
                 self.replay_truncated = self.replay_truncated || truncated;
                 self.model
                     .apply_replay_baseline(hello.session.seq, truncated);
                 self.hello = Some(hello);
-                self.notice = Some("已连接官方会话".to_string());
+                if self.switch.busy() {
+                    if let Some(target) = self.switch.succeed() {
+                        self.notice = Some(format!("已切换到会话 {}", target.label()));
+                    }
+                } else {
+                    self.notice = Some("已连接官方会话".to_string());
+                }
                 self.refresh_snapshot();
+                self.refresh_context();
                 true
             }
             LinkEvent::Host(event) => self.handle_host_event(event),
@@ -366,6 +516,11 @@ impl App {
                 true
             }
             LinkEvent::Fatal(message) => {
+                if self.switch.busy() {
+                    self.link = None;
+                    self.fail_switch(None, None, message);
+                    return true;
+                }
                 self.ready = false;
                 self.connection = Connection::Failed(message.clone());
                 let tail = self
@@ -381,13 +536,66 @@ impl App {
                 self.model.mark_disconnected();
                 true
             }
+            LinkEvent::StartupFailed {
+                code,
+                message,
+                holder_pid,
+                repair_path,
+            } => {
+                let message = match repair_path {
+                    Some(path) => format!("{message}；修复路径：{path}"),
+                    None => message,
+                };
+                self.ready = false;
+                self.connection = Connection::Failed(message.clone());
+                if self.switch.busy() {
+                    self.link = None;
+                    self.fail_switch(Some(code), holder_pid, message);
+                } else {
+                    self.error = Some(message);
+                    self.model.mark_disconnected();
+                }
+                true
+            }
+            LinkEvent::Switched { link } => {
+                self.link = Some(link);
+                self.restart_rx = None;
+                self.switch.host_started();
+                self.connection = Connection::Starting;
+                self.ready = false;
+                self.notice = Some("旧宿主已退出；正在启动新宿主…".to_string());
+                true
+            }
+            LinkEvent::SwitchFailed {
+                message,
+                code,
+                holder_pid,
+            } => {
+                self.link = None;
+                self.restart_rx = None;
+                self.ready = false;
+                self.connection = Connection::Failed(message.clone());
+                self.fail_switch(code, holder_pid, message);
+                true
+            }
         }
+    }
+
+    /// Enter the explicit "no usable host" state after a failed switch.
+    fn fail_switch(&mut self, code: Option<String>, holder_pid: Option<u32>, message: String) {
+        self.switch.fail(code, holder_pid, message.clone());
+        let label = self.switch.state().label();
+        self.error = Some(format!("{label}：{message}；当前没有可用宿主"));
+        self.model.mark_disconnected();
     }
 
     fn handle_host_event(&mut self, event: nano_runtime::HostEvent) -> bool {
         use nano_runtime::HostEvent;
         match event {
             HostEvent::Event(params) => {
+                if params.kind == "sessions.context" {
+                    return self.apply_context_value(&params.payload);
+                }
                 if params.kind == "session.event" {
                     self.resubscribe_attempts = 0;
                 }
@@ -597,6 +805,7 @@ impl App {
                     Ok(_) => {
                         self.notice = Some("订阅已重建；正在对齐官方 baseline".to_string());
                         self.refresh_snapshot();
+                        self.refresh_context();
                     }
                     Err(error) => {
                         let root = self.model.address().root_session_id.clone();
@@ -631,6 +840,118 @@ impl App {
                     self.finish_clear_stop();
                 }
             }
+            Pending::SessionsList => {
+                self.panel.loading = false;
+                match result {
+                    Ok(value) => match SessionSummary::parse_result(&value) {
+                        Ok(rows) => {
+                            self.panel.rows = rows;
+                            self.panel.error = None;
+                            self.panel.clamp();
+                        }
+                        Err(error) => {
+                            self.panel.error = Some(format!("会话列表无效：{error}"));
+                        }
+                    },
+                    Err(error) => {
+                        self.panel.error = Some(format!("读取会话列表失败：{}", error.message));
+                    }
+                }
+            }
+            Pending::Rename { session_id, title } => match result {
+                Ok(value) => match RenameOutcome::parse(&value) {
+                    Ok(outcome) => {
+                        if let Some(row) = self
+                            .panel
+                            .rows
+                            .iter_mut()
+                            .find(|row| row.session_id == session_id)
+                        {
+                            row.title = Some(outcome.title.clone());
+                        }
+                        self.panel.rename = None;
+                        self.panel.error = None;
+                        self.notice = Some(format!("会话已重命名为「{}」", outcome.title));
+                    }
+                    Err(error) => {
+                        self.panel.error = Some(format!("改名结果无效：{error}"));
+                    }
+                },
+                Err(error) => {
+                    self.panel.error = Some(format!("改名失败：{}", error.message));
+                    self.panel.rename = Some(RenameInput {
+                        session_id,
+                        buffer: InputBuffer::from_text(title),
+                    });
+                }
+            },
+            Pending::Context => {
+                if !self.ready {
+                    return;
+                }
+                match result {
+                    Ok(value) => {
+                        self.apply_context_value(&value);
+                    }
+                    Err(error) => {
+                        self.context_error = Some(error.message);
+                    }
+                }
+            }
+            Pending::Compact => {
+                self.compact_in_flight = false;
+                match result {
+                    Ok(value) => match CompactionOutcome::parse(&value) {
+                        Ok(outcome) => {
+                            let text = outcome.display_text();
+                            self.compact = Some(outcome.clone());
+                            self.notice = Some(text);
+                            self.refresh_context();
+                            if outcome.history_may_have_changed() {
+                                // The official surface may already have changed;
+                                // reread the absolute state instead of keeping a
+                                // stale display.
+                                self.refresh_snapshot();
+                            }
+                        }
+                        Err(error) => {
+                            self.error = Some(format!("压缩结果无法解析：{error}"));
+                        }
+                    },
+                    Err(error)
+                        if matches!(
+                            error.kind,
+                            RequestErrorKind::Rpc | RequestErrorKind::Local
+                        ) =>
+                    {
+                        self.error = Some(format!("压缩失败：{}", error.message));
+                    }
+                    Err(error) => {
+                        // The command may still be running; never claim failure
+                        // or success, and never retry automatically.
+                        self.notice = Some(format!(
+                            "压缩结果未知（{}）；正在重读官方状态，不自动重试",
+                            error.message
+                        ));
+                        self.refresh_context();
+                        self.refresh_snapshot();
+                    }
+                }
+            }
+            Pending::CompactCancel => match result {
+                Ok(value) => {
+                    let cancelled = value
+                        .get("cancelled")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    if !cancelled {
+                        self.notice = Some("没有正在进行的压缩等待".to_string());
+                    }
+                }
+                Err(error) => {
+                    self.notice = Some(format!("取消压缩失败：{}", error.message));
+                }
+            },
         }
     }
 
@@ -1006,6 +1327,19 @@ impl App {
 
     /// Status-bar text.
     pub fn status_hint(&self) -> String {
+        if self.switch.state().failed() {
+            return format!(
+                "{}；当前没有可用宿主（Alt+R 重试 / Alt+B 返回上一会话）",
+                self.switch.state().label()
+            );
+        }
+        if self.switch.busy() {
+            return self.switch.state().label();
+        }
+        if self.panel.open {
+            return "会话列表：↑↓ 选择 · Enter 切换 · n 改名 · c 压缩 · r 刷新 · Esc 关闭"
+                .to_string();
+        }
         if self.stop_pending {
             return "停止中：等待官方 idle 事实（草稿保留）".to_string();
         }
@@ -1028,14 +1362,414 @@ impl App {
         if let Some(message_id) = &self.edit_target {
             return format!("编辑队列项 {message_id}：Enter 应用，Esc 取消");
         }
-        "Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行 · Esc 停止 · Ctrl+Y 复制原文 · Ctrl+C 退出"
+        "Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行 · Esc 停止 · Alt+O 会话 · Alt+C 压缩 · Ctrl+Y 复制原文 · Ctrl+C 退出"
             .to_string()
     }
 }
 
 impl App {
-    /// Time-based work: rebuild a closed observable subscription.
+    /// Open the official session list panel.
+    pub fn open_session_panel(&mut self) {
+        if self.switch.busy() {
+            return;
+        }
+        if !self.ready {
+            self.error = Some("宿主未就绪，无法读取会话列表".to_string());
+            return;
+        }
+        self.panel.open = true;
+        self.panel.error = None;
+        self.panel.selected = 0;
+        self.scene.focus_mut().push(FocusId::new("sessions"));
+        self.refresh_sessions();
+    }
+
+    /// Close the panel and return focus to the input editor.
+    pub fn close_session_panel(&mut self) {
+        self.panel.close();
+        if self.scene.focus().top() == Some(&FocusId::new("sessions")) {
+            self.scene.focus_mut().pop();
+        }
+    }
+
+    /// Panel keys never fall through to the conversation input.
+    fn handle_panel_key(&mut self, key: KeyEvent) -> bool {
+        if let Some(rename) = &mut self.panel.rename {
+            match key.code {
+                KeyCode::Esc => {
+                    self.panel.rename = None;
+                    return true;
+                }
+                KeyCode::Enter if key.modifiers.is_empty() => {
+                    self.apply_rename();
+                    return true;
+                }
+                _ => {
+                    let Some(event) = text_input_event(&key) else {
+                        return false;
+                    };
+                    return rename.buffer.handle(&event) != InputOutcome::Ignored;
+                }
+            }
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            || key.modifiers.contains(KeyModifiers::ALT)
+        {
+            return false;
+        }
+        match key.code {
+            KeyCode::Esc => {
+                self.close_session_panel();
+                true
+            }
+            KeyCode::Up => {
+                if self.panel.selected > 0 {
+                    self.panel.selected -= 1;
+                }
+                true
+            }
+            KeyCode::Down => {
+                if self.panel.selected < self.panel.rows.len() {
+                    self.panel.selected += 1;
+                }
+                true
+            }
+            KeyCode::Enter => {
+                self.activate_selected_session();
+                true
+            }
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                self.refresh_sessions();
+                true
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') => {
+                self.begin_rename();
+                true
+            }
+            KeyCode::Char('c') | KeyCode::Char('C') => {
+                self.request_compact();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// After a failed switch only retry/back are meaningful.
+    fn handle_failed_switch_key(&mut self, _key: KeyEvent) -> bool {
+        self.error = Some(format!(
+            "{}；当前没有可用宿主（Alt+R 重试 / Alt+B 返回上一会话）",
+            self.switch.state().label()
+        ));
+        false
+    }
+
+    /// Ask the host for the official session list.
+    pub fn refresh_sessions(&mut self) {
+        if !self.ready {
+            self.panel.error = Some("宿主未就绪".to_string());
+            return;
+        }
+        if self.panel.loading {
+            return;
+        }
+        let Some(link) = &self.link else {
+            self.panel.error = Some("宿主连接已关闭".to_string());
+            return;
+        };
+        match link.request("nano.sessions.list", json!({})) {
+            Ok(id) => {
+                self.panel.loading = true;
+                self.panel.error = None;
+                self.pending.insert(id, Pending::SessionsList);
+            }
+            Err(message) => {
+                self.panel.error = Some(format!("读取会话列表失败：{message}"));
+            }
+        }
+    }
+
+    /// Switch to the selected row, or create a fresh session at row zero.
+    fn activate_selected_session(&mut self) {
+        if self.panel.selected == 0 {
+            self.begin_switch(SwitchTarget::new(
+                nano_runtime::paths::new_root_session_id(),
+                TargetMode::Create,
+            ));
+            return;
+        }
+        let Some(row) = self.panel.selected_row().cloned() else {
+            return;
+        };
+        if !row.switchable() {
+            self.panel.error = Some("子代理会话由 S12 接管，不能作为主会话".to_string());
+            return;
+        }
+        if row.current {
+            self.notice = Some("已经在该会话".to_string());
+            return;
+        }
+        let target = SwitchTarget::new(row.session_id.clone(), TargetMode::Resume)
+            .with_title(Some(row.display_title().to_string()));
+        self.begin_switch(target);
+    }
+
+    /// Start an inline rename for the active root session only.
+    fn begin_rename(&mut self) {
+        let Some(row) = self.panel.selected_row().cloned() else {
+            self.panel.error = Some("「新建会话」没有标题".to_string());
+            return;
+        };
+        if !row.current {
+            self.panel.error =
+                Some("冷会话改名会先 resume 并拿写锁；先打开该会话再改名".to_string());
+            return;
+        }
+        if !self.ready {
+            self.panel.error = Some("宿主未就绪".to_string());
+            return;
+        }
+        self.panel.rename = Some(RenameInput {
+            session_id: row.session_id.clone(),
+            buffer: InputBuffer::from_text(row.title.clone().unwrap_or_default()),
+        });
+        self.panel.error = None;
+    }
+
+    /// Submit the rename; the official service decides normalization and errors.
+    fn apply_rename(&mut self) {
+        let Some(rename) = self.panel.rename.clone() else {
+            return;
+        };
+        let title = rename.buffer.text().to_string();
+        let Some(link) = &self.link else {
+            self.panel.error = Some("宿主连接已关闭".to_string());
+            return;
+        };
+        match link.request(
+            "nano.sessions.rename",
+            json!({"sessionId": rename.session_id, "title": title}),
+        ) {
+            Ok(id) => {
+                self.panel.rename = None;
+                self.pending.insert(
+                    id,
+                    Pending::Rename {
+                        session_id: rename.session_id,
+                        title,
+                    },
+                );
+            }
+            Err(message) => {
+                self.panel.error = Some(format!("改名请求未能发出：{message}"));
+            }
+        }
+    }
+
+    /// Stop the current host and start the requested main session generation.
+    fn begin_switch(&mut self, target: SwitchTarget) {
+        let previous = self.current_target();
+        self.begin_switch_inner(target, previous);
+    }
+
+    /// Retry the failed target after a switch failure.
+    fn retry_switch(&mut self) {
+        let previous = self.switch.state().previous().cloned();
+        let Some(target) = self.switch.retry_target() else {
+            return;
+        };
+        self.begin_switch_inner(target, previous);
+    }
+
+    /// Return to the session that was active before the failed switch.
+    fn back_after_failure(&mut self) {
+        let Some(target) = self.switch.back_target() else {
+            self.notice = Some("没有可返回的上一会话".to_string());
+            return;
+        };
+        self.begin_switch_inner(target, None);
+    }
+
+    fn begin_switch_inner(&mut self, target: SwitchTarget, previous: Option<SwitchTarget>) {
+        if self.switch.busy() {
+            return;
+        }
+        if self.ready
+            && target.mode == TargetMode::Resume
+            && target.session_id == self.model.address().root_session_id
+        {
+            self.notice = Some("已经在该会话".to_string());
+            return;
+        }
+        if !self.switch.begin(target.clone(), previous) {
+            return;
+        }
+        let address = SessionAddress::root(target.session_id.clone());
+        self.reset_for_target(&address);
+        let mode = match target.mode {
+            TargetMode::Create => SessionMode::Create,
+            TargetMode::Resume => SessionMode::Resume,
+        };
+        let (tx, rx) = channel();
+        self.restart_rx = Some(rx);
+        if let Some(link) = self.link.take() {
+            crate::restart::spawn_restart(
+                Some(link),
+                target.session_id,
+                mode,
+                self.cli.host_options(),
+                tx,
+            );
+        } else {
+            self.switch.host_started();
+            crate::restart::spawn_restart(
+                None,
+                target.session_id,
+                mode,
+                self.cli.host_options(),
+                tx,
+            );
+        }
+        self.notice = Some(self.switch.state().label());
+    }
+
+    /// The current connected session as a resume target.
+    fn current_target(&self) -> Option<SwitchTarget> {
+        if !matches!(self.connection, Connection::Ready) {
+            return None;
+        }
+        Some(SwitchTarget::new(
+            self.model.address().root_session_id.clone(),
+            TargetMode::Resume,
+        ))
+    }
+
+    /// Clear every address-bound display fact before the new generation starts.
+    fn reset_for_target(&mut self, address: &SessionAddress) {
+        self.model = ConversationModel::new(address.clone());
+        self.drafts.switch_to(address.clone());
+        self.scene
+            .switch_to(SceneId::conversation(), address.clone());
+        self.hello = None;
+        self.ready = false;
+        self.connection = Connection::Starting;
+        self.error = None;
+        self.queue_selected = 0;
+        self.edit_target = None;
+        self.edit_backup = None;
+        self.submit_backups.clear();
+        self.pending.clear();
+        self.stop_pending = false;
+        self.resubscribe_at = None;
+        self.resubscribing = false;
+        self.resubscribe_attempts = 0;
+        self.clear_stop_remaining = 0;
+        self.clear_stop_cancel = false;
+        self.clear_stop_failed = false;
+        self.clear_after_snapshot = false;
+        self.edit_after_snapshot = None;
+        self.context = None;
+        self.context_error = None;
+        self.compact = None;
+        self.compact_in_flight = false;
+        self.scroll_back = 0;
+        self.replay_truncated = false;
+        self.panel.close();
+    }
+
+    /// Read the official context-occupancy projection.
+    pub fn refresh_context(&mut self) {
+        if !self.ready {
+            return;
+        }
+        let Some(link) = &self.link else {
+            return;
+        };
+        if let Ok(id) = link.request("nano.sessions.context", json!({})) {
+            self.pending.insert(id, Pending::Context);
+        }
+    }
+
+    /// Run the official `/compact` command on the long-request worker.
+    pub fn request_compact(&mut self) {
+        if !self.ready {
+            self.error = Some("宿主未就绪".to_string());
+            return;
+        }
+        if self.switch.busy() {
+            self.notice = Some(self.switch.state().label());
+            return;
+        }
+        if self.compact_in_flight {
+            self.notice = Some("压缩请求已在进行中等官方结果".to_string());
+            return;
+        }
+        let Some(link) = &self.link else {
+            self.error = Some("宿主连接已关闭".to_string());
+            return;
+        };
+        match link.request_long("nano.sessions.compact", json!({}), Duration::from_secs(120)) {
+            Ok(id) => {
+                self.compact_in_flight = true;
+                self.pending.insert(id, Pending::Compact);
+                self.notice = Some("已请求官方 /compact；等待官方结果".to_string());
+            }
+            Err(message) => {
+                self.error = Some(format!("压缩请求未能发出：{message}"));
+            }
+        }
+    }
+
+    /// Cancel the wait; the backend still finishes its cleanup.
+    fn cancel_compact(&mut self) {
+        let Some(link) = &self.link else {
+            return;
+        };
+        if let Ok(id) = link.request("nano.sessions.compactCancel", json!({})) {
+            self.pending.insert(id, Pending::CompactCancel);
+            self.notice = Some("已请求取消压缩等待；历史仍以后端结果为准".to_string());
+        }
+    }
+
+    fn apply_context_value(&mut self, value: &Value) -> bool {
+        match ContextMeter::parse(value) {
+            Ok(meter) => {
+                if !meter.matches(&self.model.address().root_session_id) {
+                    return false;
+                }
+                self.context = Some(meter);
+                self.context_error = None;
+                true
+            }
+            Err(error) => {
+                self.context_error = Some(error);
+                true
+            }
+        }
+    }
+
+    /// Drain events from the restart worker without blocking the UI loop.
+    fn poll_restart_events(&mut self) -> bool {
+        let mut events = Vec::new();
+        if let Some(rx) = &self.restart_rx {
+            while let Ok(event) = rx.try_recv() {
+                events.push(event);
+            }
+        }
+        let mut changed = false;
+        for event in events {
+            changed |= self.handle_link(event);
+        }
+        changed
+    }
+
+    /// Time-based work: restart-worker events and closed-subscription rebuilds.
     pub fn tick(&mut self) -> bool {
+        let mut changed = self.poll_restart_events();
+        changed |= self.tick_resubscribe();
+        changed
+    }
+
+    fn tick_resubscribe(&mut self) -> bool {
         if self.resubscribing {
             return false;
         }
@@ -1073,6 +1807,7 @@ impl App {
             "conversation.status",
             "conversation.inbox",
             "conversation.stream",
+            "sessions.context",
         ]);
         if replay_truncated {
             self.notice = Some("重连回放窗口超过上限；从较新的 seq 开始重建".to_string());
@@ -1174,6 +1909,27 @@ impl App {
         } else {
             self.notice = Some("清空请求已逐项发出；以官方 inbox 为准".to_string());
         }
+    }
+}
+
+/// Map one key to a text-editing event for the rename editor.
+fn text_input_event(key: &KeyEvent) -> Option<InputEvent> {
+    match key.code {
+        KeyCode::Backspace => Some(InputEvent::Backspace),
+        KeyCode::Delete => Some(InputEvent::Delete),
+        KeyCode::Left => Some(InputEvent::Left),
+        KeyCode::Right => Some(InputEvent::Right),
+        KeyCode::Up => Some(InputEvent::Up),
+        KeyCode::Down => Some(InputEvent::Down),
+        KeyCode::Home => Some(InputEvent::Home),
+        KeyCode::End => Some(InputEvent::End),
+        KeyCode::Char(character)
+            if !key.modifiers.contains(KeyModifiers::CONTROL)
+                && !key.modifiers.contains(KeyModifiers::ALT) =>
+        {
+            Some(InputEvent::Insert(character.to_string()))
+        }
+        _ => None,
     }
 }
 
@@ -1516,6 +2272,258 @@ mod tests {
             }),
         );
         assert_eq!(app.drafts.current().text(), "text");
+    }
+
+    #[test]
+    fn the_session_panel_requires_a_ready_host() {
+        let mut app = app();
+        app.open_session_panel();
+        assert!(!app.panel.open);
+        assert!(app.error.as_deref().unwrap().contains("宿主未就绪"));
+    }
+
+    #[test]
+    fn a_session_list_result_replaces_the_rows_and_clamps_the_selection() {
+        let mut app = app();
+        app.panel.open = true;
+        app.panel.selected = 9;
+        app.pending.insert(41, Pending::SessionsList);
+        app.handle_request_done(
+            41,
+            Ok(json!({
+                "sessions": [
+                    {
+                        "sessionId": "root",
+                        "title": "当前",
+                        "createdAt": 100,
+                        "updatedAt": 200,
+                        "agentAvailable": true,
+                        "running": false,
+                        "blank": false,
+                        "current": true
+                    },
+                    {
+                        "sessionId": "old",
+                        "createdAt": 50,
+                        "agentAvailable": false,
+                        "running": false,
+                        "current": false
+                    }
+                ]
+            })),
+        );
+        assert_eq!(app.panel.rows.len(), 2);
+        assert_eq!(app.panel.selected, 2);
+        assert_eq!(app.panel.selected_row().unwrap().session_id, "old");
+        assert!(!app.panel.loading);
+    }
+
+    #[test]
+    fn a_failed_rename_restores_the_editor_and_reports_the_official_error() {
+        let mut app = app();
+        app.panel.open = true;
+        app.pending.insert(
+            7,
+            Pending::Rename {
+                session_id: "root".into(),
+                title: "被拒绝的标题".into(),
+            },
+        );
+        app.handle_request_done(
+            7,
+            Err(RequestError {
+                kind: RequestErrorKind::Rpc,
+                message: "nano/sessions/title-invalid".into(),
+            }),
+        );
+        assert!(app
+            .panel
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("title-invalid"));
+        assert_eq!(
+            app.panel.rename.as_ref().unwrap().buffer.text(),
+            "被拒绝的标题"
+        );
+    }
+
+    #[test]
+    fn context_events_only_apply_to_the_current_session() {
+        use nano_runtime::protocol::EventParams;
+        let mut app = app();
+        let payload = json!({
+            "sessionId": "other",
+            "asOfSeq": 1,
+            "approximate": true,
+            "projectedTokens": 10,
+            "contextWindow": 100,
+            "tokenUsage": {
+                "uncachedInputTokens": 0,
+                "outputTokens": 0,
+                "cacheReadTokens": 0,
+                "cacheWriteTokens": 0
+            }
+        });
+        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::Event(
+            EventParams {
+                runtime_id: "rt".into(),
+                generation: 1,
+                subscription_id: "sub-1".into(),
+                sequence: 1,
+                kind: "sessions.context".into(),
+                payload,
+            },
+        )));
+        assert!(app.context.is_none());
+    }
+
+    #[test]
+    fn a_context_event_keeps_occupancy_and_billing_separate() {
+        use nano_runtime::protocol::EventParams;
+        let mut app = app();
+        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::Event(
+            EventParams {
+                runtime_id: "rt".into(),
+                generation: 1,
+                subscription_id: "sub-1".into(),
+                sequence: 1,
+                kind: "sessions.context".into(),
+                payload: json!({
+                    "sessionId": "root",
+                    "asOfSeq": 3,
+                    "approximate": true,
+                    "projectedTokens": 64000,
+                    "contextWindow": 128000,
+                    "tokenUsage": {
+                        "uncachedInputTokens": 100,
+                        "outputTokens": 20,
+                        "cacheReadTokens": 3,
+                        "cacheWriteTokens": 4
+                    }
+                }),
+            },
+        )));
+        let meter = app.context.as_ref().unwrap();
+        assert_eq!(meter.occupancy().percent(), Some(50));
+        assert_eq!(meter.token_usage.total(), 127);
+    }
+
+    #[test]
+    fn a_compact_success_shows_the_official_text_and_rereads_state() {
+        let mut app = app();
+        app.ready = true;
+        app.compact_in_flight = true;
+        app.pending.insert(9, Pending::Compact);
+        app.handle_request_done(
+            9,
+            Ok(json!({
+                "commandId": "cmd-1",
+                "kind": "success",
+                "text": "Compacted 3 history items (~120 tokens).",
+                "sourceEventSeq": 12
+            })),
+        );
+        assert!(!app.compact_in_flight);
+        assert_eq!(
+            app.compact.as_ref().unwrap().display_text(),
+            "Compacted 3 history items (~120 tokens)."
+        );
+        assert!(app.notice.as_deref().unwrap().contains("Compacted 3"));
+    }
+
+    #[test]
+    fn a_compact_cancellation_is_not_shown_as_nothing_happened() {
+        let mut app = app();
+        app.compact_in_flight = true;
+        app.pending.insert(10, Pending::Compact);
+        app.handle_request_done(
+            10,
+            Ok(json!({
+                "commandId": "cmd-2",
+                "kind": "error",
+                "text": "Compaction cancelled."
+            })),
+        );
+        let outcome = app.compact.as_ref().unwrap();
+        assert!(outcome.cancelled());
+        assert!(outcome.history_may_have_changed());
+    }
+
+    #[test]
+    fn switching_clears_every_old_address_display_fact_but_keeps_drafts() {
+        let mut app = app();
+        app.drafts.current_mut().set_text("old draft");
+        app.model.apply_event(
+            "conversation.inbox",
+            &json!({
+                "address": {"rootSessionId": "root"},
+                "inbox": {
+                    "nextTurn": [{
+                        "id": "m-1",
+                        "role": "user",
+                        "content": [{"type": "text", "text": "queued"}],
+                        "source": {"kind": "user", "rpcId": "r-1"}
+                    }],
+                    "nextStep": []
+                }
+            }),
+        );
+        app.context = Some(
+            nano_sessions::ContextMeter::parse(&json!({
+                "sessionId": "root",
+                "asOfSeq": 1,
+                "approximate": true,
+                "tokenUsage": {
+                    "uncachedInputTokens": 0,
+                    "outputTokens": 0,
+                    "cacheReadTokens": 0,
+                    "cacheWriteTokens": 0
+                }
+            }))
+            .unwrap(),
+        );
+        let old = SessionAddress::root("root");
+        let new = SessionAddress::root("next");
+        app.reset_for_target(&new);
+        assert_eq!(app.model.address(), &new);
+        assert!(app.model.inbox().is_empty());
+        assert!(app.model.items().is_empty());
+        assert!(app.context.is_none());
+        assert_eq!(app.drafts.current().text(), "");
+        assert_eq!(
+            app.drafts.get(&old).map(|draft| draft.text().to_string()),
+            Some("old draft".to_string()),
+            "the old draft stays with its own address"
+        );
+    }
+
+    #[test]
+    fn an_occupied_new_host_enters_the_no_host_state_with_the_holder_pid() {
+        let mut app = app();
+        let target = SwitchTarget::new("next", TargetMode::Resume);
+        let previous = SwitchTarget::new("root", TargetMode::Resume);
+        assert!(app.switch.begin(target, Some(previous)));
+        assert!(app.switch.host_started());
+        app.handle_link(LinkEvent::StartupFailed {
+            code: "occupied".into(),
+            message: "root session is owned by pid 4242".into(),
+            holder_pid: Some(4242),
+            repair_path: None,
+        });
+        assert!(app.switch.state().failed());
+        assert!(app.error.as_deref().unwrap().contains("被 pid 4242 占用"));
+        assert_eq!(app.switch.retry_target().unwrap().session_id, "next");
+        assert_eq!(app.switch.back_target().unwrap().session_id, "root");
+        assert!(app.link.is_none());
+    }
+
+    #[test]
+    fn rename_input_maps_keys_without_leaking_alt_shortcuts() {
+        let enter = text_input_event(&KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        assert!(matches!(enter, Some(InputEvent::Insert(value)) if value == "a"));
+        let alt = text_input_event(&KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT));
+        assert!(alt.is_none());
     }
 
     #[test]

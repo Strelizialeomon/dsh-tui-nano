@@ -451,6 +451,18 @@ impl Host {
         self.request_internal(method, params, timeout, false)
     }
 
+    /// Send one request with an explicit wait budget. Used by long official
+    /// actions such as manual compaction; a timeout still means the result is
+    /// unknown, not that the action was refused.
+    pub fn request_with_timeout(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, HostError> {
+        self.request_internal(method, params, timeout, false)
+    }
+
     /// Receive the next host event.
     pub fn next_event(&self, timeout: Option<Duration>) -> Result<HostEvent, HostError> {
         let receiver = self.inner.inbox.lock().expect("inbox mutex poisoned");

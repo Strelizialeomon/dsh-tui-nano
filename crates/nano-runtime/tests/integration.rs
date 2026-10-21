@@ -565,11 +565,12 @@ fn writer_held_is_reported_without_switching_sessions() {
     let second = fixture.start(&session, SessionMode::Resume);
     match second.handshake(Some(Duration::from_secs(30))) {
         Err(HostError::Startup { code, message, .. }) => {
-            assert_eq!(code, "startup-failed");
-            let lower = message.to_lowercase();
+            // S07 maps the official writer lock to the same "occupied" startup
+            // code as the Nano ledger; there is no holder pid in this error.
+            assert_eq!(code, "occupied");
             assert!(
-                lower.contains("writer") || lower.contains("held") || lower.contains("own"),
-                "resume failure did not name the writer lock: {message}"
+                message.contains("session/writer-held"),
+                "resume failure did not name the official writer lock: {message}"
             );
         }
         other => panic!("writer-held session was not refused: {other:?}"),

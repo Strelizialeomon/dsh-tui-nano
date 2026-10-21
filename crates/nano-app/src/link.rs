@@ -38,7 +38,6 @@ pub struct RequestError {
 }
 
 /// One message from the background link.
-#[derive(Debug)]
 pub enum LinkEvent {
     /// Handshake and subscription succeeded.
     Ready {
@@ -58,6 +57,31 @@ pub enum LinkEvent {
     },
     /// The link cannot continue.
     Fatal(String),
+    /// The host exited before the handshake with a structured startup error.
+    StartupFailed {
+        /// Contract startup code (`occupied`, `startup-failed`, ...).
+        code: String,
+        /// Sanitized message from the host.
+        message: String,
+        /// Holder pid for a ledger `occupied` rejection.
+        holder_pid: Option<u32>,
+        /// Repair path for a damaged ledger.
+        repair_path: Option<String>,
+    },
+    /// A controlled restart spawned a new host; its handshake is still pending.
+    Switched {
+        /// The new generation's link.
+        link: HostLink,
+    },
+    /// A controlled restart could not spawn the new host.
+    SwitchFailed {
+        /// Sanitized diagnostic.
+        message: String,
+        /// Startup code when the failure came from the new host.
+        code: Option<String>,
+        /// Holder pid for an `occupied` rejection.
+        holder_pid: Option<u32>,
+    },
 }
 
 /// Shared handle to the host worker threads.
@@ -66,6 +90,8 @@ pub struct HostLink {
     pub events: Receiver<LinkEvent>,
     /// Outgoing request channel.
     commands: Sender<(u64, String, Value)>,
+    /// Outgoing long-request channel (manual compaction).
+    long_commands: Sender<(u64, String, Value, u64)>,
     /// The owning host handle, used for the final ordered shutdown.
     host: Host,
     /// Stops the event loop thread.
@@ -84,6 +110,7 @@ impl HostLink {
             .map_err(|error| format!("could not spawn the host: {error}"))?;
         let (event_tx, event_rx) = channel();
         let (command_tx, command_rx) = channel::<(u64, String, Value)>();
+        let (long_tx, long_rx) = channel::<(u64, String, Value, u64)>();
         let stop = Arc::new(AtomicBool::new(false));
 
         let startup_host = host.clone();
@@ -93,7 +120,7 @@ impl HostLink {
             let hello = match startup_host.handshake(None) {
                 Ok(hello) => hello,
                 Err(error) => {
-                    let _ = startup_events.send(LinkEvent::Fatal(describe_host_error(&error)));
+                    let _ = startup_events.send(startup_failure_event(&error));
                     return;
                 }
             };
@@ -113,6 +140,7 @@ impl HostLink {
                 "conversation.status".to_string(),
                 "conversation.inbox".to_string(),
                 "conversation.stream".to_string(),
+                "sessions.context".to_string(),
             ];
             let _subscription = match startup_host.subscribe(address, Some(kinds), Some(from_seq)) {
                 Ok(subscription) => subscription,
@@ -146,7 +174,7 @@ impl HostLink {
         });
 
         let command_host = host.clone();
-        let command_events = event_tx;
+        let command_events = event_tx.clone();
         std::thread::spawn(move || {
             while let Ok((id, method, params)) = command_rx.recv() {
                 let result = command_host
@@ -161,9 +189,28 @@ impl HostLink {
             }
         });
 
+        // A long action such as manual compaction must not block the ordinary
+        // request worker: prompts submitted while it runs still need to reach
+        // the official inbox.
+        let long_host = host.clone();
+        std::thread::spawn(move || {
+            while let Ok((id, method, params, timeout_ms)) = long_rx.recv() {
+                let result = long_host
+                    .request_with_timeout(&method, params, Duration::from_millis(timeout_ms))
+                    .map_err(classify_request_error);
+                if event_tx
+                    .send(LinkEvent::RequestDone { id, result })
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+
         Ok(Self {
             events: event_rx,
             commands: command_tx,
+            long_commands: long_tx,
             host,
             stop,
             counter: AtomicU64::new(1),
@@ -176,6 +223,21 @@ impl HostLink {
         self.commands
             .send((id, method.to_string(), params))
             .map_err(|_| "the host request worker is gone".to_string())?;
+        Ok(id)
+    }
+
+    /// Send one request on the long-action worker with an explicit budget.
+    /// Manual compaction waits here so ordinary requests stay responsive.
+    pub fn request_long(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<u64, String> {
+        let id = self.counter.fetch_add(1, Ordering::SeqCst);
+        self.long_commands
+            .send((id, method.to_string(), params, timeout.as_millis() as u64))
+            .map_err(|_| "the host long-request worker is gone".to_string())?;
         Ok(id)
     }
 
@@ -193,6 +255,25 @@ impl HostLink {
 
 fn describe_host_error(error: &HostError) -> String {
     format!("{error}")
+}
+
+/// Keep the structured startup facts the UI needs (holder pid, repair path)
+/// instead of flattening every pre-hello failure into a diagnostic string.
+fn startup_failure_event(error: &HostError) -> LinkEvent {
+    match error {
+        HostError::Startup {
+            code,
+            message,
+            holder_pid,
+            repair_path,
+        } => LinkEvent::StartupFailed {
+            code: code.clone(),
+            message: message.clone(),
+            holder_pid: *holder_pid,
+            repair_path: repair_path.clone(),
+        },
+        other => LinkEvent::Fatal(describe_host_error(other)),
+    }
 }
 
 /// Classify a request failure without losing the fact that it may have been

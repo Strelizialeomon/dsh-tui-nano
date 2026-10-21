@@ -81,7 +81,7 @@ pub const LIFECYCLE_TRANSITIONS: [(&str, &str); 15] = [
 ];
 
 /// Error code names shared with the bridge contract.
-pub const ERROR_CODE_NAMES: [(&str, i64); 23] = [
+pub const ERROR_CODE_NAMES: [(&str, i64); 28] = [
     ("jsonrpc/parse-error", -32700),
     ("jsonrpc/invalid-request", -32600),
     ("jsonrpc/method-not-found", -32601),
@@ -105,10 +105,15 @@ pub const ERROR_CODE_NAMES: [(&str, i64); 23] = [
     ("nano/conversation/steer-unavailable", 1016),
     ("nano/conversation/rejected", 1017),
     ("nano/conversation/too-large", 1018),
+    ("nano/sessions/unavailable", 1019),
+    ("nano/sessions/not-active", 1020),
+    ("nano/sessions/title-invalid", 1021),
+    ("nano/sessions/compact-unavailable", 1022),
+    ("nano/sessions/rejected", 1023),
 ];
 
 /// Method names implemented by this generation.
-pub const IMPLEMENTED_METHODS: [&str; 14] = [
+pub const IMPLEMENTED_METHODS: [&str; 19] = [
     "nano.hello",
     "nano.startupError",
     "nano.shutdown",
@@ -123,14 +128,20 @@ pub const IMPLEMENTED_METHODS: [&str; 14] = [
     "nano.conversation.steerQueued",
     "nano.conversation.cancel",
     "nano.conversation.snapshot",
+    "nano.sessions.list",
+    "nano.sessions.rename",
+    "nano.sessions.context",
+    "nano.sessions.compact",
+    "nano.sessions.compactCancel",
 ];
 
 /// Event kinds this client accepts.
-pub const EVENT_KINDS: [&str; 4] = [
+pub const EVENT_KINDS: [&str; 5] = [
     "session.event",
     "conversation.status",
     "conversation.inbox",
     "conversation.stream",
+    "sessions.context",
 ];
 
 /// Shutdown report step names, in report order.
@@ -147,4 +158,9 @@ pub const SHUTDOWN_STEP_NAMES: [&str; 6] = [
 pub const MAX_REPLAY_EVENTS: u64 = 10_000;
 
 /// Startup error codes accepted from the host.
-pub const STARTUP_ERROR_CODES: [&str; 4] = ["occupied", "startup-failed", "cleanup-failed", "unsupported"];
+pub const STARTUP_ERROR_CODES: [&str; 4] = [
+    "occupied",
+    "startup-failed",
+    "cleanup-failed",
+    "unsupported",
+];

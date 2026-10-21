@@ -32,7 +32,7 @@ import {
 test('implemented methods match the contract', () => {
   assert.deepEqual([...IMPLEMENTED_METHODS].sort(), [...CONTRACT_IMPLEMENTED.keys()].sort())
   for (const [name, method] of CONTRACT_IMPLEMENTED) {
-    assert.ok(['S01', 'S02'].includes(method.owner), `${name} owner`)
+    assert.ok(['S01', 'S02', 'S07'].includes(method.owner), `${name} owner`)
     if (method.kind === 'request') {
       assert.ok(IMPLEMENTED_REQUEST_METHODS.includes(name), `${name} must be dispatched as a request`)
     } else {
@@ -75,6 +75,7 @@ test('event kinds match', () => {
     'conversation.status',
     'conversation.inbox',
     'conversation.stream',
+    'sessions.context',
   ])
 })
 
@@ -135,6 +136,17 @@ test('conversation fixtures parse on the bridge side', () => {
   const validated = validateEvent(event.params, { runtimeId: 'rt-fixture', generation: 1 })
   assert.equal(validated.kind, 'conversation.status')
   assert.equal(validated.payload.status, 'running')
+})
+
+test('sessions fixtures parse on the bridge side', () => {
+  const list = CONTRACT.fixtures.sessionsList
+  assert.equal(list.result.sessions[0].sessionId, 'session-fixture')
+  assert.equal(list.result.sessions[0].current, true)
+  const event = parseFrameLine(JSON.stringify(CONTRACT.fixtures.sessionsContextEvent))
+  const validated = validateEvent(event.params, { runtimeId: 'rt-fixture', generation: 1 })
+  assert.equal(validated.kind, 'sessions.context')
+  assert.equal(validated.payload.projectedTokens, 1200)
+  assert.equal(validated.payload.contextWindow, 128000)
 })
 
 test('encodeFrame produces one newline-terminated frame', () => {
