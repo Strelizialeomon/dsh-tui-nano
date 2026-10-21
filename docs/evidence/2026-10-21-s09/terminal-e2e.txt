@@ -10,4 +10,4 @@ test terminal_retain_protects_the_process_until_release ... ok
 test terminal_without_a_retain_hold_is_reclaimed ... ok
 test terminals_are_scoped_to_their_root_session_host ... ok
 
-test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 25.25s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 24.52s

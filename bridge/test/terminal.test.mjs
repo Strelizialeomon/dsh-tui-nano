@@ -44,11 +44,13 @@ class FakeWriter {
 }
 
 class FakeController {
-  constructor({ createError, inputMode = 'consume', outputError, badState } = {}) {
+  constructor({ createError, inputMode = 'consume', outputError, badState, closeFailures = 0 } = {}) {
     this.createError = createError
     this.inputMode = inputMode
     this.outputError = outputError
     this.badState = badState
+    this.closeFailures = closeFailures
+    this.closeCalls = 0
     this.infos = new Map()
     this.ctx = { extend: (meta) => ({ ...meta }) }
   }
@@ -119,6 +121,11 @@ class FakeController {
   }
 
   async close(agent, id) {
+    this.closeCalls += 1
+    if (this.closeFailures > 0) {
+      this.closeFailures -= 1
+      throw new Error('terminal cleanup failed; surviving pids: 1')
+    }
     this.infos.delete(id)
   }
 
@@ -350,4 +357,22 @@ test('input queue clears queued commands on failure and enforces the byte cap', 
   const bounded = new AttachmentInput(4)
   assert.equal(bounded.push({ type: 'write', sequence: 1, data: 'abcd' }), true)
   assert.equal(bounded.push({ type: 'resize', sequence: 2, cols: 80, rows: 24 }), false)
+})
+
+test('acknowledge releases input byte budget', () => {
+  const input = new AttachmentInput(4)
+  assert.equal(input.push({ type: 'write', sequence: 1, data: 'abcd' }), true)
+  assert.equal(input.push({ type: 'write', sequence: 2, data: 'efgh' }), false)
+  const accepted = new AttachmentInput(4)
+  assert.equal(accepted.push({ type: 'write', sequence: 1, data: 'abcd' }), true)
+  accepted.acknowledge(1)
+  assert.equal(accepted.push({ type: 'write', sequence: 2, data: 'efgh' }), true)
+})
+
+test('closeAll retries a transient provider cleanup failure', async () => {
+  const controller = new FakeController({ closeFailures: 2 })
+  const { service } = serviceWith(controller)
+  await service.create({ terminalId: 'term-1', cols: 80, rows: 24 })
+  await service.closeAll()
+  assert.equal(controller.closeCalls, 3)
 })

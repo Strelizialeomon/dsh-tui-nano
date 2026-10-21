@@ -13,7 +13,9 @@
 | `02-terminal-attached.txt` | F12 打开终端，官方 `create`/`retain`/`attach` 成功，状态为 `connected`、`可输入`，显示真实 zsh 提示符 |
 | `03-terminal-output.txt` | 真实输入与输出；宽字符 `世界`、组合字符 `é`、ANSI 颜色都能经过 PTY 和 VT 解析器；配色在 tmux 文本截屏中被剥掉，颜色语义由 `parser-compat.txt` 的 SGR 用例核验 |
 | `04-terminal-scrollback-source.txt` | 连续命令输出进入有界屏幕，未被会话或输入区污染 |
+| `04b-terminal-reattached.txt` | F10 重附成功，状态回到 `connected`；验证 attach 的 `sessionId` 路径 |
 | `05-terminal-closed.txt` | F11 关闭后状态为 `closed`，占位页明确说明终端已关闭 |
+| `05b-shell-picker.txt` / `05c-shell-picker-cancelled.txt` | 关闭后 F9 能正常渲染 shell 列表，Esc 取消 |
 | `06-conversation-return.txt` | F12 返回对话，终端不残留为对话内容 |
 | `07-exit.txt` / `exit.txt` | Ctrl+C 正常退出，宿主返回 `EXIT:0` |
 | 按键 | F12 进入/返回、F11 关闭、F10 重附、F9 选 shell、F8 复制；滚动曲线按 `TERM_PROGRAM` 选择 Ghostty / xterm.js / 默认档 |

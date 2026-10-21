@@ -369,6 +369,7 @@ impl TerminalState {
         self.shell_picker = Some(ShellPicker {
             selected: self.current_shell_index(),
         });
+        self.notice = Some("选择 shell：↑/↓ 选择，Enter 新建，Esc 取消".to_string());
         vec![status_ok("选择 shell：↑/↓ 选择，Enter 新建，Esc 取消")]
     }
 
@@ -607,10 +608,12 @@ impl TerminalState {
             if self
                 .info
                 .as_ref()
-                .map(|info| !info.state.is_running())
+                .map(|info| info.state == ProcessState::Exited)
                 .unwrap_or(false)
             {
-                parts.push("输出未确认排空".to_string());
+                // The official final exited state is published only after the
+                // output stream drained, even though the attachment stays open.
+                parts.push("输出已收完".to_string());
             }
         } else if self.phase == Phase::Connected {
             parts.push(if self.output_drained {
@@ -688,6 +691,7 @@ impl TerminalState {
                     self.shell_picker = Some(ShellPicker {
                         selected: self.current_shell_index(),
                     });
+                    self.notice = Some("选择 shell：↑/↓ 选择，Enter 新建，Esc 取消".to_string());
                     vec![status_ok("选择 shell：↑/↓ 选择，Enter 新建，Esc 取消")]
                 }
                 Err(error) => self.fail(error),
@@ -996,7 +1000,7 @@ impl TerminalState {
         vec![self.cmd(
             RequestKind::Attach,
             "nano.terminal.attach",
-            json!({ "terminalId": id }),
+            json!({ "sessionId": self.root_session_id, "terminalId": id }),
         )]
     }
 
@@ -2143,6 +2147,50 @@ mod fix_tests {
     }
 
     #[test]
+    fn both_initial_and_reattach_attach_requests_include_the_session_id() {
+        let mut connected = connected();
+        let commands = connected.reattach();
+        assert!(matches!(
+            &commands[0],
+            Command::Request {
+                kind: RequestKind::Attach,
+                params,
+                ..
+            } if params["sessionId"] == "session-test"
+        ));
+
+        let mut fresh = TerminalState::new(store(), (80, 24));
+        fresh.set_root_session_id("session-test");
+        let _ = fresh.open();
+        let _ = fresh.on_response(RequestKind::List, Ok(json!({ "terminals": [] })));
+        let _ = fresh.on_response(
+            RequestKind::Environment,
+            Ok(json!({
+                "cwd": "/work",
+                "maxInputBytes": 1024,
+                "maxBufferedBytes": 4096,
+                "maxCols": 120,
+                "maxRows": 40,
+                "scrollback": 100
+            })),
+        );
+        let _ = fresh.on_response(
+            RequestKind::Shells,
+            Ok(json!({ "shells": [{ "path": "/bin/zsh", "args": ["-i"], "name": "zsh" }] })),
+        );
+        let _ = fresh.on_response(RequestKind::Create, Ok(json!({ "terminal": info() })));
+        let commands = fresh.on_response(RequestKind::Retain, Ok(json!({ "holdId": "hold-1" })));
+        assert!(matches!(
+            &commands[0],
+            Command::Request {
+                kind: RequestKind::Attach,
+                params,
+                ..
+            } if params["sessionId"] == "session-test"
+        ));
+    }
+
+    #[test]
     fn a_click_clears_the_selection_so_the_wheel_scrolls_again() {
         let mut state = connected();
         feed_history(&mut state);
@@ -2326,7 +2374,7 @@ mod fix_tests {
     }
 
     #[test]
-    fn an_exited_process_with_an_open_attachment_says_output_is_not_confirmed_drained() {
+    fn an_exited_process_with_an_open_attachment_reports_output_drained() {
         let mut state = connected();
         let mut exited = info();
         exited["state"] = json!("exited");
@@ -2335,7 +2383,8 @@ mod fix_tests {
         state.writable = false;
         let status = state.status_line();
         assert!(status.contains("进程已退出"), "{status}");
-        assert!(status.contains("输出未确认排空"), "{status}");
+        assert!(status.contains("输出已收完"), "{status}");
+        assert!(!status.contains("输出未确认排空"), "{status}");
     }
 
     #[test]
@@ -2349,5 +2398,37 @@ mod fix_tests {
         );
         state.tick();
         assert!(state.status_line().contains("受 scrollback 限制"));
+    }
+}
+
+#[cfg(test)]
+mod picker_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn store() -> TerminalStore {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "nano-terminal-picker-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        TerminalStore::open(&root, "session-test").unwrap()
+    }
+
+    #[test]
+    fn f9_after_close_opens_the_picker() {
+        let mut state = TerminalState::new(store(), (80, 24));
+        state.set_root_session_id("session-test");
+        state.shells = vec![TerminalShell {
+            path: "/bin/zsh".into(),
+            args: vec!["-i".into()],
+            name: "zsh".into(),
+        }];
+        state.phase = Phase::Closed;
+        let key = KeyEvent::new(KeyCode::F(9), KeyModifiers::NONE);
+        let commands = state.handle_key(key);
+        assert!(state.shell_picker.is_some(), "commands: {commands:?}");
     }
 }

@@ -134,5 +134,9 @@
 | 9 | 次要 | Agent/Monitor 负向夹具是空断言 | 已修：真实 `--dump-config` 证明无 `dsh-tool-terminal`/`dsh-monitor` 行 |
 | 10 | 记录 | `slow-consumer` 不可达、未知 info.state 被吞、`--resume` 非安全 id 写路径、宿主关停终端 close 偶发失败 | 已修：原因分类、显式拒绝未知 state、id 校验、关停 close 有限重试 |
 | 11 | 记录 | 协议声明的部分错误码未使用；in-process carrier 无 inputWindow，Rust 以 maxBufferedBytes 为硬上限 | 保留：契约预留错误码；输入窗口简化写入 PR 自定细节，不伪造等待队列 |
+| 12 | 重大 | 修订后重附路径的 attach 漏 `sessionId`，被桥接拒绝（轻审发现） | 已修：`begin_attach` 两条路径都带 `sessionId`；新增初附/重附两条参数断言 |
+| 13 | 次要 | 进程退出但附件仍开时误标“输出未确认排空” | 已改“输出已收完”，与官方 drained 后发布 exited 的语义一致 |
+| 14 | 记录 | `--resume` 非安全 id 仍会在终端 store 校验前传给宿主 | 已修：`Cli::session` 在启动宿主前拒绝非 `[A-Za-z0-9_-]{1,128}` 的 id |
+| 15 | 记录 | 三处弱覆盖测试（选区 clamp、ack 释放、closeAll 重试） | 已补有效断言与失败路径测试 |
 
 上述验收均未执行；真实 PTY 证据见 `docs/evidence/2026-10-21-s09/`，合并前逐项勾选。

@@ -153,22 +153,22 @@ mod clamp_tests {
     use super::*;
 
     #[test]
-    fn selection_columns_are_clamped_to_the_parser_width() {
+    fn selection_columns_are_clamped_across_rows() {
         let mut parser = vt100::Parser::new(4, 10, 0);
-        parser.process(b"hello\r\nworld");
+        parser.process(b"123456789X\r\nabcdefghij");
         let mut selection = Selection::start((0, 14));
-        selection.update((2, 14));
-        let text = selection.text(parser.screen());
-        assert!(text.is_none() || !text.unwrap().is_empty());
+        selection.update((1, 14));
+        let text = selection.text(parser.screen()).expect("clamped selection");
+        assert!(text.contains('X'), "{text:?}");
+        assert!(text.contains("abcdefghij"), "{text:?}");
     }
 
     #[test]
-    fn a_single_row_selection_beyond_the_width_is_empty() {
+    fn a_single_row_selection_beyond_the_width_copies_the_last_cell() {
         let mut parser = vt100::Parser::new(4, 10, 0);
-        parser.process(b"hello");
+        parser.process(b"123456789X");
         let mut selection = Selection::start((0, 9));
         selection.update((0, 14));
-        // Both endpoints clamp to column 9, so there is no range to copy.
-        assert_eq!(selection.text(parser.screen()), None);
+        assert_eq!(selection.text(parser.screen()).as_deref(), Some("X"));
     }
 }

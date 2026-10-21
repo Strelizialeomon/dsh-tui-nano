@@ -38,7 +38,7 @@ fn run() -> Result<(), String> {
     }
     let options = cli.host_options();
     cli.ensure_profile(&options)?;
-    let (root_session_id, mode) = cli.session();
+    let (root_session_id, mode) = cli.session()?;
     let mut app = App::new(cli.clone(), root_session_id.clone(), false);
     let link = HostLink::start(&root_session_id, mode, &options)?;
     app.attach_link(link);

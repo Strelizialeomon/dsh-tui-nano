@@ -1383,7 +1383,16 @@ fn host_shutdown_closes_a_live_terminal() {
     let shells = host
         .request("nano.terminal.shells", json!({}))
         .expect("terminal shells");
-    let shell = terminal_shell(&shells);
+    // Use the plain bash profile here: the developer's zsh prompt can spawn
+    // transient helper processes that outlive the test's grace window.
+    let shell = shells["shells"]
+        .as_array()
+        .expect("shell array")
+        .iter()
+        .find(|shell| shell["name"].as_str() == Some("bash"))
+        .and_then(|shell| shell["path"].as_str())
+        .expect("bash is available in the test environment")
+        .to_string();
     let terminal_id = format!("term-shutdown-{}", generate_root_session_id());
     host.request(
         "nano.terminal.create",
