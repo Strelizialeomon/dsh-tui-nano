@@ -7,11 +7,13 @@
 - `NANO_E2E=1 node --test bridge/test/integration/host.test.mjs`：3 项通过。真实宿主验证 `!` 的 per-call `danger-full-access` 策略、`<bash-input>/<bash-stdout>/<bash-stderr>` 注入、`bash-mode` source、不唤醒驱动（状态保持 idle）、不分配 job ID、每命令新 shell 且 cwd 固定；`nano.jobs.*` 的空列表、非消费 follow 与 not-found 路径。输出见 `host-e2e.txt`。
 - `scripts/pty-evidence-s08.sh`：真实 PTY（tmux 150×45）启动真实 dsh profile。首次 `!` 显示「用户权限、不是 Agent 授权」并要求二次 Enter；退出码 0/7、stderr 分节、运行中状态、任务面板（官方 jobs 空列表）与 Ctrl+C 干净退出可见。快照见 `manual-shell-terminal.txt`。
 - jobs 观察层用官方投影夹具覆盖：`job/registered` 的所属调用关联、`jobs.event` 的 registered/progress/stopping/settled/removed、`readAt` 非消费 offset、`lossy`/`gapBefore` 缺口标记、ring 裁剪、`requested`/`already-finished` 与 not-found 区分、人类停止原因固定为 `cancelled by the user`。
+- **真实模型会话（用户授权，deepseek-official / deepseek-flash）**：模型用 bash 工具在后台启动 `sh -c 'echo s08-start; sleep 40; echo s08-end'`；S08 通过官方投影看到 `bash-9a4d…` 运行中，`readAt(0)` 非消费读到 `s08-start`，`nano.jobs.kill` 返回 `requested`，官方终态 `killed` + `signal: SIGTERM; cancelled by the user`，`cause: kill`、`awaited: false`；随后**恰好一条**模型侧完成通知，带人工停止原因。输出见 `real-model-jobs.txt`。该会话使用用户真实 `~/.dsh` 凭据（未复制），profile 安装到 `~/.dsh/profiles/nano-s08-evidence-*` 并在退出后删除；数据根与 cwd 是临时目录。证据运行把 `tool-jobs` 的 `completionDelivery` 设为 `quiet`，避免再开一个 wake 模型回合；通知渠道本身仍是官方 `dsh-tool-jobs`。
 
 ## 未执行（不得勾选）
 
-- **真实后台任务与人工停止**：需要一个真实模型回合让 `bash` 工具跑后台命令（或让前台命令超时转后台），再在任务面板观察并停止。这会使用用户凭据并产生费用，**等用户授权后补测**；当前只有官方投影夹具与真实空列表证据。因此验收中的「前台命令超时仍是同一 job ID」「任务列表/进度与官方投影一致（有任务时）」「停止后终态与完成通知唯一渠道」尚未取得真实模型证据。
-- **promotion 失败路径**：`promoteOnTimeout: false`、缺 registry、容量拒绝三条按官方 `dsh-tool-bash` 行为退回 deadline kill；S08 只观察投影，未用真实模型分别构造。
+- **前台命令超时转后台（promotion）**：真实会话只验证了模型显式 `run_in_background` 的后台任务；「前台命令超时后仍是同一 job ID、同一份 ring」与 `promoteOnTimeout: false`、缺 registry、容量拒绝三条退回 deadline kill 的路径没有用真实模型分别构造。S08 只观察官方投影，这三条属于 `dsh-tool-bash` 的行为。
+- **自然完成 / already-finished 的真实终态**：真实会话用人工停止构造了 `killed`；`completed` 与「停止一个已结束任务返回 already-finished」由投影夹具覆盖，未再花一次真实回合。
+- **真实任务列表的有输出多任务并排**：真实会话只有一个后台任务；多任务排序、进度行与 200 条上限只有夹具覆盖。
 - **D08 负向闸**：`!` 输出不能作为审批授权。S08 侧夹具确认 source 是 `bash-mode` 而非 `user`，且不触碰 approval 服务；真实审批响应与权限切换由 S03/S04 的负向夹具在发布闸验证。
 - **逃逸后代进程**：macOS 上 SIGKILL 后仍可能留下逃逸后代，S01 已按官方 `subprocess-local` 的限制标注，S08 不承诺追到所有后代。
 - Ghostty 全屏下的人工键位验收归 S13 的 design-contract；当前键位（`!`、Ctrl+T）是 S08 的实现默认值。
@@ -28,6 +30,8 @@
 cargo build -p nano-app
 scripts/pty-evidence-s08.sh
 NANO_E2E=1 node --test bridge/test/integration/host.test.mjs
+# 真实模型证据（会使用用户凭据并产生费用；需用户授权）
+NANO_EVIDENCE_MODEL=deepseek-flash node scripts/model-evidence-s08.mjs
 ```
 
-PTY 脚本使用临时 `DSH_HOME` 与数据根，不读写用户的 `~/.dsh` 会话或凭据。真实模型/后台任务证据需要用户授权与模型路由（会使用官方凭据并产生费用）。
+PTY 脚本使用临时 `DSH_HOME` 与数据根，不读写用户的 `~/.dsh` 会话或凭据。模型证据脚本在真实 `DSH_HOME` 下安装一个临时 profile、用后删除，不复制凭据，也不改动已有 profile。

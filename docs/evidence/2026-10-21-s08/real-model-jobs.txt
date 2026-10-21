@@ -1,0 +1,9 @@
+PROFILE {"profile":"nano-s08-evidence-215","model":"deepseek-official/deepseek-flash"}
+JOB_REGISTERED {"id":"bash-9a4d85740c3d45f3","kind":"bash","label":"sh -c 'echo s08-start; sleep 40; echo s08-end'","status":"running"}
+SNAPSHOT {"id":"bash-9a4d85740c3d45f3","kind":"bash","label":"sh -c 'echo s08-start; sleep 40; echo s08-end'","owner":"session-98cc0231-1aee-4342-a800-b83444c31ed1","status":"running","startedAt":1792591134054,"output":{"total":10,"earliest":0},"toolCall":{"callId":"call_00_ET_wbfyoI4I8UByk1tMpUDx6343","rootCallId":"call_00_ET_wbfyoI4I8UByk1tMpUDx6343"}}
+FOLLOW {"chunks":[{"at":0,"channel":"stdout","text":"s08-start\n"}],"next":10,"lossy":false}
+KILL {"outcome":"requested"}
+SETTLED {"status":"killed","detail":"signal: SIGTERM; cancelled by the user","cause":"kill","awaited":false}
+MODEL_FACING_STOP {"unique_notice_count":1,"carries_human_reason":true,"notice":"background job bash-9a4d85740c3d45f3 (bash: sh -c 'echo s08-start; sleep 40; echo s08-end') finished [status: killed, signal: SIGTERM; cancelled by the user]. Read its output with job_output."}
+SHUTDOWN {"steps":[{"name":"accepting","status":"stopped"},{"name":"subscriptions","status":"stopped"},{"name":"agents","status":"stopped"},{"name":"persistence","status":"stopped"},{"name":"dispose","status":"stopped"},{"name":"ledger","status":"stopped"}],"clean":true}
+EXIT 0
