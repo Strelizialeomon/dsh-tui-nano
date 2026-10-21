@@ -15,6 +15,7 @@ nano-runtime = { path = "../nano-runtime" }
 nano-conversation = { path = "../nano-conversation" }
 nano-transcript = { path = "../nano-transcript" }
 nano-decisions = { path = "../nano-decisions" }
+nano-schedule = { path = "../nano-schedule" }
 nano-attachments = { path = "../nano-attachments" }
 nano-jobs = { path = "../nano-jobs" }
 nano-controls = { path = "../nano-controls" }

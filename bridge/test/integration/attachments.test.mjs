@@ -45,6 +45,13 @@ function patchFor({ dataRoot, sessionId, work, runtimeId, generation, mode, nonc
       { id: 'session-persistence-jsonl', config: { root: path.join(dataRoot, 'sessions') } },
       { id: 'storage-json', config: { root: path.join(dataRoot, 'runtime-data', sessionId, 'storage') } },
       {
+        id: 'storage-domain',
+        config: {
+          backend: 'json',
+          routes: { schedule: 'nano-schedule-json', nano_probe: 'nano-schedule-json' },
+        },
+      },
+      {
         id: 'nano-bridge',
         config: {
           runtimeId,

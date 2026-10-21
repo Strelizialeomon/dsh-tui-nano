@@ -5,7 +5,7 @@ import { startHost } from './host.mjs'
 
 export const name = 'nano-bridge'
 
-export const inject = ['agents', 'sessions', 'sessionPersistence']
+export const inject = ['agents', 'sessions', 'sessionPersistence', 'storage']
 
 /**
  * Mount the host.

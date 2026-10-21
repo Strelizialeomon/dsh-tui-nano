@@ -18,11 +18,12 @@ use serde_json::Value;
 
 /// Every event kind this window subscribes to, in one place so the initial
 /// subscription and a later rebuild cannot drift apart.
-pub const SUBSCRIPTION_KINDS: [&str; 12] = [
+pub const SUBSCRIPTION_KINDS: [&str; 13] = [
     "session.event",
     "conversation.status",
     "conversation.inbox",
     "conversation.stream",
+    "schedule.changed",
     "controls.model",
     "controls.permission",
     "sessions.context",

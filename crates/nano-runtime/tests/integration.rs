@@ -232,7 +232,7 @@ fn handshake_subscribe_shutdown_roundtrip() {
         hello.capabilities["networkListener"].status,
         CapabilityStatus::Unsupported
     );
-    assert_eq!(hello.capabilities["schedule"].status, CapabilityStatus::Unsupported);
+    assert_eq!(hello.capabilities["schedule"].status, CapabilityStatus::Supported);
 
     let owners = fixture.session_owners(&session);
     assert_eq!(owners, vec![host.pid()]);

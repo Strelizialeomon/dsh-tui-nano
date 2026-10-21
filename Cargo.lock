@@ -284,6 +284,7 @@ dependencies = [
  "nano-decisions",
  "nano-jobs",
  "nano-runtime",
+ "nano-schedule",
  "nano-sessions",
  "nano-skills",
  "nano-transcript",
@@ -346,6 +347,14 @@ dependencies = [
  "serde_json",
  "signal-hook",
  "tempfile",
+]
+
+[[package]]
+name = "nano-schedule"
+version = "0.1.0"
+dependencies = [
+ "crossterm",
+ "serde_json",
 ]
 
 [[package]]

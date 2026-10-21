@@ -309,18 +309,26 @@
     },
     {
       "code": 1043,
-      "name": "nano/decisions/unknown-request"
+      "name": "nano/schedule/unavailable"
     },
     {
       "code": 1044,
-      "name": "nano/decisions/answer-invalid"
+      "name": "nano/schedule/error"
     },
     {
       "code": 1045,
-      "name": "nano/decisions/reply-queued"
+      "name": "nano/decisions/unknown-request"
     },
     {
       "code": 1046,
+      "name": "nano/decisions/answer-invalid"
+    },
+    {
+      "code": 1047,
+      "name": "nano/decisions/reply-queued"
+    },
+    {
+      "code": 1048,
       "name": "nano/decisions/answer-failed"
     }
   ],
@@ -415,7 +423,7 @@
       "generation": "integer",
       "subscriptionId": "string",
       "sequence": "integer",
-      "kind": "enum:session.event|conversation.status|conversation.inbox|conversation.stream",
+      "kind": "enum:session.event|conversation.status|conversation.inbox|conversation.stream|schedule.changed|controls.model|controls.permission|sessions.context|skills.changed|instructions.changed|jobs.event|jobs.output|decisions.approval|decisions.question|decisions.projection",
       "payload": "object"
     },
     "streamEnded": {
@@ -1094,6 +1102,135 @@
       }
     },
     {
+      "name": "nano.schedule.catalog",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S11",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "address",
+          "entries"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.schedule.list",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S11",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "address",
+          "records"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.schedule.create",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S11",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address",
+          "request"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "address",
+          "record"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.schedule.update",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S11",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address",
+          "id",
+          "expected"
+        ],
+        "optional": [
+          "title",
+          "prompt",
+          "change"
+        ]
+      },
+      "result": {
+        "required": [
+          "result"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.schedule.delete",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S11",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address",
+          "id"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "result"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.schedule.history",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S11",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address",
+          "id",
+          "limit"
+        ],
+        "optional": [
+          "before"
+        ]
+      },
+      "result": {
+        "required": [
+          "result"
+        ],
+        "optional": []
+      }
+    },
+    {
       "name": "nano.fileReferences.list",
       "direction": "client-to-host",
       "kind": "request",
@@ -1708,6 +1845,14 @@
       "payload": {
         "address": "address",
         "frame": "conversationStreamFrame"
+      }
+    },
+    {
+      "kind": "schedule.changed",
+      "owner": "S11",
+      "status": "implemented",
+      "payload": {
+        "address": "address"
       }
     },
     {

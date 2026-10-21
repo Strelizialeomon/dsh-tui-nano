@@ -1,7 +1,10 @@
 [workspace]
 members = [
     "crates/nano-runtime",
-    "crates/nano-conversation", "crates/nano-transcript", "crates/nano-decisions",
+    "crates/nano-conversation",
+    "crates/nano-transcript",
+    "crates/nano-decisions",
+    "crates/nano-schedule",
     "crates/nano-attachments",
     "crates/nano-controls",
     "crates/nano-skills",

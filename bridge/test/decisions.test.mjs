@@ -148,7 +148,7 @@ test('an aborted approval is withdrawn, not auto-answered', async () => {
         requestId: pending.payload.requestId,
         outcome: 'allowed-once',
       }),
-    (error) => error.code === 1043,
+    (error) => error.code === 1045,
   )
   // The answerer promise is intentionally left unsettled; the official
   // waterfall settles from the cancelled turn, and exit never answers for it.
@@ -348,7 +348,7 @@ test('REPLY_QUEUED keeps its distinct error code', () => {
         callId: 'c-9',
         answers: [{ id: 'q1', selected: ['A'] }],
       }),
-    (error) => error.code === 1045,
+    (error) => error.code === 1047,
   )
 })
 
@@ -361,7 +361,7 @@ test('an unknown live request and an invalid batch are distinguishable', () => {
         requestId: 'missing',
         answers: [{ id: 'q1', selected: ['A'] }],
       }),
-    (error) => error.code === 1043,
+    (error) => error.code === 1045,
   )
   assert.throws(
     () =>
@@ -370,7 +370,7 @@ test('an unknown live request and an invalid batch are distinguishable', () => {
         requestId: 'missing',
         answers: [{ id: 'q1', selected: [1] }],
       }),
-    (error) => error.code === 1044,
+    (error) => error.code === 1046,
   )
 })
 

@@ -32,7 +32,10 @@ import {
 test('implemented methods match the contract', () => {
   assert.deepEqual([...IMPLEMENTED_METHODS].sort(), [...CONTRACT_IMPLEMENTED.keys()].sort())
   for (const [name, method] of CONTRACT_IMPLEMENTED) {
-    assert.ok(['S01', 'S02', 'S03', 'S04', 'S05', 'S06', 'S07', 'S08'].includes(method.owner), `${name} owner`)
+    assert.ok(
+      ['S01', 'S02', 'S03', 'S04', 'S05', 'S06', 'S07', 'S08', 'S09', 'S11'].includes(method.owner),
+      `${name} owner`,
+    )
     if (method.kind === 'request') {
       assert.ok(IMPLEMENTED_REQUEST_METHODS.includes(name), `${name} must be dispatched as a request`)
     } else {
@@ -76,10 +79,10 @@ test('limits and error codes match the contract', () => {
   assert.equal(ERROR_CODES.get('nano/sessions/title-invalid'), 1031)
   assert.equal(ERROR_CODES.get('nano/sessions/compact-unavailable'), 1032)
   assert.equal(ERROR_CODES.get('nano/sessions/rejected'), 1033)
-  assert.equal(ERROR_CODES.get('nano/decisions/unknown-request'), 1043)
-  assert.equal(ERROR_CODES.get('nano/decisions/answer-invalid'), 1044)
-  assert.equal(ERROR_CODES.get('nano/decisions/reply-queued'), 1045)
-  assert.equal(ERROR_CODES.get('nano/decisions/answer-failed'), 1046)
+  assert.equal(ERROR_CODES.get('nano/decisions/unknown-request'), 1045)
+  assert.equal(ERROR_CODES.get('nano/decisions/answer-invalid'), 1046)
+  assert.equal(ERROR_CODES.get('nano/decisions/reply-queued'), 1047)
+  assert.equal(ERROR_CODES.get('nano/decisions/answer-failed'), 1048)
 })
 
 test('lifecycle edges are exactly the contract table', () => {
@@ -95,6 +98,7 @@ test('event kinds match', () => {
     'conversation.status',
     'conversation.inbox',
     'conversation.stream',
+    'schedule.changed',
     'controls.model',
     'controls.permission',
     'sessions.context',
@@ -106,6 +110,11 @@ test('event kinds match', () => {
     'decisions.question',
     'decisions.projection',
   ])
+})
+
+test('the event shape enum and the event kind table agree', () => {
+  const shapeKinds = CONTRACT.shapes.event.kind.replace(/^enum:/, '').split('|')
+  assert.deepEqual([...shapeKinds].sort(), [...EVENT_KINDS.keys()].sort())
 })
 
 test('request fixture parses as a request', () => {
@@ -220,22 +229,13 @@ test('skill and instruction fixtures parse on the bridge side', () => {
   assert.match(validated.payload.budgetNotice, /^Workspace instruction budget/)
 })
 
-test('decision fixtures validate as events', () => {
-  for (const fixture of ['approvalEvent', 'questionEvent']) {
-    const event = parseFrameLine(JSON.stringify(CONTRACT.fixtures[fixture]))
-    const validated = validateEvent(event.params, { runtimeId: 'rt-fixture', generation: 1 })
-    assert.match(validated.kind, /^decisions\./)
-    assert.equal(validated.payload.address.rootSessionId, 'session-fixture')
-  }
-})
-
 test('encodeFrame produces one newline-terminated frame', () => {
   const bytes = encodeFrame(CONTRACT.fixtures.request)
   assert.equal(bytes.at(-1), 0x0a)
   assert.equal(bytes.toString('utf8').trim().split('\n').length, 1)
 })
 
-test('capability names match the contract and absent seams are unsupported', () => {
+test('capability names match the contract and unanswered seams are unavailable', () => {
   const capabilities = buildCapabilities({ get: () => undefined }, {})
   assert.deepEqual(Object.keys(capabilities).sort(), [...CONTRACT.capabilityNames].sort())
   assert.equal(capabilities.approval.status, 'unsupported')
@@ -254,6 +254,15 @@ test('composed interaction seams report the S03 answerer as supported', () => {
   assert.equal(capabilities.userQuestions.status, 'supported')
   assert.equal(capabilities['tool-ask-user'].status, 'supported')
   assert.equal(capabilities['tool-ask-user'].mode, 'blocking')
+})
+
+test('decision fixtures validate as events', () => {
+  for (const fixture of ['approvalEvent', 'questionEvent']) {
+    const event = parseFrameLine(JSON.stringify(CONTRACT.fixtures[fixture]))
+    const validated = validateEvent(event.params, { runtimeId: 'rt-fixture', generation: 1 })
+    assert.match(validated.kind, /^decisions\./)
+    assert.equal(validated.payload.address.rootSessionId, 'session-fixture')
+  }
 })
 
 test('shutdown step names match the contract', () => {
