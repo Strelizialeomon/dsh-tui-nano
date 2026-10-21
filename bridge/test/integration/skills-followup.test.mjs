@@ -1,9 +1,12 @@
 // S05 follow-up real-host evidence: nested instructions discovered through a
-// real first-party read tool call, the same sources after a real --resume, and
-// a real permission failure that must not fabricate an empty instruction set.
+// real first-party read tool call, a changed file reconciled after --resume,
+// and both failure modes (root-marker probe, unreadable file) without a
+// fabricated instruction set.
 //
 // Runs only with NANO_E2E=1. The DeepSeek route points at a local Messages
-// mock, so the real pre-step and tools run without any model spend.
+// mock, so the real pre-step and tools run without any model spend. Requests
+// are classified by body so the session-title auxiliary request is never
+// mistaken for the model's post-tool answer.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -16,6 +19,7 @@ import { fileURLToPath } from 'node:url'
 
 const bridgeRoot = fileURLToPath(new URL('../..', import.meta.url))
 const installScript = path.join(bridgeRoot, 'profile', 'install.mjs')
+const isRoot = typeof process.getuid === 'function' && process.getuid() === 0
 
 function installProfile(dshHome, dataRoot) {
   const dsh = execFileSync('which', ['dsh'], { encoding: 'utf8' }).trim()
@@ -32,7 +36,6 @@ function installProfile(dshHome, dataRoot) {
     { encoding: 'utf8' },
   )
   assert.equal(JSON.parse(output.trim()).installed, true)
-  return dsh
 }
 
 function sseEvents(events) {
@@ -71,20 +74,50 @@ function toolUseResponse(res, tool, input) {
 }
 
 function startModel(handler) {
+  const requests = { agent: 0, title: 0, bodies: [] }
   const server = http.createServer((request, response) => {
     let body = ''
     request.on('data', (chunk) => {
       body += chunk
     })
-    request.on('end', () => handler(body, response))
+    request.on('end', () => {
+      requests.bodies.push(body)
+      let title = false
+      try {
+        const first = JSON.parse(body).messages?.[0]?.content?.[0]?.text
+        title = typeof first === 'string' && first.startsWith('Generate the session title')
+      } catch {
+        title = false
+      }
+      if (title) {
+        requests.title += 1
+        textResponse(response, 'title')
+        return
+      }
+      requests.agent += 1
+      handler(requests, response)
+    })
   })
   return new Promise((resolve) => {
     server.listen(0, '127.0.0.1', () => {
       resolve({
+        requests,
         port: server.address().port,
         close: () => new Promise((done) => server.close(done)),
       })
     })
+  })
+}
+
+function waitForCondition(predicate, timeout, label) {
+  const started = Date.now()
+  return new Promise((resolve, reject) => {
+    const tick = () => {
+      if (predicate()) return resolve()
+      if (Date.now() - started > timeout) return reject(new Error(`timed out waiting for ${label}`))
+      setTimeout(tick, 25)
+    }
+    tick()
   })
 }
 
@@ -166,7 +199,13 @@ function startHost({ work, dshHome, agentsHome, dataRoot, sessionId, mode, gener
       const waiter = { match, resolve }
       waiter.timer = setTimeout(() => {
         waiters.splice(waiters.indexOf(waiter), 1)
-        reject(new Error(`timed out waiting for a frame; stderr: ${stderr.slice(-2000)}`))
+        reject(
+          new Error(
+            `timed out waiting for a frame; recent: ${JSON.stringify(
+              frames.slice(-12).map((frame) => frame.params?.payload?.type ?? frame.params?.kind ?? frame.method ?? frame.id),
+            )}; stderr: ${stderr.slice(-500)}`,
+          ),
+        )
       }, timeout)
       waiters.push(waiter)
     })
@@ -179,10 +218,20 @@ function startHost({ work, dshHome, agentsHome, dataRoot, sessionId, mode, gener
   const stop = async () => {
     const shutdown = await request('nano.shutdown', {})
     assert.equal(shutdown.result.clean, true)
-    const exit = await new Promise((resolve) => child.once('exit', (code) => resolve(code)))
+    const exit = await new Promise((resolve, reject) => {
+      if (child.exitCode !== null) return resolve(child.exitCode)
+      const timer = setTimeout(() => {
+        child.kill('SIGKILL')
+        reject(new Error('host did not exit after shutdown'))
+      }, 15_000)
+      child.once('exit', (code) => {
+        clearTimeout(timer)
+        resolve(code)
+      })
+    })
     assert.equal(exit, 0)
   }
-  return { child, frames, waitFor, request, stop }
+  return { child, frames, waitFor, request, stop, stderr: () => stderr }
 }
 
 function sessionEvent(frame, type) {
@@ -194,11 +243,10 @@ function sessionEvent(frame, type) {
 }
 
 test(
-  'nested instructions and the resumed instruction baseline',
+  'nested instructions reach the next request and resume corrects a changed baseline',
   { skip: process.env.NANO_E2E !== '1' ? 'set NANO_E2E=1' : false, timeout: 240_000 },
   async (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nano-s05-followup-'))
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }))
     const dshHome = path.join(root, 'dsh-home')
     const agentsHome = path.join(root, 'agents-home')
     const dataRoot = path.join(root, 'data')
@@ -211,16 +259,23 @@ test(
     fs.writeFileSync(path.join(agentsHome, 'AGENTS.md'), '# Shared rules\nSHARED_RULE\n')
     installProfile(dshHome, dataRoot)
 
-    let requests = 0
-    const model = await startModel((body, response) => {
-      requests += 1
-      if (requests === 1) {
+    const hosts = []
+    let model
+    t.after(async () => {
+      for (const host of hosts) {
+        if (host.child.exitCode === null) host.child.kill('SIGKILL')
+      }
+      await model?.close()
+      fs.rmSync(root, { recursive: true, force: true })
+    })
+
+    model = await startModel((requests, response) => {
+      if (requests.agent === 1) {
         toolUseResponse(response, 'read', { file_path: 'sub/AGENTS.md' })
       } else {
         textResponse(response, 'done')
       }
     })
-    t.after(() => model.close())
 
     const sessionId = `session-${randomUUID()}`
     const host = startHost({
@@ -234,9 +289,7 @@ test(
       nonce: 'nonce-1',
       modelPort: model.port,
     })
-    t.after(() => {
-      if (host.child.exitCode === null) host.child.kill('SIGKILL')
-    })
+    hosts.push(host)
 
     await host.waitFor((frame) => frame.method === 'nano.hello')
     await host.request('nano.subscribe', {
@@ -261,19 +314,25 @@ test(
     const paths = nested.params.payload.sources.map((source) => source.path)
     assert.ok(paths.includes('AGENTS.md'), `root instruction missing from ${paths.join(', ')}`)
     assert.ok(paths.includes('sub/AGENTS.md'), `nested instruction missing from ${paths.join(', ')}`)
-    // The first read is the root baseline; the second request is the model's
-    // post-tool answer, proving the nested file was injected between them.
-    assert.equal(requests, 2)
-    const toolResult = await host.waitFor(
+    // The real post-tool agent request must carry the nested body; the
+    // session-title auxiliary request is classified separately and ignored.
+    await waitForCondition(
+      () => model.requests.bodies.some((body) => body.includes('NESTED_RULE')),
+      30_000,
+      'the post-tool model request containing NESTED_RULE',
+    )
+    assert.ok(model.requests.agent >= 2, 'the nested file must reach a second agent request')
+    const toolEvent = await host.waitFor(
       (frame) => sessionEvent(frame, 'tool/result') || sessionEvent(frame, 'tool/call'),
     )
-    assert.ok(toolResult)
+    assert.ok(toolEvent)
 
     await host.stop()
-    const requestsAfterFirst = requests
+    const agentRequestsAfterFirst = model.requests.agent
 
-    // A real resume reads the durable log; the instruction projection must
-    // already know the sources without a new model request.
+    // Resume after a real file change: the next pre-step must reconcile the
+    // baseline, and the changed body must reach the next model request.
+    fs.writeFileSync(path.join(work, 'AGENTS.md'), '# Root rules\nROOT_RULE\nCHANGED_RULE\n')
     const resumed = startHost({
       work,
       dshHome,
@@ -285,20 +344,51 @@ test(
       nonce: 'nonce-2',
       modelPort: model.port,
     })
-    t.after(() => {
-      if (resumed.child.exitCode === null) resumed.child.kill('SIGKILL')
-    })
+    hosts.push(resumed)
     await resumed.waitFor((frame) => frame.method === 'nano.hello')
-    const snapshot = await resumed.request('nano.instructions.snapshot', {
+    await resumed.request('nano.subscribe', {
+      address: { rootSessionId: sessionId },
+      kinds: ['session.event', 'instructions.changed'],
+    })
+    const before = await resumed.request('nano.instructions.snapshot', {
       address: { rootSessionId: sessionId },
     })
-    const resumedPaths = snapshot.result.sources.map((source) => source.path)
-    assert.ok(resumedPaths.includes('AGENTS.md'), `resume lost the root source: ${resumedPaths.join(', ')}`)
+    const beforePaths = before.result.sources.map((source) => source.path)
+    assert.ok(beforePaths.includes('AGENTS.md'), `resume lost the root source: ${beforePaths.join(', ')}`)
     assert.ok(
-      resumedPaths.includes('sub/AGENTS.md'),
-      `resume lost the nested source: ${resumedPaths.join(', ')}`,
+      beforePaths.includes('sub/AGENTS.md'),
+      `resume lost the nested source: ${beforePaths.join(', ')}`,
     )
-    assert.equal(requests, requestsAfterFirst, 'resume must not call the model')
+    assert.equal(model.requests.agent, agentRequestsAfterFirst, 'the snapshot itself makes no model request')
+
+    const resumeStart = resumed.frames.length
+    await resumed.request('nano.conversation.submit', {
+      address: { rootSessionId: sessionId },
+      requestId: `resume-${randomUUID()}`,
+      delivery: 'queue',
+      content: [{ type: 'text', text: 'answer after resume' }],
+    })
+    const corrected = await resumed.waitFor(
+      (frame, index) =>
+        index >= resumeStart &&
+        frame.method === 'nano.event' &&
+        frame.params.kind === 'instructions.changed',
+      60_000,
+    )
+    assert.ok(corrected)
+    await waitForCondition(
+      () => model.requests.bodies.some((body) => body.includes('CHANGED_RULE')),
+      30_000,
+      'the resumed model request containing CHANGED_RULE',
+    )
+    assert.ok(model.requests.agent > agentRequestsAfterFirst, 'resume must produce a real model request')
+    const after = await resumed.request('nano.instructions.snapshot', {
+      address: { rootSessionId: sessionId },
+    })
+    assert.deepEqual(
+      after.result.sources.find((source) => source.path === 'AGENTS.md')?.action,
+      'replace',
+    )
     await resumed.stop()
   },
 )
@@ -307,8 +397,7 @@ test(
   'a root-marker failure surfaces the official error and builds no sources',
   { skip: process.env.NANO_E2E !== '1' ? 'set NANO_E2E=1' : false, timeout: 180_000 },
   async (t) => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nano-s05-perm-'))
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nano-s05-marker-'))
     const dshHome = path.join(root, 'dsh-home')
     const agentsHome = path.join(root, 'agents-home')
     const dataRoot = path.join(root, 'data')
@@ -321,12 +410,16 @@ test(
     fs.writeFileSync(path.join(work, 'AGENTS.md'), '# Root rules\nSECRET_RULE\n')
     installProfile(dshHome, dataRoot)
 
-    let requests = 0
-    const model = await startModel((_body, response) => {
-      requests += 1
-      textResponse(response, 'ok')
+    const hosts = []
+    let model
+    t.after(async () => {
+      for (const host of hosts) {
+        if (host.child.exitCode === null) host.child.kill('SIGKILL')
+      }
+      await model?.close()
+      fs.rmSync(root, { recursive: true, force: true })
     })
-    t.after(() => model.close())
+    model = await startModel((_requests, response) => textResponse(response, 'ok'))
     const sessionId = `session-${randomUUID()}`
     const host = startHost({
       work,
@@ -339,9 +432,7 @@ test(
       nonce: 'nonce-1',
       modelPort: model.port,
     })
-    t.after(() => {
-      if (host.child.exitCode === null) host.child.kill('SIGKILL')
-    })
+    hosts.push(host)
     await host.waitFor((frame) => frame.method === 'nano.hello')
     await host.request('nano.subscribe', {
       address: { rootSessionId: sessionId },
@@ -349,15 +440,15 @@ test(
     })
     await host.request('nano.conversation.submit', {
       address: { rootSessionId: sessionId },
-      requestId: `perm-${randomUUID()}`,
+      requestId: `marker-${randomUUID()}`,
       delivery: 'queue',
       content: [{ type: 'text', text: 'say ok' }],
     })
     const end = await host.waitFor((frame) => sessionEvent(frame, 'turn/end'))
     assert.equal(end.params.payload.data.reason.kind, 'error')
     const message = end.params.payload.data.reason.error.message
-    assert.match(message, /ELOOP|symlink|too many levels|\.git/i)
-    assert.equal(requests, 0, 'the official pre-step failed before any model request')
+    assert.match(message, /ELOOP|too many levels/i)
+    assert.equal(model.requests.agent, 0, 'the official pre-step failed before any model request')
     const snapshot = await host.request('nano.instructions.snapshot', {
       address: { rootSessionId: sessionId },
     })
@@ -367,30 +458,44 @@ test(
   },
 )
 
-
 test(
-  'an unreadable rule file is skipped without fabricating sources',
-  { skip: process.env.NANO_E2E !== '1' ? 'set NANO_E2E=1' : false, timeout: 180_000 },
+  'an unreadable base file is skipped while a readable local overlay loads',
+  {
+    skip:
+      process.env.NANO_E2E !== '1'
+        ? 'set NANO_E2E=1'
+        : isRoot
+          ? 'chmod 000 is ineffective for root'
+          : false,
+    timeout: 180_000,
+  },
   async (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nano-s05-file-perm-'))
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }))
     const dshHome = path.join(root, 'dsh-home')
     const agentsHome = path.join(root, 'agents-home')
     const dataRoot = path.join(root, 'data')
     const work = path.join(root, 'work')
     fs.mkdirSync(path.join(work, '.git'), { recursive: true })
     fs.mkdirSync(agentsHome, { recursive: true })
-    const rules = path.join(work, 'AGENTS.md')
-    fs.writeFileSync(rules, '# Root rules\nSECRET_RULE\n')
-    fs.chmodSync(rules, 0o000)
+    const base = path.join(work, 'AGENTS.md')
+    fs.writeFileSync(base, '# Root rules\nSECRET_RULE\n')
+    fs.chmodSync(base, 0o000)
+    // Positive controls: a readable overlay proves discovery reached the
+    // directory; an ancestor file outside the project root must never be used.
+    fs.writeFileSync(path.join(work, 'AGENTS.local.md'), '# Local rules\nLOCAL_RULE\n')
+    fs.writeFileSync(path.join(root, 'AGENTS.md'), '# Ancestor rules\nANCESTOR_RULE\n')
     installProfile(dshHome, dataRoot)
 
-    let requests = 0
-    const model = await startModel((_body, response) => {
-      requests += 1
-      textResponse(response, 'ok')
+    const hosts = []
+    let model
+    t.after(async () => {
+      for (const host of hosts) {
+        if (host.child.exitCode === null) host.child.kill('SIGKILL')
+      }
+      await model?.close()
+      fs.rmSync(root, { recursive: true, force: true })
     })
-    t.after(() => model.close())
+    model = await startModel((_requests, response) => textResponse(response, 'ok'))
     const sessionId = `session-${randomUUID()}`
     const host = startHost({
       work,
@@ -403,9 +508,7 @@ test(
       nonce: 'nonce-1',
       modelPort: model.port,
     })
-    t.after(() => {
-      if (host.child.exitCode === null) host.child.kill('SIGKILL')
-    })
+    hosts.push(host)
     await host.waitFor((frame) => frame.method === 'nano.hello')
     await host.request('nano.subscribe', {
       address: { rootSessionId: sessionId },
@@ -419,12 +522,21 @@ test(
     })
     const end = await host.waitFor((frame) => sessionEvent(frame, 'turn/end'))
     assert.equal(end.params.payload.data.reason.kind, 'completed')
-    assert.ok(requests >= 1)
+    await waitForCondition(
+      () => model.requests.bodies.some((body) => body.includes('LOCAL_RULE')),
+      30_000,
+      'the model request containing the readable local overlay',
+    )
+    assert.ok(!model.requests.bodies.some((body) => body.includes('ANCESTOR_RULE')))
+    assert.ok(!model.requests.bodies.some((body) => body.includes('SECRET_RULE')))
     const snapshot = await host.request('nano.instructions.snapshot', {
       address: { rootSessionId: sessionId },
     })
-    assert.equal(snapshot.result.available, false)
-    assert.deepEqual(snapshot.result.sources, [])
+    assert.equal(snapshot.result.available, true)
+    assert.deepEqual(
+      snapshot.result.sources.map((source) => source.path),
+      ['AGENTS.local.md'],
+    )
     await host.stop()
   },
 )

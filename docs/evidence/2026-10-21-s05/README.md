@@ -55,10 +55,10 @@ PTY 与真实宿主测试都把官方 DeepSeek 路由指向本机 Messages 兼�
 
 用本地 Messages mock 让真实官方 pre-step / 工具执行跑起来，无真实模型费用：
 
-- **嵌套规矩**：真实 `read` 工具读取 `sub/AGENTS.md`；下一次 pre-step 后 `instructions.changed` 出现 `sub/AGENTS.md`，模型共收到两次请求（基线 + 工具后回答）。
-- **恢复基线**：同一会话 `sessionMode: resume` 重启；`nano.instructions.snapshot` 直接返回 `AGENTS.md` 与 `sub/AGENTS.md`，没有新的模型请求。
+- **嵌套规矩**：真实 `read` 工具读取 `sub/AGENTS.md`；下一次 pre-step 后 `instructions.changed` 出现 `sub/AGENTS.md`，并等到工具后的真实模型请求正文包含 `NESTED_RULE`（session-title 辅助请求按首条消息区分，不计入）。
+- **恢复校正基线**：同一会话 `sessionMode: resume` 重启后先读到 durable 来源；修改 `AGENTS.md` 再发请求，官方注入 `AGENTS.md` 的 `replace` 变更，恢复后的模型请求正文包含 `CHANGED_RULE`。
 - **根标记失败**：`.git` 自引用符号链接触发 ELOOP；官方 pre-step 直接失败（模型请求 0 次），回合错误可见，来源为空。
-- **文件级权限失败**：`AGENTS.md` 权限 000 时官方判为 unavailable 并跳过；回合正常完成，`available=false`、`sources=[]`，不选祖先目录、不伪造来源。
+- **文件级权限失败**：`AGENTS.md` 权限 000、同目录 `AGENTS.local.md` 可读、项目外祖先也有 `AGENTS.md`；回合正常完成，来源恰为 `AGENTS.local.md`（正控证明发现路径生效），`SECRET_RULE` 与 `ANCESTOR_RULE` 均未进入请求，不选祖先目录、不伪造来源。
 
 ## 未执行（不得勾选）
 
