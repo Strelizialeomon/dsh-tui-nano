@@ -2,11 +2,13 @@
 
 ## 已执行
 
-- `cargo test`：206 项通过（nano-app 33、nano-conversation 51 + 契约 5、nano-decisions 36、nano-runtime 18 + 契约 10 + preflight 2、nano-transcript 42 + 契约 9）。
-- `node --test bridge/test/*.test.mjs`：82 项通过，含新增决策宿主 15 项、协议夹具与能力快照。
-- `NANO_E2E=1 node --test bridge/test/integration/host.test.mjs`：2 项真实宿主通过。
+> 本目录的真实截图采集于 S03 与 S04-S08 合并后的代码；S11 随后合入，只新增调度面板/能力，S03 transcript 与决策卡路径未改。S11 合入后已复跑全量 Rust/桥接/真实宿主/E2E/PTY 测试，计数为 425 / 198 / 14 / 3 / 8。
+
+- `cargo test`：425 项通过（含 S03 新增 crate 与 S04-S11 既有 crate；S11 合入后复跑）。
+- `node --test bridge/test/*.test.mjs`：198 项通过（含决策宿主 15 项、S04-S11 既有桥接测试）。
+- `NANO_E2E=1 node --test bridge/test/integration/host.test.mjs`：3 项真实宿主通过。
 - `cargo test -p nano-runtime --test integration -- --ignored --test-threads=1 --skip shutdown_budget_is_bounded_when_cleanup_hangs`：14 项真实宿主回归通过，1 项慢测试跳过；能力快照由 `approval/userQuestions/tool-ask-user: unavailable` 更新为 `supported`（S03 已注册唯一 answerer）。
-- `python3 scripts/pty-evidence.py`：真实 PTY（120×40）启动真实 dsh profile；空提交、括号粘贴、提交回显、失败回合、干净退出 8 项全过。
+- `python3 scripts/pty-evidence.py`：真实 PTY（120×40）启动真实 dsh profile；空提交、括号粘贴、提交回显、失败回合、干净退出 8 项全过（S11 合入后复跑）。
 - 真实模型会话 1（用户授权，deepseek-official / deepseek-chat）：
   - 模型真实调用 `ask_user_question`，问卷卡进入输入位；按 `1` 直选「聚焦回归（推荐）」，官方工具结果返回该答案。
   - 模型随后真实调用 `write` 创建 `proof.txt`；工具卡显示 `+2`、`已应用`、两行新增内容；文件存在。
