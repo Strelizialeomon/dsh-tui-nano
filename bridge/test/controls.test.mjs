@@ -9,23 +9,41 @@ import assert from 'node:assert/strict'
 import { ControlsService } from '../controls/service.mjs'
 
 // The profile installs these official packages; a bare checkout does not.
-// Tests that require the official helper behavior skip instead of turning the
-// suite red, while the real-host integration suite still exercises them.
-let official = {}
-try {
-  const [agentModule, controllerModule] = await Promise.all([
-    import('@deepseek-ai/dsh-agent'),
-    import('@deepseek-ai/dsh-api-session-controller'),
-  ])
-  official = {
-    installModelSelection: agentModule.installModelSelection,
-    buildModelCatalog: controllerModule.buildModelCatalog,
+// Tests that assert official helper behavior skip when the packages are
+// absent, but an installed package with a missing/renamed export is a real
+// contract drift and fails loudly. The real-host suite starts a profile where
+// the helpers are installed, but it does not assert their behavior.
+async function optionalOfficial(specifier) {
+  try {
+    return await import(specifier)
+  } catch (error) {
+    if (error?.code === 'ERR_MODULE_NOT_FOUND') return undefined
+    throw error
   }
-} catch {
-  official = {}
 }
-const hasOfficialHooks = typeof official.installModelSelection === 'function'
-const hasOfficialCatalog = typeof official.buildModelCatalog === 'function'
+
+const agentModule = await optionalOfficial('@deepseek-ai/dsh-agent')
+const controllerModule = await optionalOfficial('@deepseek-ai/dsh-api-session-controller')
+if (agentModule !== undefined && typeof agentModule.installModelSelection !== 'function') {
+  throw new Error('@deepseek-ai/dsh-agent is installed but does not export installModelSelection')
+}
+if (controllerModule !== undefined && typeof controllerModule.buildModelCatalog !== 'function') {
+  throw new Error(
+    '@deepseek-ai/dsh-api-session-controller is installed but does not export buildModelCatalog',
+  )
+}
+if ((agentModule === undefined) !== (controllerModule === undefined)) {
+  throw new Error('official bridge dependencies are only partially installed')
+}
+const hasOfficialHooks = agentModule !== undefined
+const hasOfficialCatalog = controllerModule !== undefined
+const official =
+  hasOfficialHooks && hasOfficialCatalog
+    ? {
+        installModelSelection: agentModule.installModelSelection,
+        buildModelCatalog: controllerModule.buildModelCatalog,
+      }
+    : {}
 const OFFICIAL_SKIP = 'official bridge dependencies are not installed'
 
 const ROOT = 'session-root'
@@ -305,10 +323,7 @@ test('unavailable models keep the official model-unavailable code', async () => 
   )
 })
 
-test(
-  'the CLI fallback validates, appends model/selection, and installs the official hooks',
-  { skip: hasOfficialHooks ? false : OFFICIAL_SKIP },
-  async () => {
+test('the CLI fallback validates and appends model/selection', async () => {
   const saved = []
   const { session, agentContext, service } = serviceFor({
     llm: {
@@ -327,11 +342,6 @@ test(
       },
     },
   })
-  assert.deepEqual([...agentContext.handlers.keys()].sort(), [
-    'agent/pre-step',
-    'agent/request',
-    'system-prompt/assemble',
-  ])
   const result = await service.selectModel({
     provider: 'p',
     model: 'reasoner',
@@ -355,6 +365,19 @@ test(
     reasoningEffort: 'high',
   })
 })
+
+test(
+  'the CLI fallback installs the official selection hooks',
+  { skip: hasOfficialHooks ? false : OFFICIAL_SKIP },
+  () => {
+    const { agentContext } = serviceFor()
+    assert.deepEqual([...agentContext.handlers.keys()].sort(), [
+      'agent/pre-step',
+      'agent/request',
+      'system-prompt/assemble',
+    ])
+  },
+)
 
 test('the CLI fallback refuses a model outside the official registry', async () => {
   const { session, service } = serviceFor({
