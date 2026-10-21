@@ -77,13 +77,26 @@ export class AttachmentService {
   helloLimits() {
     const limits = this.imageLimits
     if (limits === undefined) return undefined
+    const numeric = [
+      'maxImageBytes',
+      'maxImagesPerMessage',
+      'maxMessageImageBytes',
+      'maxImagePixels',
+      'maxImageDimension',
+    ]
+    if (!numeric.every((key) => Number.isSafeInteger(limits[key]) && limits[key] > 0)) {
+      return undefined
+    }
+    if (!Array.isArray(limits.mediaTypes)) return undefined
+    const mediaTypes = limits.mediaTypes.filter((type) => typeof type === 'string')
+    if (mediaTypes.length === 0) return undefined
     return {
       maxImageBytes: limits.maxImageBytes,
       maxImagesPerMessage: limits.maxImagesPerMessage,
       maxMessageImageBytes: limits.maxMessageImageBytes,
       maxImagePixels: limits.maxImagePixels,
       maxImageDimension: limits.maxImageDimension,
-      mediaTypes: [...limits.mediaTypes],
+      mediaTypes,
       maxChunkBytes: LIMITS.maxAttachmentChunkBytes,
       fileAdmission: 'verbatim',
     }
@@ -110,7 +123,7 @@ export class AttachmentService {
       throw new RpcError('nano/attachments/receipt-committed', `receipt ${receiptId} was already used; use a new receipt for a new attachment`)
     }
     const name = optionalName(params?.name)
-    const declaredBytes = optionalPositiveInteger(params?.bytes, 'bytes')
+    const declaredBytes = optionalNonNegativeInteger(params?.bytes, 'bytes')
     const receipt = {
       id: receiptId,
       kind,
@@ -220,7 +233,9 @@ export class AttachmentService {
     if (receipt.state !== 'staging') {
       throw new RpcError('nano/attachments/receipt-incomplete', `receipt ${receipt.id} is not awaiting finish`)
     }
-    if (receipt.sequence === 0) {
+    // A zero-byte generic file is valid; an image still fails official
+    // admission. Every other empty upload is incomplete.
+    if (receipt.sequence === 0 && receipt.declaredBytes !== 0) {
       throw new RpcError('nano/attachments/receipt-incomplete', 'upload has no bytes')
     }
     if (receipt.declaredBytes !== undefined && receipt.received !== receipt.declaredBytes) {
@@ -393,8 +408,19 @@ export class AttachmentService {
   }
 
   /**
-   * Mark the receipts of one accepted request as committed. They stay reserved
-   * until official queue/history observation retires them.
+   * Bind receipts to the request before the Agent sees the message, so a
+   * synchronous inbox insertion can retire them.
+   * @param {string} requestId - business identity of the pending prompt.
+   * @param {object[]} receipts - receipts returned by `admitContent`.
+   */
+  bindPrompt(requestId, receipts) {
+    if (receipts.length > 0) this.pending.set(requestId, receipts)
+  }
+
+  /**
+   * Mark the receipts of one accepted request as committed. If the Agent's
+   * synchronous inbox event already retired them, do not recreate the pending
+   * entry.
    * @param {string} requestId - business identity of the accepted prompt.
    * @param {object[]} receipts - receipts returned by `admitContent`.
    */
@@ -403,16 +429,25 @@ export class AttachmentService {
       receipt.state = 'committed'
       if (receipt.kind === 'image') receipt.data = undefined
     }
-    if (receipts.length > 0) this.pending.set(requestId, receipts)
+    if (
+      receipts.length > 0 &&
+      receipts.every((receipt) => this.receipts.get(receipt.id) === receipt)
+    ) {
+      this.pending.set(requestId, receipts)
+    }
   }
 
   /**
-   * Put receipts back to ready after an admission or Agent rejection.
+   * Put receipts back to ready after an Agent rejection before acceptance.
+   * @param {string} requestId - business identity being released.
    * @param {object[]} receipts - receipts returned by `admitContent`.
    */
-  rollback(receipts) {
+  releasePrompt(requestId, receipts) {
+    this.pending.delete(requestId)
     for (const receipt of receipts) {
-      if (receipt.state === 'bound') receipt.state = 'ready'
+      if (receipt.state === 'bound' || receipt.state === 'committed') {
+        receipt.state = 'ready'
+      }
     }
   }
 
@@ -665,6 +700,14 @@ function optionalPositiveInteger(value, field) {
   if (value === undefined) return undefined
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new RpcError('jsonrpc/invalid-params', `${field} must be a positive integer`)
+  }
+  return value
+}
+
+function optionalNonNegativeInteger(value, field) {
+  if (value === undefined) return undefined
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new RpcError('jsonrpc/invalid-params', `${field} must be a non-negative integer`)
   }
   return value
 }

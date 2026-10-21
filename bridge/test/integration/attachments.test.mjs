@@ -147,6 +147,7 @@ test(
     fs.writeFileSync(path.join(work, 'src', 'main.rs'), 'fn main() {}\n')
     fs.writeFileSync(path.join(work, 'src', 'lib.rs'), 'pub fn f() {}\n')
     fs.writeFileSync(path.join(work, 'notes.txt'), 'hello file\n')
+    fs.writeFileSync(path.join(work, 'empty.log'), '')
     fs.writeFileSync(path.join(work, 'pixel.png'), PNG)
     const dsh = execFileSync('which', ['dsh'], { encoding: 'utf8' }).trim()
     const install = execFileSync(
@@ -205,6 +206,14 @@ test(
     )
     const empty = await host.call('nano.fileReferences.list', { address, query: '' })
     assert.ok(empty.result.candidates.length > 0)
+    const directory = await host.call('nano.fileReferences.list', {
+      address,
+      query: 'src/',
+    })
+    assert.ok(
+      directory.result.candidates.some((candidate) => candidate.path.includes('main.rs')),
+      JSON.stringify(directory.result),
+    )
 
     // Image: chunked staging, then official admission at submit time.
     const imageReceipt = `img-${randomUUID()}`
@@ -271,7 +280,21 @@ test(
     assert.equal(finishedFile.result.kind, 'file')
     assert.equal(finishedFile.result.file.name, 'notes.txt')
     assert.equal(finishedFile.result.file.bytes, fileBytes.length)
+    assert.match(finishedFile.result.file.attachmentId, /^sha256:/)
     assert.doesNotMatch(JSON.stringify(finishedFile), new RegExp(work.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+
+    // A zero-byte generic file is valid and keeps its exact zero length.
+    const emptyReceipt = `empty-${randomUUID()}`
+    await host.call('nano.attachment.begin', {
+      address,
+      receiptId: emptyReceipt,
+      kind: 'file',
+      name: 'empty.log',
+      bytes: 0,
+    })
+    const finishedEmpty = await host.call('nano.attachment.finish', { receiptId: emptyReceipt })
+    assert.equal(finishedEmpty.result.ready, true)
+    assert.equal(finishedEmpty.result.file.bytes, 0)
 
     const requestId = `prompt-${randomUUID()}`
     const submitted = await host.call('nano.conversation.submit', {
@@ -434,5 +457,6 @@ test(
     assert.equal(replayedFrame.includes(work), false)
     const replayedShutdown = await resumed.call('nano.shutdown', {})
     assert.equal(replayedShutdown.result.clean, true)
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }))
   },
 )

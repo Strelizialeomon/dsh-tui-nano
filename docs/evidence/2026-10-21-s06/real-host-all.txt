@@ -1,6 +1,6 @@
-✔ attachment staging, ordered admission, discovery, and resume (2487.1855ms)
-✔ malformed frame is reported, subscription replays, shutdown is clean (1576.294041ms)
-✔ conversation surface submits, dedupes, and keeps official identity (1861.250625ms)
+✔ attachment staging, ordered admission, discovery, and resume (2313.23ms)
+✔ malformed frame is reported, subscription replays, shutdown is clean (1185.272084ms)
+✔ conversation surface submits, dedupes, and keeps official identity (1865.576083ms)
 ℹ tests 3
 ℹ suites 0
 ℹ pass 3
@@ -8,4 +8,4 @@
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 3470.584583
+ℹ duration_ms 3084.642208

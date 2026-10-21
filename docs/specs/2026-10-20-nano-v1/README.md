@@ -125,6 +125,8 @@ S01 必须用真实官方服务验证：挂载认领在激活主会话期间确�
 
 构建根由 S01 独占；功能注册 API 由 S02 独占并允许显式静态贡献。子件不各改一遍全局路由或依赖版本；需要新增根引用时由相应 owner 在其工作区接收唯一变更。没有通用动态插件发现。
 
+> 跨 owner 集成说明：S06 为实现附件提交与输入 UI，按 S06 规格 §9 在 S02 的 `crates/nano-app/`、`bridge/conversation/`、`crates/nano-conversation/` 中做接口扩展，并在 S01 的 `protocol/`、`crates/nano-runtime/`、bundle patch 中加 additive 契约/API；这些文件的所有者仍是原 sub-spec，S06 不借此拥有其业务。
+
 ## 7. 有方向的依赖台账
 
 | ID 与提供方 → 消费方 | 类型 / 产物 | 就绪条件、证据、owner 与阻塞位置 |

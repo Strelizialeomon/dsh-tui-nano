@@ -31,6 +31,7 @@ pub struct CompletionUpdate {
 pub struct CompletionState {
     revision: u64,
     token: Option<AtToken>,
+    token_start: usize,
     candidates: Vec<FileReferenceCandidate>,
     selected: usize,
     visible: bool,
@@ -74,11 +75,16 @@ impl CompletionState {
     /// when the query is new, and the stale in-flight id when it must be
     /// cancelled.
     pub fn update(&mut self, text: &str, cursor: usize) -> CompletionUpdate {
-        let (_, line, column) = current_line(text, cursor);
+        let (line_start, line, column) = current_line(text, cursor);
         let token = active_at_token(line, column);
         let query = token.as_ref().map(|token| token.query.clone());
-        let changed = token != self.token;
+        let next_start = token
+            .as_ref()
+            .map_or(0, |token| line_start.saturating_add(token.start));
+        let changed = token != self.token
+            || (token.is_some() && next_start != self.token_start);
         self.token = token;
+        self.token_start = next_start;
         if changed {
             self.revision += 1;
             self.candidates.clear();
@@ -161,15 +167,15 @@ impl CompletionState {
         let candidate = self.candidates.get(self.selected)?.clone();
         let mention = format_file_mention(&candidate, token.quoted)?;
         let cursor = cursor.min(text.len());
-        if token.start > cursor {
+        if self.token_start > cursor {
             return None;
         }
         let directory = candidate.kind == crate::grammar::CandidateKind::Directory;
         let mut next = String::with_capacity(text.len() + mention.len());
-        next.push_str(&text[..token.start]);
+        next.push_str(&text[..self.token_start]);
         next.push_str(&mention);
         next.push_str(&text[cursor..]);
-        let cursor = token.start + mention.len();
+        let cursor = self.token_start + mention.len();
         self.visible = false;
         self.candidates.clear();
         self.last_query = None;
@@ -235,6 +241,19 @@ mod tests {
         assert_eq!(moved.cancel, Some(7));
         assert!(state.token().is_none());
         assert!(!state.visible());
+    }
+
+    #[test]
+    fn accepting_in_a_multiline_draft_replaces_only_the_token() {
+        let mut state = CompletionState::default();
+        let text = "first line\nsee @sr";
+        let cursor = text.len();
+        let update = state.update(text, cursor);
+        let revision = update.request.unwrap().revision;
+        state.apply(revision, vec![candidate("src/lib.rs", CandidateKind::File)]);
+        let accepted = state.accept(text, cursor).unwrap();
+        assert_eq!(accepted.text, "first line\nsee @src/lib.rs");
+        assert_eq!(accepted.cursor, "first line\nsee @src/lib.rs".len());
     }
 
     #[test]

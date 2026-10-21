@@ -292,6 +292,12 @@ fn jpeg(bytes: &[u8]) -> Result<ImageProbe, ImageProbeError> {
             continue;
         }
         let marker = bytes[offset + 1];
+        if marker == 0xff {
+            // Fill bytes before a marker are legal; step one byte so the next
+            // 0xFF is reconsidered as a marker start.
+            offset += 1;
+            continue;
+        }
         if marker == 0x00 || (0xd0..=0xd9).contains(&marker) {
             offset += 2;
             continue;
@@ -435,6 +441,14 @@ mod tests {
         bytes
     }
 
+    fn jpeg_sof_with_fill(width: u16, height: u16) -> Vec<u8> {
+        let mut bytes = vec![0xff, 0xd8, 0xff, 0xff, 0xc0, 0x00, 0x11, 0x08];
+        bytes.extend_from_slice(&height.to_be_bytes());
+        bytes.extend_from_slice(&width.to_be_bytes());
+        bytes.extend_from_slice(&[3, 1, 0x11, 0, 2, 0x11, 1, 3, 0x11, 1]);
+        bytes
+    }
+
     fn limits() -> ImageLimits {
         ImageLimits {
             max_image_bytes: 20 * 1024 * 1024,
@@ -457,6 +471,7 @@ mod tests {
     fn probes_all_four_formats() {
         assert_eq!(probe(&png_bytes(640, 480)).unwrap().width, 640);
         assert_eq!(probe(&jpeg_sof(320, 200)).unwrap().height, 200);
+        assert_eq!(probe(&jpeg_sof_with_fill(320, 200)).unwrap().width, 320);
         assert_eq!(probe(&gif_bytes(16, 9)).unwrap().width, 16);
         assert_eq!(probe(&webp_vp8x(1280, 720)).unwrap().height, 720);
     }

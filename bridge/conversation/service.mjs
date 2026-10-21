@@ -33,6 +33,7 @@ export class ConversationService {
     this.address = { rootSessionId }
     this.accepted = new Map()
     this.acceptedOrder = []
+    this.inFlightRequests = new Map()
     this.disposers = []
     this.closed = false
     this.indexDurableRequests()
@@ -121,6 +122,28 @@ export class ConversationService {
       throw new RpcError('nano/conversation/steer-unavailable', 'the current turn no longer accepts steering')
     }
 
+    // A repeated requestId during admission must join the first attempt, not
+    // start a second Agent message. This covers a client retry after an
+    // unknown result while image admission is still in flight.
+    const pending = this.inFlightRequests.get(params.requestId)
+    if (pending !== undefined) return await pending
+    const operation = this.admitAndSend(params, content)
+    this.inFlightRequests.set(params.requestId, operation)
+    try {
+      return await operation
+    } finally {
+      this.inFlightRequests.delete(params.requestId)
+    }
+  }
+
+  /**
+   * Admit attachments and hand one message to the Agent. The caller owns the
+   * per-request in-flight guard; this method assumes a fresh requestId.
+   * @param {object} params - validated submit params.
+   * @param {Array<object>} content - validated wire content.
+   * @returns {Promise<object>} acceptance receipt.
+   */
+  async admitAndSend(params, content) {
     let admitted = content
     let receipts = []
     if (content.some((block) => block.type !== 'text')) {
@@ -139,11 +162,14 @@ export class ConversationService {
       content: Object.freeze(admitted.map((block) => Object.freeze(block))),
       source: Object.freeze({ kind: 'user', rpcId: params.requestId }),
     })
+    // Bind the receipts before the Agent can synchronously observe the inbox
+    // insertion; commit after acceptance, release on rejection.
+    this.attachments?.bindPrompt(params.requestId, receipts)
     try {
       if (params.delivery === 'steer') this.agent.steer(message)
       else this.agent.followup(message)
     } catch (error) {
-      this.attachments?.rollback(receipts)
+      this.attachments?.releasePrompt(params.requestId, receipts)
       throw new RpcError(
         'nano/conversation/rejected',
         `the Agent rejected the submission: ${error instanceof Error ? error.message : String(error)}`,

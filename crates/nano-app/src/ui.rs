@@ -332,6 +332,11 @@ fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
 
 /// Attachment card lines shown above the input text.
 fn attachment_lines(app: &App) -> Vec<(String, Color)> {
+    if app.editing_queue().is_some() {
+        // Queue edits carry only text; the draft's attachments stay in memory
+        // but are not part of this edit.
+        return Vec::new();
+    }
     let cards = app.attachments.current().ordered_cards();
     let mut lines = Vec::new();
     for card in cards.iter().take(3) {

@@ -241,8 +241,6 @@ pub struct App {
     pub picker: Option<AttachmentPicker>,
     /// Staging uploads keyed by receipt id.
     uploads: HashMap<String, UploadJob>,
-    /// Attachments displaced by a queue edit.
-    edit_attachment_backup: Option<ComposerAttachments>,
 }
 
 impl App {
@@ -292,7 +290,6 @@ impl App {
             completion_cancel: None,
             picker: None,
             uploads: HashMap::new(),
-            edit_attachment_backup: None,
         }
     }
 
@@ -720,9 +717,6 @@ impl App {
                     } else {
                         self.drafts.current_mut().take();
                     }
-                    if let Some(backup) = self.edit_attachment_backup.take() {
-                        *self.attachments.current_mut() = backup;
-                    }
                     self.scene.focus_mut().reset(FocusId::input());
                     self.notice = Some(format!("队列项 {message_id} 已更新"));
                 }
@@ -861,23 +855,29 @@ impl App {
                 if self.completion_cancel.as_deref() == Some(protocol_id.as_str()) {
                     self.completion_cancel = None;
                 }
+                let current = revision == self.completion.revision();
                 match result {
                     Ok(value) => match parse_candidates(&value) {
                         Ok(candidates) => {
                             self.completion.apply(revision, candidates);
                         }
-                        Err(message) => {
+                        Err(message) if current => {
                             self.completion.clear();
                             self.error = Some(format!("文件补全结果无效：{message}"));
                         }
+                        Err(_) => {}
                     },
                     Err(error) if matches!(error.kind, RequestErrorKind::Unknown) => {
-                        self.completion.clear();
+                        if current {
+                            self.completion.clear();
+                        }
                     }
                     Err(error) => {
-                        self.completion.clear();
-                        if !error.message.contains("cancelled") {
-                            self.error = Some(format!("文件补全失败：{}", error.message));
+                        if current {
+                            self.completion.clear();
+                            if !error.message.contains("cancelled") {
+                                self.error = Some(format!("文件补全失败：{}", error.message));
+                            }
                         }
                     }
                 }
@@ -1658,8 +1658,6 @@ impl App {
             return;
         }
         self.edit_backup = Some(self.drafts.current().clone());
-        self.edit_attachment_backup = Some(self.attachments.current().clone());
-        self.attachments.current_mut().clear();
         self.completion.clear();
         self.drafts.current_mut().set_text(item.text.clone());
         self.edit_target = Some(item.id.clone());
@@ -1673,9 +1671,6 @@ impl App {
             *self.drafts.current_mut() = backup;
         } else {
             self.drafts.current_mut().clear();
-        }
-        if let Some(backup) = self.edit_attachment_backup.take() {
-            *self.attachments.current_mut() = backup;
         }
         self.scene.focus_mut().reset(FocusId::input());
         self.notice = Some("已取消队列编辑".to_string());
@@ -2493,6 +2488,40 @@ mod tests {
     }
 
     #[test]
+    fn a_stale_file_reference_error_does_not_clear_newer_candidates() {
+        use nano_attachments::{CandidateKind, FileReferenceCandidate};
+        let mut app = app();
+        app.ready = true;
+        let first = app.completion.update("see @sr", 7);
+        let stale = first.request.unwrap().revision;
+        let second = app.completion.update("see @srx", 8);
+        let current = second.request.unwrap().revision;
+        app.completion.apply(
+            current,
+            vec![FileReferenceCandidate {
+                path: "src/lib.rs".into(),
+                kind: CandidateKind::File,
+            }],
+        );
+        app.pending.insert(
+            7,
+            Pending::FileReferences {
+                revision: stale,
+                protocol_id: "old".into(),
+            },
+        );
+        app.handle_request_done(
+            7,
+            Err(RequestError {
+                kind: RequestErrorKind::Rpc,
+                message: "cancelled".into(),
+            }),
+        );
+        assert!(app.completion.visible());
+        assert_eq!(app.completion.candidates().len(), 1);
+    }
+
+    #[test]
     fn accepting_a_file_candidate_replaces_only_the_token() {
         use nano_attachments::{CandidateKind, FileReferenceCandidate};
         let mut app = app();
@@ -2563,6 +2592,47 @@ mod tests {
         assert_eq!(cards.len(), 1);
         assert_eq!(cards[0].receipt_id, "r-img");
         assert_eq!(app.attachments.current().anchors()[0].offset, cursor);
+    }
+
+    #[test]
+    fn finishing_an_upload_during_a_queue_edit_keeps_the_card_ready() {
+        let mut app = app();
+        app.drafts.current_mut().set_text("original");
+        queue_event(&mut app, "queued text");
+        app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::ALT));
+        assert_eq!(app.editing_queue(), Some("m-1"));
+        let mut card = ready_card("r-img", AttachmentKind::Image);
+        card.state = AttachmentState::Uploading { sent: 1, total: 2 };
+        app.attachments.current_mut().insert(0, card);
+        app.uploads.insert(
+            "r-img".into(),
+            UploadJob {
+                kind: AttachmentKind::Image,
+                image_bytes: None,
+                file: None,
+                total: 2,
+                offset: 1,
+                sequence: 1,
+                finishing: true,
+            },
+        );
+        app.finish_upload(
+            "r-img",
+            &serde_json::json!({
+                "receiptId": "r-img",
+                "kind": "image",
+                "ready": true,
+                "image": {"mediaType": "image/png", "bytes": 1}
+            }),
+        );
+        assert!(app.uploads.is_empty());
+        assert_eq!(
+            app.attachments.current().card("r-img").unwrap().state,
+            AttachmentState::Ready
+        );
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.editing_queue(), None);
+        assert_eq!(app.attachments.current().cards().len(), 1);
     }
 
     #[test]

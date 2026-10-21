@@ -1,24 +1,27 @@
+   Compiling nano-attachments v0.1.0 (/Users/sunchongsheng/code/dsh-tui-nano/.claude/worktrees/issue-9/crates/nano-attachments)
    Compiling nano-app v0.1.0 (/Users/sunchongsheng/code/dsh-tui-nano/.claude/worktrees/issue-9/crates/nano-app)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s
      Running unittests src/main.rs (target/debug/deps/nano-1f771629e81e3a6d)
 
-running 30 tests
-test app::tests::accepting_a_file_candidate_replaces_only_the_token ... ok
+running 32 tests
 test app::tests::a_failed_stream_schedules_a_rebuild_without_dropping_the_connection ... ok
-test app::tests::a_failed_submission_keeps_both_the_failed_text_and_new_input ... ok
-test app::tests::a_snapshot_idle_clears_a_stuck_stop ... ok
-test app::tests::a_too_large_submission_is_rejected_before_it_reaches_the_host ... ok
-test app::tests::a_submission_without_a_host_is_restored_as_unsent ... ok
 test app::tests::a_prompt_without_a_ready_host_is_rejected_and_kept ... ok
-test app::tests::a_failed_submission_restores_attachment_cards ... ok
+test app::tests::a_stale_file_reference_error_does_not_clear_newer_candidates ... ok
+test app::tests::a_snapshot_idle_clears_a_stuck_stop ... ok
+test app::tests::a_failed_submission_keeps_both_the_failed_text_and_new_input ... ok
+test app::tests::a_too_large_submission_is_rejected_before_it_reaches_the_host ... ok
+test app::tests::accepting_a_file_candidate_replaces_only_the_token ... ok
+test app::tests::a_submission_without_a_host_is_restored_as_unsent ... ok
 test app::tests::a_local_rejection_restores_the_draft ... ok
 test app::tests::alt_e_loads_a_queued_item_and_escape_restores_the_original_draft ... ok
+test app::tests::a_failed_submission_restores_attachment_cards ... ok
 test app::tests::an_empty_inbox_drops_queue_focus ... ok
 test app::tests::base64_matches_known_vectors ... ok
-test app::tests::bracketed_paste_preserves_the_payload ... ok
 test app::tests::an_unknown_transport_result_is_not_reported_as_a_failed_send ... ok
-test app::tests::enter_on_blank_keeps_the_draft_and_reports_rejection ... ok
+test app::tests::bracketed_paste_preserves_the_payload ... ok
 test app::tests::control_u_clears_the_draft ... ok
+test app::tests::enter_on_blank_keeps_the_draft_and_reports_rejection ... ok
+test app::tests::finishing_an_upload_during_a_queue_edit_keeps_the_card_ready ... ok
 test app::tests::queue_focus_never_submits_the_hidden_input_draft ... ok
 test app::tests::queue_selection_stays_in_range ... ok
 test app::tests::repeated_stream_failures_stop_retrying ... ok
@@ -28,28 +31,31 @@ test app::tests::shell_input_is_routed_to_s08_and_not_submitted ... ok
 test app::tests::shift_enter_inserts_a_newline_instead_of_sending ... ok
 test app::tests::stale_agent_events_for_another_address_are_ignored ... ok
 test app::tests::transport_loss_marks_uploading_cards_unknown ... ok
-test app::tests::an_image_over_the_deployment_limit_is_refused_before_staging ... ok
 test ui::tests::empty_line_has_one_segment ... ok
 test ui::tests::wrapping_keeps_byte_offsets_on_char_boundaries ... ok
-test app::tests::a_local_png_is_probed_and_staged_before_the_host_is_contacted ... ok
 test ui::tests::wrapping_never_splits_wide_characters ... ok
+test app::tests::an_image_over_the_deployment_limit_is_refused_before_staging ... ok
+test app::tests::a_local_png_is_probed_and_staged_before_the_host_is_contacted ... ok
 
-test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
      Running unittests src/lib.rs (target/debug/deps/nano_attachments-bdc4052a02a35cb0)
 
-running 23 tests
-test completion::tests::a_late_response_never_overwrites_newer_input ... ok
-test completion::tests::accepting_a_directory_keeps_the_quote_open ... ok
-test completion::tests::accepting_a_file_replaces_only_the_token ... ok
+running 26 tests
+test composer::tests::not_ready_cards_block_submission ... ok
 test completion::tests::moving_the_cursor_away_cancels_completion ... ok
 test completion::tests::selection_is_clamped ... ok
-test composer::tests::not_ready_cards_block_submission ... ok
-test composer::tests::anchors_shift_after_text_edits ... ok
+test completion::tests::accepting_in_a_multiline_draft_replaces_only_the_token ... ok
+test completion::tests::a_late_response_never_overwrites_newer_input ... ok
 test composer::tests::remove_before_cursor_removes_the_nearest_card ... ok
+test completion::tests::accepting_a_directory_keeps_the_quote_open ... ok
+test composer::tests::anchors_shift_after_text_edits ... ok
+test composer::tests::reordering_at_the_boundaries_is_a_no_op ... ok
+test completion::tests::accepting_a_file_replaces_only_the_token ... ok
 test composer::tests::reordering_moves_only_the_anchor ... ok
 test composer::tests::text_and_attachments_keep_user_order ... ok
 test grammar::tests::a_quoted_mention_can_descent_into_a_directory ... ok
+test grammar::tests::absolute_paths_are_preserved ... ok
 test grammar::tests::current_line_uses_byte_offsets ... ok
 test grammar::tests::directory_candidates_keep_the_quote_open ... ok
 test grammar::tests::quoted_token_keeps_spaces_and_wins_over_plain ... ok
@@ -63,53 +69,53 @@ test image::tests::unsupported_and_corrupt_bytes_are_distinct ... ok
 test wire::tests::a_name_never_carries_a_directory_or_control_characters ... ok
 test wire::tests::finish_and_candidates_parse ... ok
 
-test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
      Running unittests src/lib.rs (target/debug/deps/nano_conversation-f7c128de439cf10b)
 
 running 51 tests
 test commands::tests::bang_routes_to_shell_without_rewriting ... ok
-test events::tests::address_match_requires_the_exact_conversation ... ok
 test commands::tests::plain_text_is_a_prompt ... ok
+test events::tests::address_match_requires_the_exact_conversation ... ok
 test history::tests::a_user_message_that_mentions_bash_tags_is_still_a_user_message ... ok
 test commands::tests::unregistered_slash_names_do_not_become_prompts ... ok
 test history::tests::history_is_bounded_and_marks_truncation ... ok
 test history::tests::synthetic_bash_is_never_a_user_prompt ... ok
 test history::tests::tool_call_and_result_pair_by_call_id_in_v4_and_v3_shapes ... ok
-test events::tests::unknown_frames_and_kinds_are_ignored_not_guessed ... ok
-test events::tests::parses_status_and_inbox_events ... ok
 test history::tests::turn_failures_are_visible_but_completion_is_not ... ok
-test history::tests::user_and_assistant_messages_keep_official_identity ... ok
+test events::tests::parses_status_and_inbox_events ... ok
 test input::tests::blank_enter_is_rejected_and_keeps_text ... ok
+test events::tests::unknown_frames_and_kinds_are_ignored_not_guessed ... ok
 test input::tests::bracketed_paste_keeps_newlines_and_carriage_returns ... ok
-test ids::tests::request_ids_are_unique_and_prefixed ... ok
+test history::tests::user_and_assistant_messages_keep_official_identity ... ok
 test input::tests::cursor_movement_handles_cjk_width ... ok
-test commands::tests::skills_owner_routes_slash_names_to_s05 ... ok
-test commands::tests::registered_commands_keep_owner_and_arguments ... ok
 test input::tests::ime_enter_never_sends ... ok
+test commands::tests::registered_commands_keep_owner_and_arguments ... ok
+test commands::tests::skills_owner_routes_slash_names_to_s05 ... ok
 test input::tests::multiline_editing_preserves_text_and_cursor ... ok
+test ids::tests::request_ids_are_unique_and_prefixed ... ok
 test input::tests::drafts_are_per_address_and_do_not_leak ... ok
 test input::tests::removing_the_visible_draft_leaves_an_empty_one ... ok
 test model::tests::a_child_address_cannot_submit_in_s02 ... ok
 test input::tests::very_long_single_line_round_trips ... ok
 test model::tests::an_event_for_another_address_does_not_change_state ... ok
 test model::tests::an_echo_in_the_official_inbox_is_not_drawn_in_the_feed ... ok
-test model::tests::an_unknown_submission_reconciles_from_the_official_inbox ... ok
 test model::tests::an_idle_turn_marks_an_unlanded_accepted_echo_unknown ... ok
+test model::tests::an_unknown_submission_reconciles_from_the_official_inbox ... ok
+test model::tests::disconnect_marks_in_flight_submissions_unknown_and_drops_previews ... ok
 test model::tests::resubscribe_marks_a_truncated_replay_window ... ok
 test model::tests::durable_assistant_message_retires_the_matching_preview ... ok
-test model::tests::disconnect_marks_in_flight_submissions_unknown_and_drops_previews ... ok
 test model::tests::ordered_content_keeps_block_order_and_rejects_unready_parts ... ok
 test model::tests::snapshot_from_another_address_is_refused ... ok
 test model::tests::resubscribe_never_asks_past_the_baseline ... ok
 test preview::tests::a_new_revision_rebuilds_the_attempt ... ok
 test preview::tests::dense_index_gap_marks_preview_incomplete ... ok
-test model::tests::submit_echo_is_retired_by_the_durable_user_message ... ok
 test preview::tests::durable_settlement_retires_previews_for_that_step ... ok
+test model::tests::submit_echo_is_retired_by_the_durable_user_message ... ok
 test preview::tests::preview_bytes_are_bounded ... ok
 test preview::tests::text_deltas_merge_and_end_retires_the_preview ... ok
-test preview::tests::tool_argument_bytes_count_against_the_total_budget ... ok
 test preview::tests::unknown_attempt_chunks_are_ignored ... ok
+test preview::tests::tool_argument_bytes_count_against_the_total_budget ... ok
 test queue::tests::attachments_mark_an_item_uneditable ... ok
 test queue::tests::parses_both_pending_lists_and_identity ... ok
 test scene::tests::focus_stack_routes_only_to_the_top ... ok
@@ -125,10 +131,10 @@ test result: ok. 51 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fin
      Running tests/contract.rs (target/debug/deps/contract-d59cde89ab36d397)
 
 running 5 tests
-test submission_limit_matches_the_contract ... ok
 test submit_fixture_has_the_required_request_shape ... ok
-test every_event_kind_is_covered_by_the_contract_shape ... ok
+test submission_limit_matches_the_contract ... ok
 test session_event_fixture_parses ... ok
+test every_event_kind_is_covered_by_the_contract_shape ... ok
 test conversation_event_fixture_parses ... ok
 
 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
@@ -140,36 +146,36 @@ test lifecycle::tests::every_contract_edge_is_allowed ... ok
 test lifecycle::tests::no_extra_edges ... ok
 test frame::tests::rejects_oversize_frame ... ok
 test lifecycle::tests::rejects_undefined_transitions ... ok
+test protocol::tests::event_rejects_unknown_kind_and_wrong_generation ... ok
+test frame::tests::reads_multiple_frames ... ok
 test frame::tests::rejects_empty_frame ... ok
+test frame::tests::rejects_invalid_utf8 ... ok
 test frame::tests::rejects_unterminated_frame ... ok
 test frame::tests::handles_utf8_across_chunks ... ok
 test protocol::tests::accepts_a_valid_hello ... ok
-test frame::tests::rejects_invalid_utf8 ... ok
-test frame::tests::reads_multiple_frames ... ok
-test protocol::tests::event_rejects_unknown_kind_and_wrong_generation ... ok
-test protocol::tests::rejects_unknown_required_capabilities_and_bad_limits ... ok
-test protocol::tests::rejects_wrong_major_and_generation ... ok
 test protocol::tests::fallback_nonce_is_enforced ... ok
 test protocol::tests::parses_responses_and_notifications ... ok
+test protocol::tests::rejects_wrong_major_and_generation ... ok
+test protocol::tests::rejects_unknown_required_capabilities_and_bad_limits ... ok
 test ledger::tests::missing_is_none_and_corrupt_is_error ... ok
 test ledger::tests::reads_owner_and_finds_session ... ok
 test protocol::tests::oversized_encoded_frame_is_refused ... ok
 
-test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.65s
 
      Running tests/contract.rs (target/debug/deps/contract-21fa318daf1a1f24)
 
 running 10 tests
 test address_round_trips ... ok
-test startup_codes_and_event_kinds_match ... ok
-test error_codes_match ... ok
-test implemented_methods_match ... ok
-test request_fixture_matches_shape ... ok
-test capability_names_and_shutdown_steps_match ... ok
 test lifecycle_matches ... ok
+test error_codes_match ... ok
+test request_fixture_matches_shape ... ok
+test fixtures_parse_with_rust_types ... ok
 test limits_match ... ok
 test protocol_version_matches ... ok
-test fixtures_parse_with_rust_types ... ok
+test implemented_methods_match ... ok
+test capability_names_and_shutdown_steps_match ... ok
+test startup_codes_and_event_kinds_match ... ok
 
 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 

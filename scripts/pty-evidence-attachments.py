@@ -218,15 +218,40 @@ def main():
     now = screen.text()
     checks.append(("image card ready", "pixel.png" in now and "已就绪" in now))
 
-    # Submit; the echo keeps text/image order. Without a model route the turn
-    # fails afterwards, which still leaves the admitted message durable.
+    # Reorder boundaries must not panic: one card, Alt+Right.
+    send("\x1b[1;3C")
+    pump(0.5)
+    checks.append(("single-card reorder survives", "已连接" in screen.text()))
+
+    # A second attachment, then Alt+Left swaps it before the image.
+    send("\x1ba")
+    pump(0.4)
+    send("notes.txt")
+    pump(0.3)
+    send("\r")
+    pump(1.5)
+    now = screen.text()
+    checks.append(("file card ready", "notes.txt" in now and now.count("已就绪") >= 2))
+    send("\x1b[1;3D")
+    pump(0.5)
+    checks.append(("reorder survives", "已连接" in screen.text()))
+
+    # Submit; the echo keeps the reordered attachments. Without a model route
+    # the turn fails afterwards, which still leaves the admitted message
+    # durable.
     send(" look")
     pump(0.3)
     send("\r")
     pump(3)
     snapshots["submitted"] = screen.text()
     now = screen.text()
-    checks.append(("ordered echo", "[图片 pixel.png]" in now))
+    checks.append(("ordered echo", "[文件 notes.txt]" in now and "[图片 pixel.png]" in now))
+    checks.append(
+        (
+            "reordered echo order",
+            now.find("[文件 notes.txt]") < now.find("[图片 pixel.png]"),
+        )
+    )
     checks.append(("turn failure surfaced", "失败" in now))
 
     send("\x03")
@@ -237,6 +262,7 @@ def main():
         child.kill()
         code = "timeout"
     checks.append(("clean exit", code == 0))
+    shutil.rmtree(root, ignore_errors=True)
     print(
         json.dumps(
             {"ok": all(ok for _, ok in checks), "checks": checks, "exit": code},

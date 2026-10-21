@@ -18,7 +18,7 @@ function attachmentError(code, message = code) {
   return error
 }
 
-function fakeStore({ imageLimits, failAdmission, files = true } = {}) {
+function fakeStore({ imageLimits, failAdmission, files = true, admissionDelayMs = 0 } = {}) {
   const store = {
     imageLimits: imageLimits ?? {
       maxImageBytes: 20 * 1024 * 1024,
@@ -32,6 +32,9 @@ function fakeStore({ imageLimits, failAdmission, files = true } = {}) {
     saved: [],
     files,
     async admitPromptContent(content) {
+      if (admissionDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, admissionDelayMs))
+      }
       store.admitted.push(content)
       if (failAdmission !== undefined) throw failAdmission
       const images = content.filter((part) => part.type === 'image')
@@ -331,6 +334,116 @@ test('a generic-file save failure is definite and leaves no reusable receipt', a
   service.chunk({ receiptId: 'r-file', sequence: 0, bytes: 'eA==' })
   await assert.rejects(service.finish({ receiptId: 'r-file' }), (error) => error.code === 1026)
   assert.equal(service.receipts.get('r-file').state, 'failed')
+})
+
+test('a zero-byte generic file is a valid attachment', async () => {
+  const { service } = serviceFor()
+  service.begin({ address: ADDRESS, receiptId: 'empty', kind: 'file', name: 'empty.log', bytes: 0 })
+  const finished = await service.finish({ receiptId: 'empty' })
+  assert.equal(finished.ready, true)
+  assert.equal(finished.file.bytes, 0)
+  const result = await service.admitContent(ADDRESS, [{ type: 'file', receiptId: 'empty' }])
+  assert.equal(result.content[0].attachment.bytes, 0)
+})
+
+test('per-message total image bytes are bounded', async () => {
+  const store = fakeStore({
+    imageLimits: {
+      maxImageBytes: 20 * 1024 * 1024,
+      maxImagesPerMessage: 20,
+      maxMessageImageBytes: 1,
+      maxImagePixels: 64_000_000,
+      maxImageDimension: 8192,
+      mediaTypes: ['image/png'],
+    },
+  })
+  const { service } = serviceFor({ store })
+  for (const receiptId of ['i-1', 'i-2']) {
+    service.begin({ address: ADDRESS, receiptId, kind: 'image', mediaType: 'image/png' })
+    service.chunk({ receiptId, sequence: 0, bytes: 'AA==' })
+    await service.finish({ receiptId })
+  }
+  await assert.rejects(
+    service.admitContent(ADDRESS, [
+      { type: 'image', receiptId: 'i-1' },
+      { type: 'image', receiptId: 'i-2' },
+    ]),
+    (error) => error.code === 1025,
+  )
+})
+
+test('bindPrompt lets an inbox observation retire before commit', async () => {
+  const { service } = serviceFor()
+  service.begin({ address: ADDRESS, receiptId: 'r-file', kind: 'file', name: 'a.txt', bytes: 1 })
+  service.chunk({ receiptId: 'r-file', sequence: 0, bytes: 'eA==' })
+  await service.finish({ receiptId: 'r-file' })
+  const result = await service.admitContent(ADDRESS, [{ type: 'file', receiptId: 'r-file' }])
+  service.bindPrompt('req-bind', result.receipts)
+  service.observeInbox({
+    nextTurn: [{ id: 'm-1', content: [], source: { kind: 'user', rpcId: 'req-bind' } }],
+    nextStep: [],
+  })
+  assert.equal(service.receipts.has('r-file'), false)
+  // A later commit must not recreate the retired pending entry.
+  service.commit('req-bind', result.receipts)
+  assert.equal(service.pending.has('req-bind'), false)
+})
+
+test('durable user messages and discarded items retire receipts', async () => {
+  const { service } = serviceFor()
+  for (const receiptId of ['r-a', 'r-b']) {
+    service.begin({ address: ADDRESS, receiptId, kind: 'file', name: `${receiptId}.txt`, bytes: 1 })
+    service.chunk({ receiptId, sequence: 0, bytes: 'eA==' })
+    await service.finish({ receiptId })
+  }
+  const first = await service.admitContent(ADDRESS, [{ type: 'file', receiptId: 'r-a' }])
+  service.commit('req-a', first.receipts)
+  service.observeUserMessage({ source: { kind: 'user', rpcId: 'req-a' } })
+  assert.equal(service.receipts.has('r-a'), false)
+
+  const second = await service.admitContent(ADDRESS, [{ type: 'file', receiptId: 'r-b' }])
+  service.commit('req-b', second.receipts)
+  service.observeDiscarded({ source: { kind: 'user', rpcId: 'req-b' } })
+  assert.equal(service.receipts.has('r-b'), false)
+})
+
+test('concurrent duplicate submits share one admission and one message', async () => {
+  const store = fakeStore({ admissionDelayMs: 20 })
+  const { service: attachments, ctx } = serviceFor({ store })
+  const agent = fakeAgent()
+  agent.status = 'running'
+  agent.calls = { followup: [] }
+  agent.inbox = { nextTurn: [], nextStep: [] }
+  agent.followup = (message) => agent.calls.followup.push(message)
+  const conversation = new ConversationService({
+    ctx,
+    hub: { publish: () => {} },
+    agent,
+    session: fakeSession(),
+    rootSessionId: ROOT,
+    attachments,
+  })
+  attachments.begin({
+    address: ADDRESS,
+    receiptId: 'r-img',
+    kind: 'image',
+    mediaType: 'image/png',
+  })
+  attachments.chunk({ receiptId: 'r-img', sequence: 0, bytes: 'AA==' })
+  await attachments.finish({ receiptId: 'r-img' })
+  const params = {
+    address: ADDRESS,
+    requestId: 'same-request',
+    delivery: 'queue',
+    content: [{ type: 'image', receiptId: 'r-img' }],
+  }
+  const [first, second] = await Promise.all([
+    conversation.submit(params),
+    conversation.submit(params),
+  ])
+  assert.equal(first.messageId, second.messageId)
+  assert.equal(agent.calls.followup.length, 1)
+  assert.equal(store.admitted.length, 1)
 })
 
 test('inbox observation retires committed receipts', async () => {

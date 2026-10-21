@@ -195,6 +195,18 @@ mod tests {
     }
 
     #[test]
+    fn absolute_paths_are_preserved() {
+        let candidate = FileReferenceCandidate {
+            path: "/tmp/src/main.rs".to_string(),
+            kind: CandidateKind::File,
+        };
+        assert_eq!(
+            format_file_mention(&candidate, false).as_deref(),
+            Some("@/tmp/src/main.rs")
+        );
+    }
+
+    #[test]
     fn unsafe_paths_are_refused() {
         for path in ["bad\u{7}", "bad\"quote", "bad\u{85}"] {
             let candidate = FileReferenceCandidate {

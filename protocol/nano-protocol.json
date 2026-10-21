@@ -308,13 +308,24 @@
       "path": "string",
       "kind": "enum:file|directory"
     },
+    "fileAttachmentRef": {
+      "attachmentId": "string",
+      "name": "string",
+      "bytes": "integer"
+    },
+    "attachmentImageSummary": {
+      "mediaType": "enum:image/png|image/jpeg|image/webp|image/gif",
+      "bytes": "integer"
+    },
     "attachmentReceipt": {
       "receiptId": "string",
       "kind": "enum:image|file",
       "ready": "boolean",
-      "file": "object?",
-      "image": "object?"
+      "file": "fileAttachmentRef?",
+      "image": "attachmentImageSummary?"
     },
+    "conversationContentBlock": "text {type,text} | image {type,receiptId} | file {type,receiptId}",
+    "conversationSubmitContent": "ordered array:conversationContentBlock",
     "startupError": {
       "code": "enum:occupied|startup-failed|cleanup-failed|unsupported",
       "holderPid": "integer?",
@@ -785,6 +796,9 @@
         ],
         "optional": []
       },
+      "paramsSemantics": {
+        "content": "conversationSubmitContent; staged image/file blocks carry receiptId, never bytes"
+      },
       "result": {
         "required": [
           "accepted",
@@ -987,7 +1001,7 @@
       "params": {
         "protocol": {
           "major": 1,
-          "minor": 0
+          "minor": 1
         },
         "runtimeId": "rt-fixture",
         "generation": 1,
@@ -1010,6 +1024,13 @@
           "agent": {
             "status": "supported"
           },
+          "attachments": {
+            "status": "supported",
+            "mode": "images+files"
+          },
+          "fileReferences": {
+            "status": "supported"
+          },
           "schedule": {
             "status": "unsupported",
             "detail": "S11 mounts the schedule backend"
@@ -1023,6 +1044,16 @@
           "maxFrameBytes": 33554432,
           "maxPendingRequests": 64,
           "maxAttachmentChunkBytes": 49152
+        },
+        "attachmentLimits": {
+          "maxImageBytes": 20971520,
+          "maxImagesPerMessage": 20,
+          "maxMessageImageBytes": 209715200,
+          "maxImagePixels": 64000000,
+          "maxImageDimension": 8192,
+          "mediaTypes": ["image/png", "image/jpeg", "image/webp", "image/gif"],
+          "maxChunkBytes": 49152,
+          "fileAdmission": "verbatim"
         }
       }
     },
@@ -1114,6 +1145,32 @@
           {
             "type": "text",
             "text": "hello"
+          }
+        ]
+      }
+    },
+    "conversationSubmitAttachments": {
+      "jsonrpc": "2.0",
+      "id": "req-5",
+      "method": "nano.conversation.submit",
+      "params": {
+        "address": {
+          "rootSessionId": "session-fixture"
+        },
+        "requestId": "request-fixture-2",
+        "delivery": "queue",
+        "content": [
+          {
+            "type": "text",
+            "text": "see "
+          },
+          {
+            "type": "image",
+            "receiptId": "receipt-image-fixture"
+          },
+          {
+            "type": "file",
+            "receiptId": "receipt-file-fixture"
           }
         ]
       }

@@ -183,6 +183,9 @@ impl ComposerAttachments {
     pub fn move_at_cursor(&mut self, cursor: usize, delta: isize) -> Option<String> {
         let index = self.anchors.iter().rposition(|anchor| anchor.offset <= cursor)?;
         let target = index as isize + delta;
+        if target < 0 || target >= self.anchors.len() as isize {
+            return None;
+        }
         let target = target as usize;
         let moved = self.anchors[index].receipt_id.clone();
         let other = self.anchors[target].receipt_id.clone();
@@ -513,6 +516,21 @@ mod tests {
         draft.insert(0, card);
         let blocker = draft.ready().unwrap_err();
         assert!(blocker.message().contains("上传"));
+    }
+
+    #[test]
+    fn reordering_at_the_boundaries_is_a_no_op() {
+        let mut single = ComposerAttachments::default();
+        single.insert(0, image("i-1", "a.png"));
+        assert_eq!(single.move_at_cursor(0, -1), None);
+        assert_eq!(single.move_at_cursor(0, 1), None);
+        assert_eq!(single.ordered_cards()[0].receipt_id, "i-1");
+
+        let mut pair = ComposerAttachments::default();
+        pair.insert(0, image("i-1", "a.png"));
+        pair.insert(4, file("f-1", "b.txt"));
+        assert_eq!(pair.move_at_cursor(0, -1), None);
+        assert_eq!(pair.move_at_cursor(4, 1), None);
     }
 
     #[test]
