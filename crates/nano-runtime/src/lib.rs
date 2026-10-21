@@ -81,7 +81,7 @@ pub const LIFECYCLE_TRANSITIONS: [(&str, &str); 15] = [
 ];
 
 /// Error code names shared with the bridge contract.
-pub const ERROR_CODE_NAMES: [(&str, i64); 28] = [
+pub const ERROR_CODE_NAMES: [(&str, i64); 31] = [
     ("jsonrpc/parse-error", -32700),
     ("jsonrpc/invalid-request", -32600),
     ("jsonrpc/method-not-found", -32601),
@@ -105,15 +105,18 @@ pub const ERROR_CODE_NAMES: [(&str, i64); 28] = [
     ("nano/conversation/steer-unavailable", 1016),
     ("nano/conversation/rejected", 1017),
     ("nano/conversation/too-large", 1018),
-    ("nano/sessions/unavailable", 1019),
-    ("nano/sessions/not-active", 1020),
-    ("nano/sessions/title-invalid", 1021),
-    ("nano/sessions/compact-unavailable", 1022),
-    ("nano/sessions/rejected", 1023),
+    ("nano/skills/not-found", 1019),
+    ("nano/skills/no-preview", 1020),
+    ("nano/skills/preview-failed", 1021),
+    ("nano/sessions/unavailable", 1022),
+    ("nano/sessions/not-active", 1023),
+    ("nano/sessions/title-invalid", 1024),
+    ("nano/sessions/compact-unavailable", 1025),
+    ("nano/sessions/rejected", 1026),
 ];
 
 /// Method names implemented by this generation.
-pub const IMPLEMENTED_METHODS: [&str; 19] = [
+pub const IMPLEMENTED_METHODS: [&str; 22] = [
     "nano.hello",
     "nano.startupError",
     "nano.shutdown",
@@ -133,15 +136,20 @@ pub const IMPLEMENTED_METHODS: [&str; 19] = [
     "nano.sessions.context",
     "nano.sessions.compact",
     "nano.sessions.compactCancel",
+    "nano.skills.list",
+    "nano.skills.preview",
+    "nano.instructions.snapshot",
 ];
 
 /// Event kinds this client accepts.
-pub const EVENT_KINDS: [&str; 5] = [
+pub const EVENT_KINDS: [&str; 7] = [
     "session.event",
     "conversation.status",
     "conversation.inbox",
     "conversation.stream",
     "sessions.context",
+    "skills.changed",
+    "instructions.changed",
 ];
 
 /// Shutdown report step names, in report order.

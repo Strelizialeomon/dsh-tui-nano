@@ -281,6 +281,7 @@ dependencies = [
  "nano-conversation",
  "nano-runtime",
  "nano-sessions",
+ "nano-skills",
  "ratatui",
  "serde_json",
  "unicode-width 0.2.0",
@@ -311,6 +312,15 @@ dependencies = [
 name = "nano-sessions"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "nano-skills"
+version = "0.1.0"
+dependencies = [
+ "nano-conversation",
  "serde",
  "serde_json",
 ]

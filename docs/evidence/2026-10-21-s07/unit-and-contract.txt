@@ -1,187 +1,225 @@
-✔ submit queues an ordinary follow-up with official request identity (1.017584ms)
-✔ the same requestId never creates a second message (0.080458ms)
-✔ a durable user message with the same rpcId is recognised after a restart (0.065208ms)
-✔ blank content is rejected with a distinguishable reason (0.156917ms)
-✔ non-text blocks are rejected instead of half-submitting attachments (0.053167ms)
-✔ steer is only offered while the turn is running (0.080375ms)
-✔ editQueued replaces text in place and rejects attachment items (0.155541ms)
-✔ editQueued and deleteQueued report a claimed item as missing (0.073209ms)
-✔ deleteQueued removes a pending item (0.0855ms)
-✔ steerQueued moves a next-turn item into steering while running (0.13925ms)
-✔ cancel keeps the inbox and only asks the Agent to stop (0.064ms)
-✔ snapshot returns the official baseline with the full inbox (0.060417ms)
-✔ child addresses and foreign roots are refused (0.055584ms)
-✔ oversized text is rejected before it reaches the official inbox (0.055292ms)
-✔ a deleted queued item no longer dedupes a later submit (0.075875ms)
-✔ a discarded inbox item clears its accepted request id (0.120916ms)
-✔ a huge CJK inbox projection is byte-bounded and reports omissions (6.594291ms)
-✔ live Agent events publish absolute conversation projections (0.276042ms)
-✔ splits frames across arbitrary chunks (1.522167ms)
-✔ handles a UTF-8 sequence split across chunks (0.169042ms)
-✔ rejects an oversized frame before a newline (0.461542ms)
-✔ rejects invalid UTF-8 and blank frames (0.790625ms)
-✔ rejects an unterminated stream (0.287792ms)
-✔ parses request, notification, response, and error frames (0.348584ms)
-✔ rejects malformed envelopes (0.801834ms)
-✔ fallback transport requires the generation nonce (0.156291ms)
-✔ hello rejects a different major, bad limits, and unknown required capabilities (0.520292ms)
-✔ hello ignores an unknown optional field but rejects a malformed one (0.185334ms)
-✔ event and streamEnded enforce identity and generation (0.260458ms)
-✔ startupError rejects unknown codes (0.124542ms)
-✔ encodeFrame adds a nonce only in fallback mode (0.162541ms)
-✔ RpcError maps contract names to numeric codes (0.111125ms)
-✔ invalid params keep the request id for the error response (0.069417ms)
-✔ claims, records one owner, and releases (31.314208ms)
-✔ refuses a live owner of the same root session (56.448166ms)
-✔ sweeps a dead owner and lets a new host claim the session (47.084167ms)
-✔ refuses a corrupt or unknown-version ledger (15.890708ms)
-✔ reclaims an invalid lock only after it is older than the stale window (55.620958ms)
-✔ reports a long-held lock as lock-busy, not as the session owner (2.211625ms)
-✔ an unreadable ledger refuses startup (4.893041ms)
-✔ only one of two concurrent claims for the same session succeeds (70.985542ms)
-✔ initializes an idempotent profile with the protocol dependency (67.384417ms)
-✔ refuses to take over a profile owned by another product (29.110708ms)
-✔ refuses a bridge package without the protocol sibling (29.021833ms)
-✔ implemented methods match the contract (0.6195ms)
-✔ reserved methods have non-S01 owners (0.065791ms)
-✔ limits and error codes match the contract (0.04925ms)
-✔ lifecycle edges are exactly the contract table (0.050125ms)
-✔ event kinds match (0.045625ms)
-✔ request fixture parses as a request (0.099125ms)
-✔ response and error fixtures parse (0.06075ms)
-✔ hello fixture validates and echoes contract limits (0.141917ms)
-✔ startupError, event, and streamEnded fixtures validate (0.315125ms)
-✔ shutdown report fixture has the four facts (0.194833ms)
-✔ conversation fixtures parse on the bridge side (0.137917ms)
-✔ sessions fixtures parse on the bridge side (0.09175ms)
-✔ encodeFrame produces one newline-terminated frame (0.142959ms)
-✔ capability names match the contract and unanswered seams are unavailable (0.163792ms)
-✔ shutdown step names match the contract (0.052666ms)
-✔ list reports live facts and leaves cold activity unknown (0.867167ms)
-✔ live activity and blankness come from the official event fold (0.230375ms)
-✔ rename is limited to the live root and passes official failures through (0.648625ms)
-✔ context keeps occupancy, billing usage, and provenance separate (0.3475ms)
-✔ context provenance times are taken from the official events (0.169083ms)
-✔ context publications are coalesced and skip unchanged values (701.648542ms)
-✔ compact uses the official command and passes its text through (0.52175ms)
-✔ a missing command adapter keeps automatic compaction only (0.286042ms)
-✔ a command whose definition is absent is reported as unavailable (0.226959ms)
-✔ a cancelled compact settles as the official cancellation text (0.256875ms)
-✔ a missing token meter is unknown, not zero billing usage (0.112ms)
-✔ control frames jump ahead of queued events (1.404292ms)
-✔ refuses an event frame above the per-event bound (0.080167ms)
-✔ refuses events beyond the per-subscription byte bound (0.088875ms)
-✔ flush rejects when the sink never drains (21.549208ms)
-✔ a write failure settles the in-flight control promise (0.173084ms)
-✔ queued control frames reject when an earlier write fails (0.107708ms)
-✔ control and event sends short-circuit after a transport failure (0.083875ms)
-ℹ tests 77
+✔ submit queues an ordinary follow-up with official request identity (2.25525ms)
+✔ the same requestId never creates a second message (0.1235ms)
+✔ a durable user message with the same rpcId is recognised after a restart (0.077917ms)
+✔ blank content is rejected with a distinguishable reason (0.184ms)
+✔ non-text blocks are rejected instead of half-submitting attachments (0.059333ms)
+✔ steer is only offered while the turn is running (0.09125ms)
+✔ editQueued replaces text in place and rejects attachment items (0.168916ms)
+✔ editQueued and deleteQueued report a claimed item as missing (0.076541ms)
+✔ deleteQueued removes a pending item (0.085042ms)
+✔ steerQueued moves a next-turn item into steering while running (0.143167ms)
+✔ cancel keeps the inbox and only asks the Agent to stop (0.065ms)
+✔ snapshot returns the official baseline with the full inbox (0.060625ms)
+✔ child addresses and foreign roots are refused (4.1075ms)
+✔ oversized text is rejected before it reaches the official inbox (0.127542ms)
+✔ a deleted queued item no longer dedupes a later submit (0.332917ms)
+✔ a discarded inbox item clears its accepted request id (0.580792ms)
+✔ a huge CJK inbox projection is byte-bounded and reports omissions (6.903917ms)
+✔ live Agent events publish absolute conversation projections (0.287667ms)
+✔ splits frames across arbitrary chunks (1.954125ms)
+✔ handles a UTF-8 sequence split across chunks (0.238916ms)
+✔ rejects an oversized frame before a newline (0.523916ms)
+✔ rejects invalid UTF-8 and blank frames (0.186292ms)
+✔ rejects an unterminated stream (1.414333ms)
+✔ parses request, notification, response, and error frames (0.302666ms)
+✔ rejects malformed envelopes (0.221ms)
+✔ fallback transport requires the generation nonce (0.204917ms)
+✔ hello rejects a different major, bad limits, and unknown required capabilities (0.520375ms)
+✔ hello ignores an unknown optional field but rejects a malformed one (0.3585ms)
+✔ event and streamEnded enforce identity and generation (0.358208ms)
+✔ startupError rejects unknown codes (0.124042ms)
+✔ encodeFrame adds a nonce only in fallback mode (0.177125ms)
+✔ RpcError maps contract names to numeric codes (0.186ms)
+✔ invalid params keep the request id for the error response (0.09ms)
+✔ claims, records one owner, and releases (37.533334ms)
+✔ refuses a live owner of the same root session (52.513417ms)
+✔ sweeps a dead owner and lets a new host claim the session (40.156167ms)
+✔ refuses a corrupt or unknown-version ledger (12.855917ms)
+✔ reclaims an invalid lock only after it is older than the stale window (53.158375ms)
+✔ reports a long-held lock as lock-busy, not as the session owner (3.92075ms)
+✔ an unreadable ledger refuses startup (5.080084ms)
+✔ only one of two concurrent claims for the same session succeeds (72.13ms)
+✔ initializes an idempotent profile with the protocol dependency (72.309ms)
+✔ refuses to take over a profile owned by another product (27.587ms)
+✔ refuses a bridge package without the protocol sibling (28.161333ms)
+✔ implemented methods match the contract (0.985292ms)
+✔ reserved methods have non-S01 owners (0.073125ms)
+✔ limits and error codes match the contract (0.062833ms)
+✔ lifecycle edges are exactly the contract table (0.055083ms)
+✔ event kinds match (0.045667ms)
+✔ request fixture parses as a request (0.099292ms)
+✔ response and error fixtures parse (0.06925ms)
+✔ hello fixture validates and echoes contract limits (0.13325ms)
+✔ startupError, event, and streamEnded fixtures validate (0.110167ms)
+✔ shutdown report fixture has the four facts (0.084875ms)
+✔ conversation fixtures parse on the bridge side (0.059042ms)
+✔ sessions fixtures parse on the bridge side (0.049875ms)
+✔ skill and instruction fixtures parse on the bridge side (0.101333ms)
+✔ encodeFrame produces one newline-terminated frame (0.070375ms)
+✔ capability names match the contract and unanswered seams are unavailable (0.090292ms)
+✔ shutdown step names match the contract (0.031583ms)
+✔ list reports live facts and leaves cold activity unknown (0.839125ms)
+✔ live activity and blankness come from the official event fold (0.130625ms)
+✔ rename is limited to the live root and passes official failures through (0.240833ms)
+✔ context keeps occupancy, billing usage, and provenance separate (0.392083ms)
+✔ context provenance times are taken from the official events (0.141083ms)
+✔ context publications are coalesced and skip unchanged values (701.808958ms)
+✔ compact uses the official command and passes its text through (0.318625ms)
+✔ a missing command adapter keeps automatic compaction only (0.151625ms)
+✔ a command whose definition is absent is reported as unavailable (0.102875ms)
+✔ a cancelled compact settles as the official cancellation text (0.136333ms)
+✔ a missing token meter is unknown, not zero billing usage (0.057709ms)
+✔ list keeps only user-invocable skills and records model-only restrictions (0.929208ms)
+✔ lookup uses the official working directory and the Agent scope (4.014125ms)
+✔ a command with the same name is reported for command-first adjudication (0.24375ms)
+✔ list reports an incomplete official observation instead of inventing a catalog (0.282375ms)
+✔ list fails with nano/unsupported when the registry is absent (0.48575ms)
+✔ preview reads the official path without touching the session (8.699167ms)
+✔ preview truncates at a UTF-8 boundary and says so (9.865292ms)
+✔ preview distinguishes unknown, pathless, and unreadable skills (3.946375ms)
+✔ instructions are folded from durable agent-instructions messages in load order (0.639917ms)
+✔ a later baseline replaces the source set instead of merging it (0.193167ms)
+✔ delta changes add, replace, and remove sources; budget notices are visible (0.132042ms)
+✔ live instruction messages publish the full projection and ignore other sessions (0.109375ms)
+✔ provider invalidation and command changes publish only a refresh signal (0.053209ms)
+✔ a budget-looking line inside project rules is not the official notice (0.0685ms)
+✔ a new baseline resets the projection truncation flag (0.50025ms)
+✔ close releases listeners and stops publishing (0.141375ms)
+✔ foreign and child addresses are rejected (0.112583ms)
+✔ utf8Boundary never cuts a multi-byte character (0.03875ms)
+✔ control frames jump ahead of queued events (1.940625ms)
+✔ refuses an event frame above the per-event bound (0.179292ms)
+✔ refuses events beyond the per-subscription byte bound (0.196625ms)
+✔ flush rejects when the sink never drains (21.840208ms)
+✔ a write failure settles the in-flight control promise (0.167084ms)
+✔ queued control frames reject when an earlier write fails (0.169541ms)
+✔ control and event sends short-circuit after a transport failure (0.129917ms)
+ℹ tests 96
 ℹ suites 0
-ℹ pass 77
+ℹ pass 96
 ℹ fail 0
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 777.726417
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
-     Running unittests src/main.rs (target/debug/deps/nano-916b57689287acaa)
+ℹ duration_ms 762.338417
+   Compiling nano-skills v0.1.0 (/Users/sunchongsheng/code/dsh-tui-nano/.claude/worktrees/issue-10/crates/nano-skills)
+   Compiling nano-conversation v0.1.0 (/Users/sunchongsheng/code/dsh-tui-nano/.claude/worktrees/issue-10/crates/nano-conversation)
+   Compiling nano-runtime v0.1.0 (/Users/sunchongsheng/code/dsh-tui-nano/.claude/worktrees/issue-10/crates/nano-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running unittests src/main.rs (target/debug/deps/nano-f9f54f174562880b)
 
-running 41 tests
-test app::tests::a_second_compact_shows_the_official_busy_sentence ... ok
-test app::tests::a_failed_stream_schedules_a_rebuild_without_dropping_the_connection ... ok
+running 56 tests
 test app::tests::a_context_event_keeps_occupancy_and_billing_separate ... ok
-test app::tests::a_prepared_submission_clears_the_input_and_keeps_an_echo ... ok
-test app::tests::a_compact_cancellation_is_not_shown_as_nothing_happened ... ok
-test app::tests::a_session_list_result_replaces_the_rows_and_clamps_the_selection ... ok
-test app::tests::a_failed_rename_restores_the_editor_and_reports_the_official_error ... ok
-test app::tests::a_local_rejection_restores_the_draft ... ok
-test app::tests::a_prompt_without_a_ready_host_is_rejected_and_kept ... ok
-test app::tests::a_snapshot_idle_clears_a_stuck_stop ... ok
 test app::tests::a_failed_submission_keeps_both_the_failed_text_and_new_input ... ok
+test app::tests::a_failed_rename_restores_the_editor_and_reports_the_official_error ... ok
+test app::tests::a_foreign_preview_response_is_rejected ... ok
+test app::tests::a_compact_cancellation_is_not_shown_as_nothing_happened ... ok
+test app::tests::a_catalog_refresh_drops_a_removed_preview ... ok
+test app::tests::a_failed_stream_schedules_a_rebuild_without_dropping_the_connection ... ok
+test app::tests::a_failed_preview_keeps_the_error_visible ... ok
+test app::tests::a_local_rejection_restores_the_draft ... ok
 test app::tests::a_compact_success_shows_the_official_text_and_rereads_state ... ok
+test app::tests::a_same_name_command_blocks_the_skill_submission ... ok
+test app::tests::a_prompt_without_a_ready_host_is_rejected_and_kept ... ok
+test app::tests::a_prepared_submission_clears_the_input_and_keeps_an_echo ... ok
+test app::tests::a_pathless_skill_is_still_submitted_literally ... ok
+test app::tests::a_second_compact_shows_the_official_busy_sentence ... ok
+test app::tests::a_session_list_result_replaces_the_rows_and_clamps_the_selection ... ok
+test app::tests::a_stream_event_does_not_close_the_skills_panel ... ok
 test app::tests::a_timed_out_compaction_can_still_be_cancelled ... ok
-test app::tests::alt_e_loads_a_queued_item_and_escape_restores_the_original_draft ... ok
+test app::tests::a_snapshot_idle_clears_a_stuck_stop ... ok
 test app::tests::a_too_large_submission_is_rejected_before_it_reaches_the_host ... ok
+test app::tests::alt_e_loads_a_queued_item_and_escape_restores_the_original_draft ... ok
+test app::tests::alt_r_opens_the_instruction_sources_panel ... ok
+test app::tests::alt_k_opens_the_catalog_and_enter_inserts_a_literal_token ... ok
+test app::tests::a_turn_end_without_injection_reports_not_injected ... ok
 test app::tests::an_empty_inbox_drops_queue_focus ... ok
 test app::tests::an_occupied_new_host_enters_the_no_host_state_with_the_holder_pid ... ok
 test app::tests::an_unknown_rename_result_is_not_reported_as_failure ... ok
+test app::tests::an_official_injection_clears_the_pending_skill_fact ... ok
 test app::tests::base64_matches_known_vectors ... ok
+test app::tests::an_unknown_slash_name_is_submitted_literally_and_tracked ... ok
 test app::tests::bracketed_paste_preserves_the_payload ... ok
 test app::tests::closing_the_panel_clears_stale_rows ... ok
 test app::tests::context_events_only_apply_to_the_current_session ... ok
-test app::tests::an_unknown_transport_result_is_not_reported_as_a_failed_send ... ok
 test app::tests::control_u_clears_the_draft ... ok
 test app::tests::enter_on_blank_keeps_the_draft_and_reports_rejection ... ok
 test app::tests::esc_while_a_compact_wait_is_in_flight_cancels_the_wait ... ok
+test app::tests::page_keys_scroll_the_rules_panel_instead_of_the_feed ... ok
 test app::tests::queue_focus_never_submits_the_hidden_input_draft ... ok
 test app::tests::rename_input_maps_keys_without_leaking_alt_shortcuts ... ok
 test app::tests::queue_selection_stays_in_range ... ok
-test app::tests::repeated_stream_failures_stop_retrying ... ok
 test app::tests::repeated_alt_e_does_not_overwrite_the_edit_backup ... ok
+test app::tests::repeated_stream_failures_stop_retrying ... ok
+test app::tests::an_unknown_transport_result_is_not_reported_as_a_failed_send ... ok
 test app::tests::retry_of_a_materialized_create_target_resumes_the_same_id ... ok
 test app::tests::sending_is_blocked_until_the_official_idle_fact_arrives ... ok
 test app::tests::shell_input_is_routed_to_s08_and_not_submitted ... ok
 test app::tests::shift_enter_inserts_a_newline_instead_of_sending ... ok
 test app::tests::stale_agent_events_for_another_address_are_ignored ... ok
-test app::tests::the_session_panel_requires_a_ready_host ... ok
+test app::tests::subscription_kinds_cover_every_contracted_event_kind ... ok
+test app::tests::tab_does_not_close_the_skills_panel ... ok
 test app::tests::switching_clears_every_old_address_display_fact_but_keeps_drafts ... ok
+test app::tests::the_session_panel_requires_a_ready_host ... ok
 test ui::tests::empty_line_has_one_segment ... ok
+test ui::tests::the_window_keeps_the_selected_block_visible ... ok
 test ui::tests::wrapping_keeps_byte_offsets_on_char_boundaries ... ok
 test ui::tests::wrapping_never_splits_wide_characters ... ok
 
-test result: ok. 41 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 56 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
      Running unittests src/lib.rs (target/debug/deps/nano_conversation-f7c128de439cf10b)
 
-running 56 tests
+running 57 tests
 test events::tests::address_match_requires_the_exact_conversation ... ok
-test commands::tests::plain_text_is_a_prompt ... ok
 test commands::tests::bang_routes_to_shell_without_rewriting ... ok
-test history::tests::a_compaction_replacement_keeps_append_origin_rows_and_hides_the_checkpoint ... ok
+test commands::tests::plain_text_is_a_prompt ... ok
 test commands::tests::unregistered_slash_names_do_not_become_prompts ... ok
 test events::tests::parses_status_and_inbox_events ... ok
 test events::tests::unknown_frames_and_kinds_are_ignored_not_guessed ... ok
 test events::tests::surface_replacements_are_recognized_from_the_envelope ... ok
-test commands::tests::registered_commands_keep_owner_and_arguments ... ok
-test history::tests::a_replacement_assistant_message_retires_the_preview_without_adding_a_row ... ok
+test history::tests::a_compaction_replacement_keeps_append_origin_rows_and_hides_the_checkpoint ... ok
 test commands::tests::skills_owner_routes_slash_names_to_s05 ... ok
-test history::tests::a_compaction_transaction_adds_a_boundary_notice_with_official_counts ... ok
+test commands::tests::a_double_slash_is_not_a_command_name ... ok
+test commands::tests::registered_commands_keep_owner_and_arguments ... ok
 test history::tests::a_user_message_that_mentions_bash_tags_is_still_a_user_message ... ok
+test history::tests::a_compaction_transaction_adds_a_boundary_notice_with_official_counts ... ok
 test history::tests::an_unknown_surface_operation_is_ignored ... ok
-test history::tests::synthetic_bash_is_never_a_user_prompt ... ok
-test history::tests::turn_failures_are_visible_but_completion_is_not ... ok
-test history::tests::tool_call_and_result_pair_by_call_id_in_v4_and_v3_shapes ... ok
+test history::tests::a_replacement_assistant_message_retires_the_preview_without_adding_a_row ... ok
 test history::tests::history_is_bounded_and_marks_truncation ... ok
+test history::tests::synthetic_bash_is_never_a_user_prompt ... ok
+test history::tests::tool_call_and_result_pair_by_call_id_in_v4_and_v3_shapes ... ok
+test history::tests::turn_failures_are_visible_but_completion_is_not ... ok
 test history::tests::user_and_assistant_messages_keep_official_identity ... ok
 test input::tests::blank_enter_is_rejected_and_keeps_text ... ok
-test ids::tests::request_ids_are_unique_and_prefixed ... ok
 test input::tests::bracketed_paste_keeps_newlines_and_carriage_returns ... ok
-test input::tests::ime_enter_never_sends ... ok
-test model::tests::a_child_address_cannot_submit_in_s02 ... ok
-test input::tests::multiline_editing_preserves_text_and_cursor ... ok
+test ids::tests::request_ids_are_unique_and_prefixed ... ok
 test input::tests::cursor_movement_handles_cjk_width ... ok
+test input::tests::ime_enter_never_sends ... ok
+test input::tests::multiline_editing_preserves_text_and_cursor ... ok
 test input::tests::drafts_are_per_address_and_do_not_leak ... ok
 test input::tests::removing_the_visible_draft_leaves_an_empty_one ... ok
-test input::tests::very_long_single_line_round_trips ... ok
+test model::tests::a_child_address_cannot_submit_in_s02 ... ok
 test model::tests::an_event_for_another_address_does_not_change_state ... ok
+test input::tests::very_long_single_line_round_trips ... ok
 test model::tests::an_echo_in_the_official_inbox_is_not_drawn_in_the_feed ... ok
-test model::tests::durable_assistant_message_retires_the_matching_preview ... ok
 test model::tests::an_idle_turn_marks_an_unlanded_accepted_echo_unknown ... ok
+test model::tests::an_unknown_submission_reconciles_from_the_official_inbox ... ok
 test model::tests::disconnect_marks_in_flight_submissions_unknown_and_drops_previews ... ok
 test model::tests::resubscribe_marks_a_truncated_replay_window ... ok
-test model::tests::an_unknown_submission_reconciles_from_the_official_inbox ... ok
+test model::tests::durable_assistant_message_retires_the_matching_preview ... ok
 test model::tests::ordered_content_keeps_block_order_and_rejects_unready_parts ... ok
 test model::tests::snapshot_from_another_address_is_refused ... ok
-test preview::tests::dense_index_gap_marks_preview_incomplete ... ok
-test preview::tests::a_new_revision_rebuilds_the_attempt ... ok
 test model::tests::resubscribe_never_asks_past_the_baseline ... ok
-test preview::tests::durable_settlement_retires_previews_for_that_step ... ok
-test preview::tests::preview_bytes_are_bounded ... ok
-test preview::tests::unknown_attempt_chunks_are_ignored ... ok
-test preview::tests::text_deltas_merge_and_end_retires_the_preview ... ok
-test queue::tests::attachments_mark_an_item_uneditable ... ok
-test preview::tests::tool_argument_bytes_count_against_the_total_budget ... ok
+test preview::tests::a_new_revision_rebuilds_the_attempt ... ok
 test model::tests::submit_echo_is_retired_by_the_durable_user_message ... ok
+test preview::tests::durable_settlement_retires_previews_for_that_step ... ok
+test preview::tests::dense_index_gap_marks_preview_incomplete ... ok
+test preview::tests::preview_bytes_are_bounded ... ok
+test preview::tests::text_deltas_merge_and_end_retires_the_preview ... ok
+test preview::tests::tool_argument_bytes_count_against_the_total_budget ... ok
+test preview::tests::unknown_attempt_chunks_are_ignored ... ok
+test queue::tests::attachments_mark_an_item_uneditable ... ok
 test queue::tests::parses_both_pending_lists_and_identity ... ok
 test scene::tests::focus_stack_routes_only_to_the_top ... ok
 test scene::tests::registry_is_static_and_scene_scoped ... ok
@@ -191,56 +229,56 @@ test submissions::tests::an_accepted_echo_is_retired_by_the_durable_message ... 
 test submissions::tests::an_accepted_message_that_never_lands_becomes_unknown_at_idle ... ok
 test submissions::tests::reconciliation_uses_the_official_history_not_a_resend ... ok
 
-test result: ok. 56 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 57 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
      Running tests/contract.rs (target/debug/deps/contract-d59cde89ab36d397)
 
 running 5 tests
-test conversation_event_fixture_parses ... ok
-test submit_fixture_has_the_required_request_shape ... ok
+test every_event_kind_is_covered_by_the_contract_shape ... ok
 test session_event_fixture_parses ... ok
 test submission_limit_matches_the_contract ... ok
-test every_event_kind_is_covered_by_the_contract_shape ... ok
+test submit_fixture_has_the_required_request_shape ... ok
+test conversation_event_fixture_parses ... ok
 
 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
      Running unittests src/lib.rs (target/debug/deps/nano_runtime-7d0849fc23948764)
 
 running 18 tests
+test frame::tests::handles_utf8_across_chunks ... ok
+test frame::tests::reads_multiple_frames ... ok
 test frame::tests::rejects_empty_frame ... ok
 test frame::tests::rejects_invalid_utf8 ... ok
-test frame::tests::handles_utf8_across_chunks ... ok
-test frame::tests::rejects_oversize_frame ... ok
-test frame::tests::reads_multiple_frames ... ok
 test frame::tests::rejects_unterminated_frame ... ok
+test frame::tests::rejects_oversize_frame ... ok
 test lifecycle::tests::every_contract_edge_is_allowed ... ok
-test lifecycle::tests::no_extra_edges ... ok
 test lifecycle::tests::rejects_undefined_transitions ... ok
+test lifecycle::tests::no_extra_edges ... ok
 test protocol::tests::accepts_a_valid_hello ... ok
 test protocol::tests::event_rejects_unknown_kind_and_wrong_generation ... ok
 test protocol::tests::fallback_nonce_is_enforced ... ok
-test ledger::tests::reads_owner_and_finds_session ... ok
-test protocol::tests::rejects_unknown_required_capabilities_and_bad_limits ... ok
 test protocol::tests::parses_responses_and_notifications ... ok
+test protocol::tests::rejects_unknown_required_capabilities_and_bad_limits ... ok
 test protocol::tests::rejects_wrong_major_and_generation ... ok
+test ledger::tests::reads_owner_and_finds_session ... ok
 test ledger::tests::missing_is_none_and_corrupt_is_error ... ok
 test protocol::tests::oversized_encoded_frame_is_refused ... ok
 
-test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.68s
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.67s
 
      Running tests/contract.rs (target/debug/deps/contract-21fa318daf1a1f24)
 
 running 10 tests
 test address_round_trips ... ok
+test protocol_version_matches ... ok
+test request_fixture_matches_shape ... ok
 test startup_codes_and_event_kinds_match ... ok
+test lifecycle_matches ... ok
+test capability_names_and_shutdown_steps_match ... ok
+test error_codes_match ... ok
 test implemented_methods_match ... ok
 test limits_match ... ok
-test error_codes_match ... ok
-test capability_names_and_shutdown_steps_match ... ok
-test request_fixture_matches_shape ... ok
 test fixtures_parse_with_rust_types ... ok
-test lifecycle_matches ... ok
-test protocol_version_matches ... ok
 
 test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
@@ -271,24 +309,24 @@ running 2 tests
 test missing_bridge_package_is_refused ... ok
 test unsupported_official_version_is_refused ... ok
 
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
 
      Running unittests src/lib.rs (target/debug/deps/nano_sessions-883de8855a82cdbc)
 
 running 21 tests
+test compact::tests::cancellation_is_a_stable_official_text ... ok
 test compact::tests::an_aborted_wait_is_settled_without_a_command_id ... ok
 test compact::tests::malformed_results_are_rejected ... ok
-test compact::tests::cancellation_is_a_stable_official_text ... ok
 test compact::tests::official_failure_text_is_passed_through_without_retry_flags ... ok
-test compact::tests::official_success_text_is_passed_through ... ok
 test context::tests::a_missing_billing_projection_stays_unknown ... ok
-test context::tests::malformed_payloads_are_rejected ... ok
-test context::tests::billing_usage_and_breakdown_stay_separate ... ok
 test context::tests::a_missing_part_is_unknown_not_zero ... ok
+test compact::tests::official_success_text_is_passed_through ... ok
 test context::tests::occupancy_uses_only_the_projection_pair ... ok
+test context::tests::billing_usage_and_breakdown_stay_separate ... ok
+test context::tests::malformed_payloads_are_rejected ... ok
 test naming::tests::parses_the_durable_result ... ok
-test naming::tests::rejects_an_empty_title_instead_of_showing_it ... ok
 test context::tests::provenance_reports_clock_and_age ... ok
+test naming::tests::rejects_an_empty_title_instead_of_showing_it ... ok
 test summary::tests::a_session_recorded_under_another_directory_is_not_openable_here ... ok
 test summary::tests::malformed_rows_are_rejected_instead_of_defaulted ... ok
 test summary::tests::parses_known_and_unknown_facts_without_guessing ... ok
@@ -299,6 +337,43 @@ test switch::tests::a_switch_is_never_reported_as_switched_before_the_handshake 
 test switch::tests::occupancy_failure_carries_the_holder_pid_and_keeps_both_targets ... ok
 
 test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/nano_skills-a7b2f2a38e58f842)
+
+running 20 tests
+test catalog::tests::a_foreign_root_or_missing_field_is_rejected ... ok
+test catalog::tests::a_failed_refresh_keeps_the_last_good_catalog_and_marks_it_incomplete ... ok
+test instructions::tests::age_labels_are_relative_to_the_event_time ... ok
+test catalog::tests::user_invocable_false_entries_do_not_resolve ... ok
+test catalog::tests::an_incomplete_official_observation_is_marked_but_kept ... ok
+test feature::tests::the_contribution_owns_skill_routing_and_both_panels ... ok
+test catalog::tests::commands_win_over_same_name_skills_and_stand_alone ... ok
+test catalog::tests::a_successful_list_replaces_the_catalog ... ok
+test catalog::tests::an_incomplete_refresh_keeps_the_last_usable_catalog ... ok
+test instructions::tests::an_unavailable_snapshot_is_not_an_empty_success ... ok
+test instructions::tests::an_absolute_snapshot_replaces_the_source_list ... ok
+test instructions::tests::foreign_roots_and_unknown_actions_are_rejected ... ok
+test invocation::tests::a_durable_user_message_arms_the_tracker_and_injection_settles_it ... ok
+test invocation::tests::a_queued_submission_is_not_cleared_by_an_unrelated_turn_end ... ok
+test invocation::tests::a_turn_end_without_injection_reports_the_prose_fallback ... ok
+test invocation::tests::an_injection_for_another_name_is_ignored ... ok
+test preview::tests::a_foreign_address_is_rejected ... ok
+test preview::tests::a_preview_parses_and_reports_truncation ... ok
+test preview::tests::an_empty_file_is_distinguishable_from_a_failed_read ... ok
+test preview::tests::missing_fields_are_rejected ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/contract.rs (target/debug/deps/contract-c7f1c807d8e7f074)
+
+running 5 tests
+test preview_limit_matches_the_contract ... ok
+test skill_list_fixture_folds_into_the_catalog ... ok
+test instruction_event_fixture_folds_into_the_source_projection ... ok
+test preview_fixture_parses_and_exposes_the_limit ... ok
+test the_method_and_event_owners_are_s05 ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
    Doc-tests nano_conversation
 
@@ -313,6 +388,12 @@ running 0 tests
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
    Doc-tests nano_sessions
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests nano_skills
 
 running 0 tests
 

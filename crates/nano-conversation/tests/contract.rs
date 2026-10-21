@@ -76,11 +76,28 @@ fn every_event_kind_is_covered_by_the_contract_shape() {
                 "conversation.inbox",
                 "conversation.stream",
                 // S07-owned; the app consumes it before the conversation model.
-                "sessions.context"
+                "sessions.context",
+                "skills.changed",
+                "instructions.changed"
             ]
             .contains(kind),
             "unexpected event kind {kind}"
         );
     }
-    assert_eq!(kinds.len(), 5);
+    // S02 owns four live/durable kinds; S05 owns two refresh signals; S07 owns
+    // the context projection push.
+    assert_eq!(kinds.len(), 7);
+    for (kind, owner) in [
+        ("skills.changed", "S05"),
+        ("instructions.changed", "S05"),
+        ("sessions.context", "S07"),
+    ] {
+        let event = contract["eventKinds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|event| event["kind"] == kind)
+            .unwrap();
+        assert_eq!(event["owner"], owner);
+    }
 }

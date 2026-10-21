@@ -1,0 +1,426 @@
+{
+  "ok": true,
+  "checks": [
+    [
+      "connected",
+      true
+    ],
+    [
+      "skill panel opens",
+      true
+    ],
+    [
+      "skill listed",
+      true
+    ],
+    [
+      "user-only marker",
+      true
+    ],
+    [
+      "description visible",
+      true
+    ],
+    [
+      "preview shows official file",
+      true
+    ],
+    [
+      "preview title visible",
+      true
+    ],
+    [
+      "watcher refreshes the open panel",
+      true
+    ],
+    [
+      "rules panel opens",
+      true
+    ],
+    [
+      "rules not loaded yet",
+      true
+    ],
+    [
+      "slash invocation sent literally",
+      true
+    ],
+    [
+      "official injection reported",
+      true
+    ],
+    [
+      "global source visible",
+      true
+    ],
+    [
+      "local overlay source visible",
+      true
+    ],
+    [
+      "duplicate CLAUDE.md collapsed",
+      true
+    ],
+    [
+      "load time visible",
+      true
+    ],
+    [
+      "unknown name passes as prose",
+      true
+    ],
+    [
+      "command wins over skill routing",
+      true
+    ],
+    [
+      "blocked draft kept",
+      true
+    ],
+    [
+      "clean exit",
+      true
+    ],
+    [
+      "budget notice visible",
+      true
+    ],
+    [
+      "truncated local source visible",
+      true
+    ],
+    [
+      "second session clean exit",
+      true
+    ]
+  ],
+  "exit": 0
+}
+--- SKILLS SCREEN ---
+ nano  work · 已连接 · 空闲 · seq 3 · 队列 0
+┌ 技能 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│共 2 个用户可调用技能 · 完整 · 来源：官方技能目录                                                                     │
+│▸ /hello  Says hello for the S05 fixture                                                                              │
+│    文件：/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s05-pty-hfecdxuz/work/.agents/skills/hello/SKI│
+│LL.md · 来源：project-agents / filesystem                                                                             │
+│  /user-only  Only the user can invoke this fixture  [仅用户可调用]                                                   │
+│    文件：/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s05-pty-hfecdxuz/work/.agents/skills/user-only│
+│/SKILL.md · 来源：project-agents / filesystem                                                                         │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） ─────────────────────────────────────────┐
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+技能面板：↑↓ 选择 · Enter 填入 /name · P 预览 · Esc 关闭
+--- PREVIEW SCREEN ---
+ nano  work · 已连接 · 空闲 · seq 3 · 队列 0
+┌ 技能 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│共 2 个用户可调用技能 · 完整 · 来源：官方技能目录                                                                     │
+│▸ /hello  Says hello for the S05 fixture                                                                              │
+│    文件：/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s05-pty-hfecdxuz/work/.agents/skills/hello/SKI│
+│LL.md · 来源：project-agents / filesystem                                                                             │
+│  /user-only  Only the user can invoke this fixture  [仅用户可调用]                                                   │
+│    文件：/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s05-pty-hfecdxuz/work/.agents/skills/user-only│
+│/SKILL.md · 来源：project-agents / filesystem                                                                         │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│── 预览 /hello /private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s05-pty-hfecdxuz/work/.agents/skills/hell│
+│---                                                                                                                   │
+│name: hello                                                                                                           │
+│description: Says hello for the S05 fixture                                                                           │
+│---                                                                                                                   │
+│# hello                                                                                                               │
+│S05_SKILL_BODY_MARKER                                                                                                 │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） ─────────────────────────────────────────┐
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+技能面板：↑↓ 选择 · Enter 填入 /name · P 预览 · Esc 关闭
+--- WATCHER SCREEN ---
+ nano  work · 已连接 · 空闲 · seq 3 · 队列 0
+┌ 技能 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│共 3 个用户可调用技能 · 完整 · 来源：官方技能目录                                                                     │
+│▸ /added-later  Appears after the provider watcher fires                                                              │
+│    文件：/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s05-pty-hfecdxuz/work/.agents/skills/added-lat│
+│er/SKILL.md · 来源：project-agents / filesystem                                                                       │
+│  /hello  Says hello for the S05 fixture                                                                              │
+│    文件：/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s05-pty-hfecdxuz/work/.agents/skills/hello/SKI│
+│LL.md · 来源：project-agents / filesystem                                                                             │
+│  /user-only  Only the user can invoke this fixture  [仅用户可调用]                                                   │
+│    文件：/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s05-pty-hfecdxuz/work/.agents/skills/user-only│
+│/SKILL.md · 来源：project-agents / filesystem                                                                         │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│[18;120H                                                                                                              │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） ─────────────────────────────────────────┐
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+技能面板：↑↓ 选择 · Enter 填入 /name · P 预览 · Esc 关闭
+--- INVOCATION SCREEN ---
+ nano  work · 已连接 · 空闲 · seq 22 · 队列 0
+
+Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files unde
+r the session workspace: "/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s05-pty-hfecdxuz/work". Some pla
+tform temporary areas may also be writable.
+
+Approval policy: ask. Operations that require approval may ask through the configured answerers; without an availa
+上下文
+<system-reminder>
+A skill is a reusable set of task-specific instructions. The following skills are available in this session:
+
+<available_skills>
+- `added-later`: Appears after the provider watcher fires
+- `hello`: Says hello for the S05 fixture
+</available_skills>
+
+If the user names a skill, or the task clearly matches a skill's description, call the `skill` tool with the exact skill
+ name before taking task actions. Load all applicable skills, then follow their full instructions. This catalog contains
+ summaries only; do not infer or follow a skill's instructions until it has been loaded.
+A u
+上下文
+<skill_content name="hello">
+<skill_resources>
+Base directory for this skill: /private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s05-pty-hfecdxuz/work/.agen
+ts/skills/hello
+Resolve relative paths mentioned by this skill against the base directory before using them. Load referenced resources o
+nly as needed.
+</skill_resources>
+
+<skill_instructions>
+# hello
+S05_SKILL_BODY_MARKER
+</skill_instructions>
+</skill_content>
+助手
+ok
+┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） ─────────────────────────────────────────┐
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+技能正文已注入：/hello                                                                                             [59m
+--- RULES SCREEN ---
+ nano  work · 已连接 · 空闲 · seq 22 · 队列 0
+┌ 项目规矩 ────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│来源 3 份 · 最近一次加载 5 秒前 · 基线                                                                                │
+│基线按官方加载顺序显示；同名内容已合并。                                                                              │
+│  载入   $DSH_AGENTS_HOME/AGENTS.md                                                                                   │
+│  载入   AGENTS.md                                                                                                    │
+│  载入   AGENTS.local.md                                                                                              │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） ─────────────────────────────────────────┐
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+项目规矩：↑↓ / PageUp / PageDown 滚动 · Esc 关闭                                                                   [59m
+--- UNKNOWN SCREEN ---
+ nano  work · 已连接 · 空闲 · seq 31 · 队列 0
+
+Approval policy: ask. Operations that require approval may ask through the configured answerers; without an availa
+上下文
+<system-reminder>
+A skill is a reusable set of task-specific instructions. The following skills are available in this session:
+
+<available_skills>
+- `added-later`: Appears after the provider watcher fires
+- `hello`: Says hello for the S05 fixture
+</available_skills>
+                                         [13;1HIf the user names a skill, or the task clearly matches a skill's descripl
+</available_skills>
+ name before taking task actions. Load all applicable skills, then follow their full instructions. This catalog contains
+ summaries only; do not infer or follow a skill's instructions until it has been loaded.
+A u
+上下文
+<skill_content name="hello">
+<skill_resources>
+Base directory for this skill: /private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s05-pty-hfecdxuz/work/.agen
+ts/skills/hello
+Resolve relative paths mentioned by this skill against the base directory before using them. Load referenced resources o
+nly as needed.
+</skill_resources>
+
+<skill_instructions>
+# hello
+S05_SKILL_BODY_MARKER
+</skill_instructions>
+</skill_content>
+助手
+ok
+你
+/does-not-exist
+助手
+ok
+┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） ─────────────────────────────────────────┐
+│               [59m                                                                                                   │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+/does-not-exist 未注入：官方按普通文本处理                                                                         [?25h
+--- COMMAND SCREEN ---
+ nano  work · 已连接 · 空闲 · seq 31 · 队列 0
+
+Approval policy: ask. Operations that require approval may ask through the configured answerers; without an availa
+上下文
+<system-reminder>
+A skill is a reusable set of task-specific instructions. The following skills are available in this session:
+
+<available_skills>
+- `added-later`: Appears after the provider watcher fires
+- `hello`: Says hello for the S05 fixture
+</available_skills>
+                                         [13;1HIf the user names a skill, or the task clearly matches a skill's descripl
+</available_skills>
+ name before taking task actions. Load all applicable skills, then follow their full instructions. This catalog contains
+ summaries only; do not infer or follow a skill's instructions until it has been loaded.
+A u
+上下文
+<skill_content name="hello">
+<skill_resources>
+Base directory for this skill: /private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s05-pty-hfecdxuz/work/.agen
+ts/skills/hello
+Resolve relative paths mentioned by this skill against the base directory before using them. Load referenced resources o
+nly as needed.
+</skill_resources>
+
+<skill_instructions>
+# hello
+S05_SKILL_BODY_MARKER
+</skill_instructions>
+</skill_content>
+助手
+ok
+你
+/does-not-exist
+助手
+ok
+┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） ─────────────────────────────────────────┐
+│/compact       [59m                                                                                                   │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+/compact 是宿主命令，命令优先；命令入口（S04）尚未接入，草稿已保留                                                 [?25h
+--- BUDGET SCREEN ---
+ nano  work-budget · 已连接 · 空闲 · seq 20 · 队列 0
+┌ 项目规矩 ────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│来源 1 份 · 最近一次加载 6 秒前 · 基线                                                                                │
+│Workspace instruction budget 65536 bytes: omitted $DSH_AGENTS_HOME/AGENTS.md; truncated AGENTS.local.md from 70033 to │
+│65095 bytes                                                                                                           │
+│基线按官方加载顺序显示；同名内容已合并。                                                                              │
+│  载入   AGENTS.local.md                                                                                              │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） ─────────────────────────────────────────┐
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+项目规矩：↑↓ / PageUp / PageDown 滚动 · Esc 关闭

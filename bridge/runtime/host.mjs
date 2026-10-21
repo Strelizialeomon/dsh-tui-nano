@@ -16,6 +16,7 @@ import { claimMount, releaseMount } from './ledger.mjs'
 import { SubscriptionHub } from './events.mjs'
 import { ConversationService } from '../conversation/service.mjs'
 import { SessionsService } from '../sessions/service.mjs'
+import { SkillsService } from '../skills/service.mjs'
 import { buildCapabilities } from './capabilities.mjs'
 import { IMPLEMENTED_REQUEST_METHODS } from './methods.mjs'
 
@@ -40,6 +41,7 @@ export function startHost(ctx, config) {
     hub: undefined,
     conversation: undefined,
     sessions: undefined,
+    skills: undefined,
     agentHandle: undefined,
     session: undefined,
     claim: undefined,
@@ -221,6 +223,14 @@ async function runStartup(state, config) {
     agent: state.agentHandle.agent,
     session,
     rootSessionId: state.config.rootSessionId,
+  })
+  state.skills = new SkillsService({
+    ctx,
+    hub: state.hub,
+    agent: state.agentHandle.agent,
+    session,
+    rootSessionId: state.config.rootSessionId,
+    cwd,
   })
 
   const hello = {
@@ -533,6 +543,18 @@ async function dispatchRequest(state, frame) {
       await sendResult(state, id, state.sessions.cancelCompact())
       return undefined
     }
+    case 'nano.skills.list': {
+      await sendResult(state, id, await state.skills.list(params))
+      return undefined
+    }
+    case 'nano.skills.preview': {
+      await sendResult(state, id, await state.skills.preview(params))
+      return undefined
+    }
+    case 'nano.instructions.snapshot': {
+      await sendResult(state, id, state.skills.snapshot(params))
+      return undefined
+    }
     default: {
       const reserved = RESERVED_METHODS.get(method)
       if (reserved !== undefined) {
@@ -615,6 +637,8 @@ async function runShutdown(state, reason) {
     state.conversation = undefined
     state.sessions?.close()
     state.sessions = undefined
+    state.skills?.close()
+    state.skills = undefined
     state.hub?.closeAll(reason)
   }, faults))
 
@@ -738,6 +762,14 @@ async function failStartup(state, error) {
       state.sessions = undefined
     } catch (cleanupError) {
       cleanupFailures.push(`sessions: ${describe(cleanupError)}`)
+    }
+  }
+  if (state.skills !== undefined) {
+    try {
+      state.skills.close()
+      state.skills = undefined
+    } catch (cleanupError) {
+      cleanupFailures.push(`skills: ${describe(cleanupError)}`)
     }
   }
   if (state.hub !== undefined) {

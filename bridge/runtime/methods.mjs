@@ -19,6 +19,9 @@ export const IMPLEMENTED_REQUEST_METHODS = Object.freeze([
   'nano.sessions.context',
   'nano.sessions.compact',
   'nano.sessions.compactCancel',
+  'nano.skills.list',
+  'nano.skills.preview',
+  'nano.instructions.snapshot',
 ])
 
 /** Notifications this host can emit. */

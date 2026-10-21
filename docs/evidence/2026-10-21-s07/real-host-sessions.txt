@@ -1,4 +1,4 @@
-✔ official sessions list, rename, context, compact, occupancy, and resume (4295.937292ms)
+✔ official sessions list, rename, context, compact, occupancy, and resume (3842.490959ms)
 ℹ tests 1
 ℹ suites 0
 ℹ pass 1
@@ -6,4 +6,4 @@
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 4339.694708
+ℹ duration_ms 3877.471334
