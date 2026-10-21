@@ -13,7 +13,7 @@ S01「宿主与通信」已实施（执行单 [#4](https://github.com/Strelizial
 
 S02「对话与输入」实施中（执行单 [#5](https://github.com/Strelizialeomon/dsh-tui-nano/issues/5)）：`nano` 终端应用可编辑多行输入、按地址保存草稿、提交/排队/插话/停止、同步官方 inbox、合并流式预览与持久消息；`bridge/conversation/` 提供 submit、queue 编辑/删除/插话、cancel、snapshot 与三类实时事件。transcript 的阅读层级与样式属 S03。
 
-S04「模型与权限」实施中（执行单 [#7](https://github.com/Strelizialeomon/dsh-tui-nano/issues/7)）：`/model` 打开官方模型目录，按 provider 分组、只列模型声明的推理强度；切换走官方选择路径并写 `model/selection`。`/permission` 打开官方权限预设，切换走官方 `/permission <preset>` 命令（`setPolicy`；审批策略实际变化时由官方注入 changed-by-user 通知，no-op 不通知）。`Ctrl+P` 打开命令面板，命令列表来自官方命令服务；底部常驻权限/安全状态。
+S04「模型与权限」已实施（执行单 [#7](https://github.com/Strelizialeomon/dsh-tui-nano/issues/7)）：`/model` 打开官方模型目录，按 provider 分组、只列模型声明的推理强度；切换走官方选择路径并写 `model/selection`。`/permission` 打开官方权限预设，切换走官方 `/permission <preset>` 命令（`setPolicy`；审批策略实际变化时由官方注入 changed-by-user 通知，no-op 不通知）。`Ctrl+P` 打开命令面板，命令列表来自官方命令服务；底部常驻权限/安全状态。
 
 ## 结构
 
