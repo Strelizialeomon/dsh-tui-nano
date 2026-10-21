@@ -12,7 +12,7 @@ pub mod paths;
 pub mod protocol;
 pub mod protocol_error;
 
-pub use host::{Host, HostEvent, HostOptions, SessionMode, ShutdownOutcome};
+pub use host::{Host, HostEvent, HostOptions, PendingRequest, SessionMode, ShutdownOutcome};
 pub use lifecycle::{Lifecycle, LifecycleState};
 pub use paths::{Preflight, RuntimePaths};
 pub use protocol::{Capability, CapabilityStatus, Hello, ProtocolVersion, RpcError};
@@ -22,7 +22,7 @@ pub use protocol_error::{HostError, ProtocolError};
 pub const PROTOCOL_MAJOR: u32 = 1;
 
 /// Wire protocol minor version implemented by this crate.
-pub const PROTOCOL_MINOR: u32 = 0;
+pub const PROTOCOL_MINOR: u32 = 1;
 
 /// Hard frame limit shared with the bridge.
 pub const MAX_FRAME_BYTES: usize = 33_554_432;
@@ -81,7 +81,7 @@ pub const LIFECYCLE_TRANSITIONS: [(&str, &str); 15] = [
 ];
 
 /// Error code names shared with the bridge contract.
-pub const ERROR_CODE_NAMES: [(&str, i64); 35] = [
+pub const ERROR_CODE_NAMES: [(&str, i64); 49] = [
     ("jsonrpc/parse-error", -32700),
     ("jsonrpc/invalid-request", -32600),
     ("jsonrpc/method-not-found", -32601),
@@ -115,12 +115,26 @@ pub const ERROR_CODE_NAMES: [(&str, i64); 35] = [
     ("nano/controls/unavailable", 1026),
     ("nano/shell/exec-failed", 1027),
     ("nano/jobs/not-found", 1028),
-    ("nano/schedule/unavailable", 1029),
-    ("nano/schedule/error", 1030),
+    ("nano/sessions/unavailable", 1029),
+    ("nano/sessions/not-active", 1030),
+    ("nano/sessions/title-invalid", 1031),
+    ("nano/sessions/compact-unavailable", 1032),
+    ("nano/sessions/rejected", 1033),
+    ("nano/attachments/receipt-unknown", 1034),
+    ("nano/attachments/receipt-committed", 1035),
+    ("nano/attachments/receipt-incomplete", 1036),
+    ("nano/attachments/chunk-sequence", 1037),
+    ("nano/attachments/image-invalid", 1038),
+    ("nano/attachments/model-no-images", 1039),
+    ("nano/attachments/limit", 1040),
+    ("nano/attachments/file-failed", 1041),
+    ("nano/file-references/failed", 1042),
+    ("nano/schedule/unavailable", 1043),
+    ("nano/schedule/error", 1044),
 ];
 
 /// Method names implemented by this generation.
-pub const IMPLEMENTED_METHODS: [&str; 32] = [
+pub const IMPLEMENTED_METHODS: [&str; 42] = [
     "nano.hello",
     "nano.startupError",
     "nano.shutdown",
@@ -129,6 +143,11 @@ pub const IMPLEMENTED_METHODS: [&str; 32] = [
     "nano.cancelRequest",
     "nano.event",
     "nano.streamEnded",
+    "nano.attachment.begin",
+    "nano.attachment.chunk",
+    "nano.attachment.finish",
+    "nano.attachment.discard",
+    "nano.fileReferences.list",
     "nano.conversation.submit",
     "nano.conversation.editQueued",
     "nano.conversation.deleteQueued",
@@ -141,6 +160,11 @@ pub const IMPLEMENTED_METHODS: [&str; 32] = [
     "nano.schedule.update",
     "nano.schedule.delete",
     "nano.schedule.history",
+    "nano.sessions.list",
+    "nano.sessions.rename",
+    "nano.sessions.context",
+    "nano.sessions.compact",
+    "nano.sessions.compactCancel",
     "nano.skills.list",
     "nano.skills.preview",
     "nano.instructions.snapshot",
@@ -156,16 +180,17 @@ pub const IMPLEMENTED_METHODS: [&str; 32] = [
 ];
 
 /// Event kinds this client accepts.
-pub const EVENT_KINDS: [&str; 11] = [
+pub const EVENT_KINDS: [&str; 12] = [
     "session.event",
     "conversation.status",
     "conversation.inbox",
     "conversation.stream",
     "schedule.changed",
-    "skills.changed",
-    "instructions.changed",
     "controls.model",
     "controls.permission",
+    "sessions.context",
+    "skills.changed",
+    "instructions.changed",
     "jobs.event",
     "jobs.output",
 ];
@@ -184,4 +209,9 @@ pub const SHUTDOWN_STEP_NAMES: [&str; 6] = [
 pub const MAX_REPLAY_EVENTS: u64 = 10_000;
 
 /// Startup error codes accepted from the host.
-pub const STARTUP_ERROR_CODES: [&str; 4] = ["occupied", "startup-failed", "cleanup-failed", "unsupported"];
+pub const STARTUP_ERROR_CODES: [&str; 4] = [
+    "occupied",
+    "startup-failed",
+    "cleanup-failed",
+    "unsupported",
+];

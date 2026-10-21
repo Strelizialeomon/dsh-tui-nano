@@ -132,12 +132,7 @@ export class SubscriptionHub {
       for (const event of result.events) {
         if (event.seq >= baseline) continue
         delivered.add(event.seq)
-        this.deliver(subscription, {
-          address: subscription.address,
-          seq: event.seq,
-          type: event.type,
-          data: event.data,
-        })
+        this.deliver(subscription, sessionEventPayload(subscription.address, event))
         if (subscription.closed) break
       }
       subscription.delivered = delivered
@@ -178,12 +173,7 @@ export class SubscriptionHub {
     if (subject.id !== this.rootSessionId) return
     for (const subscription of this.subscriptions.values()) {
       if (subscription.closed) continue
-      const payload = {
-        address: subscription.address,
-        seq: event.seq,
-        type: event.type,
-        data: event.data,
-      }
+      const payload = sessionEventPayload(subscription.address, event)
       if (subscription.paused) {
         subscription.buffer.push(payload)
       } else {
@@ -252,6 +242,29 @@ export class SubscriptionHub {
     // handled by the writer's transport-error path.
     this.writer.sendControl(encodeFrame(frame, { nonce: this.nonce, requireNonce: this.nonceRequired })).catch(() => {})
   }
+}
+
+/**
+ * Build one durable `session.event` payload. Envelope facts beyond seq/type/
+ * data are forwarded only when the official event carries them: `time` is the
+ * durable event time, `surfaceOp` marks a positional surface replacement (a
+ * compaction summary shadows older history), and `sourceEventSeqs` cites
+ * earlier sources.
+ * @param {object} address - subscription address.
+ * @param {object} event - official durable event.
+ * @returns {object} contract payload.
+ */
+function sessionEventPayload(address, event) {
+  const payload = {
+    address,
+    seq: event.seq,
+    type: event.type,
+    data: event.data,
+  }
+  if (Number.isInteger(event.time)) payload.time = event.time
+  if (event.surfaceOp !== undefined) payload.surfaceOp = event.surfaceOp
+  if (event.sourceEventSeqs !== undefined) payload.sourceEventSeqs = event.sourceEventSeqs
+  return payload
 }
 
 function validateAddress(address, rootSessionId) {

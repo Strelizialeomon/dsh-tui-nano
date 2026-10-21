@@ -4,10 +4,12 @@
 //! the input, queue, and status surfaces S02 owns, so the conversation host can
 //! be exercised in a real terminal before the reading layer exists.
 
+use nano_attachments::{AttachmentState, CandidateKind};
 use nano_controls::{PanelMode, PanelRow};
 use nano_conversation::{ConversationItem, MessageKind, PreviewView, ToolPreview, ToolStatus};
 use nano_jobs::{BashRecord, BashState, JobStatus};
 use nano_schedule::RowKind;
+use nano_sessions::{format_clock, Occupancy};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -29,21 +31,38 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         (app.model.inbox().len().min(4) as u16) + 1
     };
-    let input_rows = wrapped_input_rows(app, area.width.saturating_sub(4).max(1));
-    let input_height = input_rows.min(8) as u16 + 2;
+    let completion_height = if app.completion.visible() && app.picker.is_none() {
+        (app.completion.candidates().len().min(6) as u16) + 1
+    } else {
+        0
+    };
+    let attachment_rows = if app.picker.is_some() {
+        0
+    } else {
+        attachment_lines(app).len() as u16
+    };
+    let input_rows = if app.picker.is_some() {
+        1
+    } else {
+        wrapped_input_rows(app, area.width.saturating_sub(4).max(1))
+    };
+    let input_height = (attachment_rows + input_rows.min(8) as u16) + 2;
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
             Constraint::Min(3),
             Constraint::Length(queue_height),
+            Constraint::Length(completion_height),
             Constraint::Length(input_height),
             Constraint::Length(1),
         ])
         .split(area);
 
     draw_header(frame, app, layout[0]);
-    if app.jobs_open {
+    if app.sessions_panel.open {
+        draw_sessions(frame, app, layout[1]);
+    } else if app.jobs_open {
         draw_jobs(frame, app, layout[1]);
     } else if app.skills_panel_open() {
         draw_skills_panel(frame, app, layout[1]);
@@ -55,8 +74,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if queue_height > 0 {
         draw_queue(frame, app, layout[2]);
     }
-    draw_input(frame, app, layout[3]);
-    draw_status(frame, app, layout[4], area.width);
+    if completion_height > 0 {
+        draw_completion(frame, app, layout[3]);
+    }
+    draw_input(frame, app, layout[4]);
+    draw_status(frame, app, layout[5], area.width);
     if app.panel.is_open() {
         draw_panel(frame, app, area);
     }
@@ -71,9 +93,14 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         Connection::Starting => Color::Cyan,
         Connection::Disconnected | Connection::Failed(_) => Color::Red,
     };
+    let connection_label = if app.switch.busy() {
+        "切换中"
+    } else {
+        app.connection.label()
+    };
     let mut spans = vec![
         Span::styled(" nano ", Style::default().fg(Color::Black).bg(Color::Cyan)),
-        Span::styled(app.connection.label(), Style::default().fg(status_color)),
+        Span::styled(connection_label, Style::default().fg(status_color)),
         Span::raw(" · "),
         Span::styled(
             app.model.status().label(),
@@ -87,6 +114,29 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
             app.model.inbox().total_count()
         )),
     ];
+    if let Some(meter) = &app.context {
+        let occupancy = meter.occupancy();
+        let colour = match occupancy.percent() {
+            Some(percent) if percent >= 80 => Color::Red,
+            Some(percent) if percent >= 60 => Color::Yellow,
+            Some(_) => Color::Green,
+            None => Color::DarkGray,
+        };
+        spans.push(Span::raw(" · "));
+        spans.push(Span::styled(
+            format!("ctx {}", occupancy.label()),
+            Style::default().fg(colour),
+        ));
+        spans.push(Span::styled(
+            " · 参考",
+            Style::default().fg(Color::DarkGray),
+        ));
+    } else if let Some(error) = &app.context_error {
+        spans.push(Span::styled(
+            format!(" · ctx 未知（{error}）"),
+            Style::default().fg(Color::Yellow),
+        ));
+    }
     if !app.jobs.is_empty() {
         spans.push(Span::raw(format!(
             " · 任务 {}/{}",
@@ -164,6 +214,222 @@ fn schedule_style(kind: RowKind) -> Style {
         RowKind::SelectedDim => Style::default().fg(Color::Black).bg(Color::DarkGray),
         RowKind::Notice => Style::default().fg(Color::Yellow),
     }
+}
+
+/// Session panel: the official list plus context provenance and the last
+/// compaction outcome. Every number is labelled with its source; occupancy is
+/// never shown as exact usage.
+fn draw_sessions(frame: &mut Frame, app: &App, area: Rect) {
+    let title = match &app.sessions_panel.rename {
+        Some(_) => " 会话 · 输入新标题 · Enter 应用，Esc 取消 ".to_string(),
+        None if app.compact_in_flight || app.compact_maybe_running => {
+            " 会话 · ↑↓ 选择 · Enter 切换 · n 改名 · c 压缩 · r 刷新 · Esc 取消压缩等待 "
+                .to_string()
+        }
+        None => " 会话 · ↑↓ 选择 · Enter 切换 · n 改名 · c 压缩 · r 刷新 · Esc 关闭 ".to_string(),
+    };
+    let block = Block::default().borders(Borders::ALL).title(title);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let mut rows: Vec<Line<'static>> = Vec::new();
+    if app.sessions_panel.loading {
+        rows.push(Line::from(Span::styled(
+            "正在读取官方会话列表…",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    if let Some(error) = &app.sessions_panel.error {
+        rows.push(Line::from(Span::styled(
+            error.clone(),
+            Style::default().fg(Color::Red),
+        )));
+    }
+    let prefix_rows = rows.len();
+    let host_cwd = app.hello.as_ref().map(|hello| hello.cwd.as_str());
+    push_session_row(
+        &mut rows,
+        app.sessions_panel.selected == 0,
+        "＋ 新建会话（Nano 生成新 ID）".to_string(),
+    );
+    for (index, row) in app.sessions_panel.rows.iter().enumerate() {
+        let activity = row
+            .updated_at
+            .map(short_clock)
+            .unwrap_or_else(|| "最近活动未知".to_string());
+        let state = row.state_label();
+        let id: String = row.session_id.chars().take(8).collect();
+        let mut line = format!("{} · {} · {}", row.display_title(), activity, id);
+        if !state.is_empty() {
+            line.push_str(&format!(" · {state}"));
+        }
+        if row.blank == Some(true) {
+            line.push_str(" · 空白");
+        }
+        if !row.switchable() {
+            line.push_str(" · 子代理（不可作主会话）");
+        } else if let (Some(host), Some(recorded)) = (host_cwd, row.cwd.as_deref()) {
+            if host != recorded {
+                let name = std::path::Path::new(recorded)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or(recorded);
+                line.push_str(&format!(" · 目录 {name}（不可切换）"));
+            }
+        }
+        push_session_row(&mut rows, app.sessions_panel.selected == index + 1, line);
+    }
+    if let Some(rename) = &app.sessions_panel.rename {
+        rows.push(Line::from(Span::styled(
+            format!("新标题：{}", rename.buffer.text()),
+            Style::default().fg(Color::Cyan),
+        )));
+    }
+    let mut footer: Vec<Line<'static>> = vec![Line::from("")];
+    push_context_details(&mut footer, app);
+    if let Some(compact) = &app.compact {
+        footer.push(Line::from(Span::styled(
+            format!("压缩：{}", compact.display_text()),
+            Style::default().fg(if compact.kind == nano_sessions::CompactionKind::Success {
+                Color::Green
+            } else {
+                Color::Yellow
+            }),
+        )));
+    }
+    if app.compact_in_flight {
+        footer.push(Line::from(Span::styled(
+            "压缩：等待官方结果…（Esc 取消等待，历史以后端为准）",
+            Style::default().fg(Color::Yellow),
+        )));
+    } else if app.compact_maybe_running {
+        footer.push(Line::from(Span::styled(
+            "压缩：结果未知，可能仍在运行；Esc 取消等待并重读官方状态",
+            Style::default().fg(Color::Yellow),
+        )));
+    }
+    if app.switch.state().failed() {
+        footer.push(Line::from(Span::styled(
+            format!(
+                "{}；Alt+R 重试 / Alt+B 返回上一会话",
+                app.switch.state().label()
+            ),
+            Style::default().fg(Color::Red),
+        )));
+    } else if app.switch.busy() {
+        footer.push(Line::from(Span::styled(
+            app.switch.state().label(),
+            Style::default().fg(Color::Cyan),
+        )));
+    }
+
+    // Keep the selected row visible while reserving room for the context and
+    // compaction footer. A long session list scrolls instead of hiding the
+    // cursor.
+    let viewport = inner.height as usize;
+    let footer_height = footer.len().min(viewport.saturating_sub(1));
+    let row_viewport = viewport.saturating_sub(footer_height).max(1);
+    let selected_line = prefix_rows + app.sessions_panel.selected;
+    let start = selected_line.saturating_add(1).saturating_sub(row_viewport);
+    let visible: Vec<Line<'static>> = rows
+        .into_iter()
+        .skip(start)
+        .take(row_viewport)
+        .chain(footer.into_iter().take(footer_height))
+        .collect();
+    frame.render_widget(Paragraph::new(Text::from(visible)), inner);
+}
+
+fn push_session_row(lines: &mut Vec<Line<'static>>, selected: bool, text: String) {
+    let marker = if selected { "▶ " } else { "  " };
+    let style = if selected {
+        Style::default().fg(Color::Black).bg(Color::Cyan)
+    } else {
+        Style::default()
+    };
+    lines.push(Line::from(Span::styled(
+        format!("{marker}{}", truncate(&text, 120)),
+        style,
+    )));
+}
+
+fn push_context_details(lines: &mut Vec<Line<'static>>, app: &App) {
+    match &app.context {
+        Some(meter) => {
+            let occupancy = meter.occupancy();
+            lines.push(Line::from(Span::styled(
+                format!("上下文占用（参考值）：{}", occupancy.label()),
+                Style::default().fg(match occupancy {
+                    Occupancy::Known { .. } => Color::Cyan,
+                    Occupancy::Unknown => Color::Yellow,
+                }),
+            )));
+            if occupancy == Occupancy::Unknown {
+                lines.push(Line::from(Span::styled(
+                    "  缺 projectedTokens 或 contextWindow；不补零、不用累计用量冒充",
+                    Style::default().fg(Color::Yellow),
+                )));
+            }
+            lines.push(Line::from(Span::styled(
+                format!("  {}", meter.provenance_label(now_ms())),
+                Style::default().fg(Color::DarkGray),
+            )));
+            match meter.token_usage {
+                Some(usage) => lines.push(Line::from(Span::styled(
+                    format!(
+                        "计费用量（整个日志）：输入 {} + 输出 {} + 缓存读 {} / 写 {} = {}",
+                        usage.uncached_input_tokens,
+                        usage.output_tokens,
+                        usage.cache_read_tokens,
+                        usage.cache_write_tokens,
+                        usage.total()
+                    ),
+                    Style::default().fg(Color::DarkGray),
+                ))),
+                None => lines.push(Line::from(Span::styled(
+                    "计费用量：未知（官方投影未提供）",
+                    Style::default().fg(Color::Yellow),
+                ))),
+            }
+            if let Some(breakdown) = meter.breakdown {
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        "估算构成（启发式，CJK/JSON 可能低估）：系统 {} · 工具 {} · 消息 {}",
+                        breakdown.system_tokens, breakdown.tools_tokens, breakdown.message_tokens
+                    ),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+            if let Some(pressure) = meter.pressure_tokens {
+                lines.push(Line::from(Span::styled(
+                    format!("最近一次 provider 压力：{} tokens（非当前占用）", pressure),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+        }
+        None => {
+            lines.push(Line::from(Span::styled(
+                match &app.context_error {
+                    Some(error) => format!("上下文：未知（{error}）"),
+                    None => "上下文：尚未读取".to_string(),
+                },
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+    }
+}
+
+/// Current wall clock in Unix epoch milliseconds, for provenance ages.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// HH:MM from an official durable event time.
+fn short_clock(epoch_ms: u64) -> String {
+    let text = format_clock(epoch_ms);
+    text.get(0..5).map(str::to_string).unwrap_or(text)
 }
 
 fn draw_feed(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -831,32 +1097,47 @@ fn draw_queue(frame: &mut Frame, app: &App, area: Rect) {
 fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
     let title = if app.shell_confirm.is_some() {
         " 人工命令（用户权限，不是 Agent 授权）· Enter 执行，Esc 取消 ".to_string()
+    } else if app.picker.is_some() {
+        " 附加文件 · 输入路径，Enter 确认，Esc 取消 ".to_string()
+    } else if let Some(message_id) = app.editing_queue() {
+        format!(" 编辑队列项 {message_id} · Enter 应用，Esc 取消 ")
     } else {
-        match app.editing_queue() {
-            Some(message_id) => format!(" 编辑队列项 {message_id} · Enter 应用，Esc 取消 "),
-            None => {
-                " 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行 · Ctrl+T 任务 ".to_string()
-            }
-        }
+        " 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除附件 · Ctrl+J 换行 · Ctrl+T 任务 "
+            .to_string()
     };
     let block = Block::default().borders(Borders::ALL).title(title);
     let inner = block.inner(area);
-    let width = inner.width.max(1);
-    let lines = input_lines(app, width as usize);
-    let total_rows = lines.len();
-    let (cursor_row, cursor_column) = input_cursor(app, width as usize);
+    let width = inner.width.max(1) as usize;
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut cursor_row = 0usize;
+    let cursor_column;
+    if let Some(picker) = &app.picker {
+        let prefix = "路径：";
+        lines.push(Line::from(vec![
+            Span::styled(prefix, Style::default().fg(Color::DarkGray)),
+            Span::raw(picker.path.clone()),
+        ]));
+        cursor_column = prefix.chars().map(display_width).sum::<usize>()
+            + picker.path.chars().map(display_width).sum::<usize>();
+    } else {
+        for (text, color) in attachment_lines(app) {
+            lines.push(Line::from(Span::styled(text, Style::default().fg(color))));
+        }
+        cursor_row = lines.len();
+        let (row, column) = input_cursor(app, width);
+        cursor_row += row;
+        cursor_column = column;
+        for text in input_lines(app, width) {
+            lines.push(Line::from(text));
+        }
+    }
     let viewport = inner.height as usize;
     let offset = if viewport == 0 {
         0
     } else {
         cursor_row.saturating_sub(viewport.saturating_sub(1))
     };
-    let visible: Vec<Line<'static>> = lines
-        .into_iter()
-        .skip(offset)
-        .take(viewport)
-        .map(Line::from)
-        .collect();
+    let visible: Vec<Line<'static>> = lines.into_iter().skip(offset).take(viewport).collect();
     frame.render_widget(block, area);
     frame.render_widget(Paragraph::new(Text::from(visible)), inner);
     if app.scene.focus().input_focused() && !app.panel.is_open() && viewport > 0 {
@@ -869,7 +1150,69 @@ fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
             inner.y + row.min(u16::MAX as usize) as u16,
         ));
     }
-    let _ = total_rows;
+}
+
+/// Attachment card lines shown above the input text.
+fn attachment_lines(app: &App) -> Vec<(String, Color)> {
+    if app.editing_queue().is_some() {
+        // Queue edits carry only text; the draft's attachments stay in memory
+        // but are not part of this edit.
+        return Vec::new();
+    }
+    let cards = app.attachments.current().ordered_cards();
+    let mut lines = Vec::new();
+    for card in cards.iter().take(3) {
+        let color = match &card.state {
+            AttachmentState::Ready => Color::Green,
+            AttachmentState::Uploading { .. } => Color::Yellow,
+            AttachmentState::Failed(_) | AttachmentState::Unknown(_) => Color::Red,
+        };
+        lines.push((format!("  {}", card.label()), color));
+    }
+    if cards.len() > 3 {
+        lines.push((
+            format!("  … 还有 {} 个附件", cards.len() - 3),
+            Color::DarkGray,
+        ));
+    }
+    lines
+}
+
+/// `@file` completion candidates above the input.
+fn draw_completion(frame: &mut Frame, app: &App, area: Rect) {
+    let title = format!(
+        " 文件补全（{} 项）· ↑↓ 选择 · Enter/Tab 插入 · Esc 关闭 ",
+        app.completion.candidates().len()
+    );
+    let block = Block::default().borders(Borders::TOP).title(title);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let mut lines = Vec::new();
+    for (index, candidate) in app.completion.candidates().iter().take(6).enumerate() {
+        let selected = index == app.completion.selected();
+        let marker = if selected { "▶" } else { " " };
+        let suffix = match candidate.kind {
+            CandidateKind::Directory => "/",
+            CandidateKind::File => "",
+        };
+        let style = if selected {
+            Style::default().fg(Color::Black).bg(Color::Cyan)
+        } else {
+            Style::default()
+        };
+        // A filesystem path may contain control characters; never let them
+        // reach the terminal as escape sequences.
+        let display: String = candidate
+            .path
+            .chars()
+            .map(|character| if character.is_control() { '?' } else { character })
+            .collect();
+        lines.push(Line::from(Span::styled(
+            format!("{marker} {display}{suffix}"),
+            style,
+        )));
+    }
+    frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
 
 fn draw_status(frame: &mut Frame, app: &App, area: Rect, width: u16) {
@@ -945,7 +1288,11 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
         .max(3);
     let rect = centered(area, width, height);
     frame.render_widget(Clear, rect);
-    let title = format!(" {} · 查询：{} ", app.panel.mode().title(), app.panel.query());
+    let title = format!(
+        " {} · 查询：{} ",
+        app.panel.mode().title(),
+        app.panel.query()
+    );
     let block = Block::default().borders(Borders::ALL).title(title);
     let inner = block.inner(rect);
     frame.render_widget(block, rect);

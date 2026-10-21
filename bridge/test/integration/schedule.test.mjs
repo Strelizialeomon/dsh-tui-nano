@@ -220,7 +220,7 @@ test(
       address: addr,
       request: { title: '   ', prompt: 'x', after_seconds: 60 },
     })
-    assert.equal(invalidTitle.error.code, 1030)
+    assert.equal(invalidTitle.error.code, 1044)
     assert.match(invalidTitle.error.message, /invalid_prompt/)
     assert.equal(invalidTitle.error.data.code, 'invalid_prompt')
 
@@ -228,7 +228,7 @@ test(
       address: addr,
       request: { title: '空白指令', prompt: '   ', after_seconds: 60 },
     })
-    assert.equal(invalidPrompt.error.code, 1030)
+    assert.equal(invalidPrompt.error.code, 1044)
     assert.equal(invalidPrompt.error.data.code, 'invalid_prompt')
 
     const invalidZone = await host.call('nano.schedule.create', {
@@ -239,14 +239,14 @@ test(
         daily: { time: '09:00:00', time_zone: 'Mars/Olympus' },
       },
     })
-    assert.equal(invalidZone.error.code, 1030)
+    assert.equal(invalidZone.error.code, 1044)
     assert.equal(invalidZone.error.data.code, 'invalid_time_zone')
 
     const invalidCron = await host.call('nano.schedule.create', {
       address: addr,
       request: { title: 'bad cron', prompt: 'x', cron: { expression: '61 * * * *', time_zone: 'Asia/Shanghai' } },
     })
-    assert.equal(invalidCron.error.code, 1030)
+    assert.equal(invalidCron.error.code, 1044)
     assert.equal(invalidCron.error.data.code, 'invalid_rule')
     assert.match(invalidCron.error.message, /minute/)
 

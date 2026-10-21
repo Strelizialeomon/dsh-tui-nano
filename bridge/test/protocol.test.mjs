@@ -32,7 +32,10 @@ import {
 test('implemented methods match the contract', () => {
   assert.deepEqual([...IMPLEMENTED_METHODS].sort(), [...CONTRACT_IMPLEMENTED.keys()].sort())
   for (const [name, method] of CONTRACT_IMPLEMENTED) {
-    assert.ok(['S01', 'S02', 'S04', 'S05', 'S08', 'S11'].includes(method.owner), `${name} owner`)
+    assert.ok(
+      ['S01', 'S02', 'S04', 'S05', 'S06', 'S07', 'S08', 'S09', 'S11'].includes(method.owner),
+      `${name} owner`,
+    )
     if (method.kind === 'request') {
       assert.ok(IMPLEMENTED_REQUEST_METHODS.includes(name), `${name} must be dispatched as a request`)
     } else {
@@ -64,6 +67,18 @@ test('limits and error codes match the contract', () => {
   assert.equal(ERROR_CODES.get('nano/skills/not-found'), 1019)
   assert.equal(ERROR_CODES.get('nano/skills/no-preview'), 1020)
   assert.equal(ERROR_CODES.get('nano/skills/preview-failed'), 1021)
+  assert.equal(ERROR_CODES.get('nano/controls/writer-held'), 1022)
+  assert.equal(ERROR_CODES.get('nano/controls/model-unavailable'), 1023)
+  assert.equal(ERROR_CODES.get('nano/controls/permission-rejected'), 1024)
+  assert.equal(ERROR_CODES.get('nano/controls/command-failed'), 1025)
+  assert.equal(ERROR_CODES.get('nano/controls/unavailable'), 1026)
+  assert.equal(ERROR_CODES.get('nano/shell/exec-failed'), 1027)
+  assert.equal(ERROR_CODES.get('nano/jobs/not-found'), 1028)
+  assert.equal(ERROR_CODES.get('nano/sessions/unavailable'), 1029)
+  assert.equal(ERROR_CODES.get('nano/sessions/not-active'), 1030)
+  assert.equal(ERROR_CODES.get('nano/sessions/title-invalid'), 1031)
+  assert.equal(ERROR_CODES.get('nano/sessions/compact-unavailable'), 1032)
+  assert.equal(ERROR_CODES.get('nano/sessions/rejected'), 1033)
 })
 
 test('lifecycle edges are exactly the contract table', () => {
@@ -80,10 +95,11 @@ test('event kinds match', () => {
     'conversation.inbox',
     'conversation.stream',
     'schedule.changed',
-    'skills.changed',
-    'instructions.changed',
     'controls.model',
     'controls.permission',
+    'sessions.context',
+    'skills.changed',
+    'instructions.changed',
     'jobs.event',
     'jobs.output',
   ])
@@ -119,6 +135,9 @@ test('hello fixture validates and echoes contract limits', () => {
   assert.equal(hello.rootSessionId, 'session-fixture')
   assert.equal(hello.limits.maxFrameBytes, LIMITS.maxFrameBytes)
   assert.equal(hello.capabilities['tool-ask-user'].mode, 'blocking')
+  assert.equal(hello.capabilities.fileReferences.status, 'supported')
+  assert.equal(hello.attachmentLimits.maxImageBytes, 20 * 1024 * 1024)
+  assert.equal(hello.attachmentLimits.fileAdmission, 'verbatim')
 })
 
 test('startupError, event, and streamEnded fixtures validate', () => {
@@ -146,11 +165,29 @@ test('conversation fixtures parse on the bridge side', () => {
   assert.equal(submit.method, 'nano.conversation.submit')
   assert.equal(submit.params.delivery, 'queue')
   assert.equal(submit.params.content[0].type, 'text')
+  const withAttachments = parseFrameLine(
+    JSON.stringify(CONTRACT.fixtures.conversationSubmitAttachments),
+  )
+  assert.equal(withAttachments.type, 'request')
+  assert.equal(withAttachments.params.content[1].type, 'image')
+  assert.equal(withAttachments.params.content[1].receiptId, 'receipt-image-fixture')
+  assert.equal(withAttachments.params.content[2].type, 'file')
   const event = parseFrameLine(JSON.stringify(CONTRACT.fixtures.conversationEvent))
   assert.equal(event.type, 'notification')
   const validated = validateEvent(event.params, { runtimeId: 'rt-fixture', generation: 1 })
   assert.equal(validated.kind, 'conversation.status')
   assert.equal(validated.payload.status, 'running')
+})
+
+test('sessions fixtures parse on the bridge side', () => {
+  const list = CONTRACT.fixtures.sessionsList
+  assert.equal(list.result.sessions[0].sessionId, 'session-fixture')
+  assert.equal(list.result.sessions[0].current, true)
+  const event = parseFrameLine(JSON.stringify(CONTRACT.fixtures.sessionsContextEvent))
+  const validated = validateEvent(event.params, { runtimeId: 'rt-fixture', generation: 1 })
+  assert.equal(validated.kind, 'sessions.context')
+  assert.equal(validated.payload.projectedTokens, 1200)
+  assert.equal(validated.payload.contextWindow, 128000)
 })
 
 test('shell and jobs fixtures parse on the bridge side', () => {

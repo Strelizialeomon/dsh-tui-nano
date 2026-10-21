@@ -20,17 +20,20 @@ export class ConversationService {
    *   agent: object,
    *   session: object,
    *   rootSessionId: string,
+   *   attachments?: import('../attachments/service.mjs').AttachmentService,
    * }} options - host wiring.
    */
-  constructor({ ctx, hub, agent, session, rootSessionId }) {
+  constructor({ ctx, hub, agent, session, rootSessionId, attachments }) {
     this.ctx = ctx
     this.hub = hub
     this.agent = agent
     this.session = session
     this.rootSessionId = rootSessionId
+    this.attachments = attachments
     this.address = { rootSessionId }
     this.accepted = new Map()
     this.acceptedOrder = []
+    this.inFlightRequests = new Map()
     this.disposers = []
     this.closed = false
     this.indexDurableRequests()
@@ -61,7 +64,10 @@ export class ConversationService {
     })
     for (const event of ['agent/inbox/inserted', 'agent/inbox/claimed', 'agent/inbox/discarded']) {
       on(event, (payload) => {
-        if (event === 'agent/inbox/discarded') this.forget(payload.message)
+        if (event === 'agent/inbox/discarded') {
+          this.forget(payload.message)
+          this.attachments?.observeDiscarded(payload.message)
+        }
         this.publishInbox()
       })
     }
@@ -72,6 +78,7 @@ export class ConversationService {
       if (this.closed || subject.id !== this.rootSessionId || event.type !== 'user/message') return
       const rpcId = rpcIdOf(event.data)
       if (rpcId !== undefined) this.remember(rpcId, event.data.id)
+      this.attachments?.observeUserMessage(event.data)
     })
     if (typeof sessionDisposer === 'function') this.disposers.push(sessionDisposer)
   }
@@ -79,6 +86,7 @@ export class ConversationService {
   /** Stop publishing; the official agent stays alive for the shutdown path. */
   close() {
     this.closed = true
+    this.attachments?.close()
     for (const disposer of this.disposers.splice(0)) {
       try {
         disposer()
@@ -89,12 +97,14 @@ export class ConversationService {
   }
 
   /**
-   * Admit one text submission. `queue` is an ordinary follow-up turn; `steer`
-   * is next-step input and is only offered while the Agent is running.
+   * Admit one ordered submission. `queue` is an ordinary follow-up turn;
+   * `steer` is next-step input and is only offered while the Agent is running.
+   * Attachment receipts are resolved and admitted before the Agent sees the
+   * message, so a half-built attachment can never enter the session.
    * @param {object} params - `address`, `requestId`, `delivery`, `content`.
-   * @returns {{accepted: true, duplicate: boolean, requestId: string, messageId: string}} receipt.
+   * @returns {Promise<{accepted: true, duplicate: boolean, requestId: string, messageId: string}>} receipt.
    */
-  submit(params) {
+  async submit(params) {
     this.assertAddress(params?.address)
     if (typeof params.requestId !== 'string' || params.requestId === '') {
       throw new RpcError('jsonrpc/invalid-params', 'requestId must be a non-empty string')
@@ -112,22 +122,60 @@ export class ConversationService {
       throw new RpcError('nano/conversation/steer-unavailable', 'the current turn no longer accepts steering')
     }
 
+    // A repeated requestId during admission must join the first attempt, not
+    // start a second Agent message. This covers a client retry after an
+    // unknown result while image admission is still in flight.
+    const pending = this.inFlightRequests.get(params.requestId)
+    if (pending !== undefined) return await pending
+    const operation = this.admitAndSend(params, content)
+    this.inFlightRequests.set(params.requestId, operation)
+    try {
+      return await operation
+    } finally {
+      this.inFlightRequests.delete(params.requestId)
+    }
+  }
+
+  /**
+   * Admit attachments and hand one message to the Agent. The caller owns the
+   * per-request in-flight guard; this method assumes a fresh requestId.
+   * @param {object} params - validated submit params.
+   * @param {Array<object>} content - validated wire content.
+   * @returns {Promise<object>} acceptance receipt.
+   */
+  async admitAndSend(params, content) {
+    let admitted = content
+    let receipts = []
+    if (content.some((block) => block.type !== 'text')) {
+      if (this.attachments === undefined) {
+        throw new RpcError('nano/unsupported', 'attachments are not composed in this generation')
+      }
+      const result = await this.attachments.admitContent(params.address, content)
+      admitted = result.content
+      receipts = result.receipts
+    }
+
     const messageId = randomUUID()
     const message = Object.freeze({
       id: messageId,
       role: 'user',
-      content: Object.freeze(content.map((block) => Object.freeze(block))),
+      content: Object.freeze(admitted.map((block) => Object.freeze(block))),
       source: Object.freeze({ kind: 'user', rpcId: params.requestId }),
     })
+    // Bind the receipts before the Agent can synchronously observe the inbox
+    // insertion; commit after acceptance, release on rejection.
+    this.attachments?.bindPrompt(params.requestId, receipts)
     try {
       if (params.delivery === 'steer') this.agent.steer(message)
       else this.agent.followup(message)
     } catch (error) {
+      this.attachments?.releasePrompt(params.requestId, receipts)
       throw new RpcError(
         'nano/conversation/rejected',
         `the Agent rejected the submission: ${error instanceof Error ? error.message : String(error)}`,
       )
     }
+    this.attachments?.commit(params.requestId, receipts)
     this.remember(params.requestId, messageId)
     return { accepted: true, duplicate: false, requestId: params.requestId, messageId }
   }
@@ -141,7 +189,7 @@ export class ConversationService {
    */
   editQueued(params) {
     this.assertAddress(params?.address)
-    const content = validateContent(params.content)
+    const content = validateTextContent(params.content)
     if (typeof params.messageId !== 'string' || params.messageId === '') {
       throw new RpcError('jsonrpc/invalid-params', 'messageId must be a non-empty string')
     }
@@ -255,6 +303,8 @@ export class ConversationService {
    * projection is display-only: the client must read a snapshot before editing.
    */
   publishInbox() {
+    const snapshot = this.inboxSnapshot()
+    this.attachments?.observeInbox(snapshot)
     this.hub.publish('conversation.inbox', this.inboxPayload())
   }
 
@@ -364,35 +414,66 @@ export class ConversationService {
 }
 
 /**
- * Validate an ordered text-only content list. Attachments are S06's; accepting
- * an unknown block here would submit a half-built attachment to the official
- * session, so it is rejected instead.
+ * Validate one ordered content list. Text and attachment references keep their
+ * user order; attachment receipts are resolved by the attachment host before
+ * the Agent sees the message.
  * @param {unknown} content - wire content array.
- * @returns {Array<{type: 'text', text: string}>} normalized frozen blocks.
+ * @returns {Array<object>} normalized frozen blocks.
  */
 export function validateContent(content) {
   if (!Array.isArray(content) || content.length === 0) {
     throw new RpcError('nano/conversation/empty', 'content must be a non-empty array')
   }
   const blocks = []
+  let hasText = false
+  let textBytes = 0
   for (const block of content) {
     if (block === null || typeof block !== 'object' || Array.isArray(block)) {
       throw new RpcError('nano/conversation/content', 'each content block must be an object')
     }
-    if (block.type !== 'text' || typeof block.text !== 'string') {
-      throw new RpcError('nano/conversation/content', `content block type ${String(block.type)} is not supported by S02`)
+    if (block.type === 'text') {
+      if (typeof block.text !== 'string') {
+        throw new RpcError('nano/conversation/content', 'text blocks must carry a string')
+      }
+      if (block.text.trim() !== '') hasText = true
+      textBytes += Buffer.byteLength(block.text, 'utf8')
+      blocks.push(Object.freeze({ type: 'text', text: block.text }))
+      continue
     }
-    blocks.push(Object.freeze({ type: 'text', text: block.text }))
+    if (block.type === 'image' || block.type === 'file') {
+      if (typeof block.receiptId !== 'string' || block.receiptId === '') {
+        throw new RpcError('nano/conversation/content', `${block.type} blocks need a receiptId`)
+      }
+      blocks.push(Object.freeze({ type: block.type, receiptId: block.receiptId }))
+      continue
+    }
+    throw new RpcError('nano/conversation/content', `content block type ${String(block.type)} is not supported`)
+  }
+  if (!hasText && !blocks.some((block) => block.type !== 'text')) {
+    throw new RpcError('nano/conversation/empty', 'content needs non-whitespace text or an attachment')
+  }
+  if (textBytes > LIMITS.maxSubmitTextBytes) {
+    throw new RpcError(
+      'nano/conversation/too-large',
+      `content is ${String(textBytes)} bytes, over the ${String(LIMITS.maxSubmitTextBytes)} byte submission limit`,
+    )
+  }
+  return blocks
+}
+
+/**
+ * Validate a queue edit: the official edit replaces the whole content with
+ * text only, so attachment references are refused here.
+ * @param {unknown} content - wire content array.
+ * @returns {Array<{type: 'text', text: string}>} normalized frozen blocks.
+ */
+export function validateTextContent(content) {
+  const blocks = validateContent(content)
+  if (blocks.some((block) => block.type !== 'text')) {
+    throw new RpcError('nano/conversation/content', 'queue edits accept only text content')
   }
   if (!blocks.some((block) => block.text.trim() !== '')) {
     throw new RpcError('nano/conversation/empty', 'content needs non-whitespace text')
-  }
-  const bytes = blocks.reduce((total, block) => total + Buffer.byteLength(block.text, 'utf8'), 0)
-  if (bytes > LIMITS.maxSubmitTextBytes) {
-    throw new RpcError(
-      'nano/conversation/too-large',
-      `content is ${String(bytes)} bytes, over the ${String(LIMITS.maxSubmitTextBytes)} byte submission limit`,
-    )
   }
   return blocks
 }
