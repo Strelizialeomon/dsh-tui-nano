@@ -228,6 +228,43 @@ impl SubmissionTracker {
         }
     }
 
+    /// A turn reached idle while an accepted message never became durable:
+    /// mark the echo unknown instead of leaving it as a permanent "accepted"
+    /// bubble. Returns how many echoes changed.
+    pub fn retire_missing(&mut self, inbox: &InboxView, history: &ConversationHistory) -> usize {
+        let ids: Vec<String> = self
+            .order
+            .iter()
+            .filter_map(|id| self.by_id.get(id))
+            .filter(|submission| {
+                !submission.settled && matches!(submission.state, SubmissionState::Accepted { .. })
+            })
+            .map(|submission| submission.request_id.clone())
+            .collect();
+        let mut changed = 0;
+        for request_id in ids {
+            let Some(submission) = self.by_id.get(&request_id) else {
+                continue;
+            };
+            let in_inbox = submission
+                .message_id
+                .as_ref()
+                .is_some_and(|message_id| inbox.find(message_id).is_some())
+                || inbox.find_by_request(&request_id).is_some();
+            let in_history = history.find_request(&request_id).is_some();
+            if in_inbox || in_history {
+                continue;
+            }
+            if let Some(submission) = self.by_id.get_mut(&request_id) {
+                submission.state = SubmissionState::Unknown {
+                    detail: "回合结束前未落盘".to_string(),
+                };
+                changed += 1;
+            }
+        }
+        changed
+    }
+
     fn trim(&mut self) {
         while self.order.len() > self.max {
             if let Some(id) = self.order.first().cloned() {
@@ -281,6 +318,17 @@ mod tests {
     }
 
     #[test]
+    fn an_accepted_message_that_never_lands_becomes_unknown_at_idle() {
+        let mut tracker = SubmissionTracker::default();
+        tracker.begin("r-1", "hi", Delivery::Queue);
+        tracker.accepted("r-1", "m-1", false);
+        let changed =
+            tracker.retire_missing(&InboxView::default(), &ConversationHistory::default());
+        assert_eq!(changed, 1);
+        assert_eq!(tracker.echoes()[0].state.label(), "未确认");
+    }
+
+    #[test]
     fn reconciliation_uses_the_official_history_not_a_resend() {
         let mut tracker = SubmissionTracker::default();
         tracker.begin("r-1", "hi", Delivery::Queue);
@@ -290,6 +338,8 @@ mod tests {
             address: WireAddress {
                 root_session_id: "root".into(),
                 child_session_id: None,
+                parent_session_id: None,
+                mode: None,
             },
             seq: 1,
             event_type: "user/message".into(),

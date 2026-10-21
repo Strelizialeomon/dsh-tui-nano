@@ -6,6 +6,7 @@
 // identity and dedup follow the official `user-rpc` source shape; the bridge
 // never invents a second identity for the same requestId.
 import { randomUUID } from 'node:crypto'
+import { LIMITS } from '../../protocol/index.mjs'
 import { RpcError } from '../runtime/errors.mjs'
 
 /**
@@ -59,8 +60,9 @@ export class ConversationService {
       this.hub.publish('conversation.status', { address: this.address, status })
     })
     for (const event of ['agent/inbox/inserted', 'agent/inbox/claimed', 'agent/inbox/discarded']) {
-      on(event, () => {
-        this.hub.publish('conversation.inbox', { address: this.address, inbox: this.inboxSnapshot() })
+      on(event, (payload) => {
+        if (event === 'agent/inbox/discarded') this.forget(payload.message)
+        this.publishInbox()
       })
     }
     on('agent/assistant-stream', ({ frame }) => {
@@ -175,12 +177,14 @@ export class ConversationService {
     if (typeof params.messageId !== 'string' || params.messageId === '') {
       throw new RpcError('jsonrpc/invalid-params', 'messageId must be a non-empty string')
     }
-    if (this.locateQueued(params.messageId) === undefined) {
+    const located = this.locateQueued(params.messageId)
+    if (located === undefined) {
       throw new RpcError('nano/conversation/queue-item-not-found', 'queued item is no longer pending')
     }
     if (!this.agent.inbox.remove(params.messageId)) {
       throw new RpcError('nano/conversation/queue-item-not-found', 'queued item is no longer pending')
     }
+    this.forget(located.message)
     return { removed: true }
   }
 
@@ -242,6 +246,42 @@ export class ConversationService {
     return {
       nextTurn: [...this.agent.inbox.nextTurn],
       nextStep: [...this.agent.inbox.nextStep],
+    }
+  }
+
+  /**
+   * Publish the inbox projection, falling back to a bounded preview when the
+   * full projection would exceed the per-event frame limit. A truncated
+   * projection is display-only: the client must read a snapshot before editing.
+   */
+  publishInbox() {
+    this.hub.publish('conversation.inbox', this.inboxPayload())
+  }
+
+  /** Full projection when it fits; otherwise bounded previews with a flag. */
+  inboxPayload() {
+    const full = { address: this.address, inbox: this.inboxSnapshot() }
+    if (Buffer.byteLength(JSON.stringify(full), 'utf8') <= LIMITS.maxEventFrameBytes - 2048) return full
+    const preview = (items) => items.slice(0, 64).map((message) => ({
+      ...message,
+      content: [{ type: 'text', text: textOf(message.content).slice(0, 1024) }],
+    }))
+    return {
+      address: this.address,
+      inbox: {
+        nextTurn: preview(full.inbox.nextTurn),
+        nextStep: preview(full.inbox.nextStep),
+      },
+      truncated: true,
+    }
+  }
+
+  /** Drop the accepted cache entry for a message that was durably cancelled. */
+  forget(message) {
+    const rpcId = rpcIdOf(message)
+    if (rpcId !== undefined) {
+      this.accepted.delete(rpcId)
+      this.acceptedOrder = this.acceptedOrder.filter((id) => id !== rpcId)
     }
   }
 
@@ -319,7 +359,22 @@ export function validateContent(content) {
   if (!blocks.some((block) => block.text.trim() !== '')) {
     throw new RpcError('nano/conversation/empty', 'content needs non-whitespace text')
   }
+  const bytes = blocks.reduce((total, block) => total + Buffer.byteLength(block.text, 'utf8'), 0)
+  if (bytes > LIMITS.maxSubmitTextBytes) {
+    throw new RpcError(
+      'nano/conversation/too-large',
+      `content is ${String(bytes)} bytes, over the ${String(LIMITS.maxSubmitTextBytes)} byte submission limit`,
+    )
+  }
   return blocks
+}
+
+/** Concatenate text blocks for a bounded preview. */
+function textOf(content) {
+  if (!Array.isArray(content)) return ''
+  return content
+    .map((block) => (block?.type === 'text' && typeof block.text === 'string' ? block.text : `[${String(block?.type)}]`))
+    .join('')
 }
 
 /** Read the official `user-rpc` correlation id from a message-shaped value. */

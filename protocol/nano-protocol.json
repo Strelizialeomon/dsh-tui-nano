@@ -33,7 +33,8 @@
     "gracefulShutdownMs": 10000,
     "termGraceMs": 3000,
     "mountLockStaleMs": 30000,
-    "maxReplayEvents": 10000
+    "maxReplayEvents": 10000,
+    "maxSubmitTextBytes": 32768
   },
   "lifecycle": {
     "states": [
@@ -204,6 +205,10 @@
     {
       "code": 1017,
       "name": "nano/conversation/rejected"
+    },
+    {
+      "code": 1018,
+      "name": "nano/conversation/too-large"
     }
   ],
   "shapes": {
@@ -755,7 +760,8 @@
       "status": "implemented",
       "payload": {
         "address": "address",
-        "inbox": "conversationInbox"
+        "inbox": "conversationInbox",
+        "truncated": "boolean?"
       }
     },
     {

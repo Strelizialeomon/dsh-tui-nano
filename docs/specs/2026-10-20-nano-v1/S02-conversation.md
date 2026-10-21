@@ -135,4 +135,29 @@ S02 提供唯一的场景接口（scene）和焦点接口（focus），供 S03-S
 
 ## 11. 审核修订记录
 
-待本稿逐份过闸；上述验收均未执行。
+2026-10-21 重审（用户点档：重审；2 个只读 agent；原文见 PR #19 评论）。处置：
+
+| # | 严重度 | 发现 | 处置 |
+| --- | --- | --- | --- |
+| 规格-B1 / 对抗-5 | blocker | 断线后未重建可观察订阅 | 已实现：`streamEnded failed` 时保留宿主，500ms 后按最后 seq 重订阅并拉 snapshot；宿主死亡仍要求 S07 显式重启，界面显示 rootSessionId 与 `--resume` 提示。 |
+| 规格-B2 | blocker | §8 验收证据不足 | 已补两条真实模型会话（文本/工具/正式历史、运行中 queue/steer/delete/停止保留队列/清空）；IME 与子对话导航仍不勾，见下。 |
+| 规格-M1 / 对抗-7 | major | IME 组合态 Enter 闸门未接线 | Enter 已统一走 `InputBuffer::handle(Enter)`；crossterm 不提供组合事件，真实组合态依赖终端吞掉 Enter，未在 Ghostty 人工验收。 |
+| 规格-M2 | major | 有序输入内容未接进提交 | 新增 `begin_submit_content(OrderedContent)`；草稿仍为文本，S06 附件未就绪显式拒绝，顺序与附件拒绝有测试。 |
+| 规格-M3 / 对抗-13 | major | 工具参数字节不计入预览上限 | 已计入 per-attempt 与总字节预算，超出标记截断，多工具测试。 |
+| 规格-M4 | major | 运行中回显同时出现在 feed 与 QueueDock | 官方 inbox 已有同 `rpcId` 时从 feed 隐藏回显；claim 后回合结束仍未落盘则转「未确认」。 |
+| 规格-M5 / 对抗-范围 | major | `--provider/--model` 初始路由越界到 S04 | 用户批准保留为启动引导的最小范围例外：S04 仍拥有模型选择业务与切换；仅为真实验收提供初始路由，PR/README 记录。 |
+| 对抗-1 | major | 传输未知被当成明确失败 | `RequestErrorKind` 区分 Rpc/Local/Unknown；只有 Rpc/Local 恢复草稿并显示失败，Unknown 标未确认且不重发。 |
+| 对抗-2 | major | Shift+Enter 在目标终端直接发送 | 启用 kitty keyboard enhancement（终端支持时）；Ctrl+J 作为可靠换行并写入提示。 |
+| 对抗-3 | major | 超大消息会永久关闭订阅 | 单次提交上限 32 KiB（协议/桥接/Rust 一致）；`conversation.inbox` 超事件帧上限时发布有界预览并标 `truncated`，编辑前需快照。 |
+| 对抗-4 | major | accepted 未落盘的回显永不退休 | 回合 idle 时对不在 inbox/history 的 accepted 回显转「未确认」并提示。 |
+| 规格-m1 | minor | 已删除/claim 的 requestId 仍去重 | discarded/delete 时清理 accepted 缓存；claim 窗口保留缓存以避免重发。 |
+| 规格-m2 / m3 / 对抗-6 | minor | 队列编辑/发送失败会丢原稿 | 编辑成功恢复备份；失败时把失败原文与等待期间新输入都保留。 |
+| 规格-m4 | minor | 快照不能清除 stop_pending | snapshot idle 清除；断线/重建也清除。 |
+| 规格-m5 | minor | 场景不按活动场景路由、无地址/锚点槽 | 路由读 `scene.active()`；SceneState 增加地址与阅读锚点槽，切地址清锚点。 |
+| 规格-m6 | minor | 子地址线格式丢 parent/mode | `SessionAddress::wire_value` 与 `WireAddress` 增加可选 parentSessionId/mode；S12 仍独占子会话服务。 |
+| 规格-m7 | minor | 边界数字无实测 | 证据 README 说明它们由 S01 帧上限推导，不是耗时实测；预览/历史/回显/提交均有界并有测试。 |
+| 规格-m8 | minor | 证据文档测试数不符 | 已更新为当前计数。 |
+| 规格-m9 | minor | 停止并清空复合动作缺失 | 新增 Alt+X：逐项删除后按需 cancel；真实会话 2 验证空闲清空，运行中 cancel 段未单独验。 |
+| 对抗-8/9/10/11/12/14/15/16 | minor | 队列焦点吞键/快捷键泄漏/重复 Alt+E/多行回显/队列窗口/预览 revision/bash 误判/raw mode 残留 | 均已修：焦点先判、队列空自动回输入、重复 Alt+E 忽略、回显按行包裹、队列窗口跟随选中、revision 重建预览、bash 启发式只信非 user source、终端初始化失败显式恢复 raw mode。 |
+
+用户批准的范围例外：S02 接受启动时的初始 provider/model/effort 路由（`--provider/--model/--effort`），只用于把真实官方 Agent 引导到一条已注册路由；模型选择 UI、切换、默认值仍归 S04。该例外仅存在于启动配置，不新增用户可见的模型管理界面。

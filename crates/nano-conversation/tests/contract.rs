@@ -11,6 +11,15 @@ fn contract() -> Value {
 }
 
 #[test]
+fn submission_limit_matches_the_contract() {
+    let contract = contract();
+    assert_eq!(
+        contract["limits"]["maxSubmitTextBytes"].as_u64(),
+        Some(nano_conversation::MAX_SUBMIT_TEXT_BYTES as u64)
+    );
+}
+
+#[test]
 fn conversation_event_fixture_parses() {
     let contract = contract();
     let params = &contract["fixtures"]["conversationEvent"]["params"];
@@ -39,7 +48,9 @@ fn submit_fixture_has_the_required_request_shape() {
     let contract = contract();
     let params = &contract["fixtures"]["conversationSubmit"]["params"];
     assert_eq!(params["delivery"], "queue");
-    assert!(params["requestId"].as_str().is_some_and(|value| !value.is_empty()));
+    assert!(params["requestId"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
     assert_eq!(params["content"][0]["type"], "text");
     assert!(params["address"]["rootSessionId"].as_str().is_some());
 }
@@ -55,8 +66,13 @@ fn every_event_kind_is_covered_by_the_contract_shape() {
         .collect();
     for kind in &kinds {
         assert!(
-            ["session.event", "conversation.status", "conversation.inbox", "conversation.stream"]
-                .contains(kind),
+            [
+                "session.event",
+                "conversation.status",
+                "conversation.inbox",
+                "conversation.stream"
+            ]
+            .contains(kind),
             "unexpected event kind {kind}"
         );
     }

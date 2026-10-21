@@ -81,7 +81,7 @@ pub const LIFECYCLE_TRANSITIONS: [(&str, &str); 15] = [
 ];
 
 /// Error code names shared with the bridge contract.
-pub const ERROR_CODE_NAMES: [(&str, i64); 22] = [
+pub const ERROR_CODE_NAMES: [(&str, i64); 23] = [
     ("jsonrpc/parse-error", -32700),
     ("jsonrpc/invalid-request", -32600),
     ("jsonrpc/method-not-found", -32601),
@@ -104,6 +104,7 @@ pub const ERROR_CODE_NAMES: [(&str, i64); 22] = [
     ("nano/conversation/queued-attachment", 1015),
     ("nano/conversation/steer-unavailable", 1016),
     ("nano/conversation/rejected", 1017),
+    ("nano/conversation/too-large", 1018),
 ];
 
 /// Method names implemented by this generation.

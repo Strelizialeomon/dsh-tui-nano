@@ -23,7 +23,7 @@ impl std::fmt::Display for WireError {
 impl std::error::Error for WireError {}
 
 /// Address as carried by the protocol.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WireAddress {
     /// Root session identity.
@@ -31,6 +31,12 @@ pub struct WireAddress {
     /// Optional child session identity (S12).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub child_session_id: Option<String>,
+    /// Optional direct parent identity (S12).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<String>,
+    /// Optional subagent mode (S12).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
 }
 
 impl WireAddress {
@@ -41,7 +47,17 @@ impl WireAddress {
         }
         match (&self.child_session_id, &address.child) {
             (None, None) => true,
-            (Some(child), Some(value)) => child == &value.child_session_id,
+            (Some(child), Some(value)) => {
+                child == &value.child_session_id
+                    && self
+                        .parent_session_id
+                        .as_deref()
+                        .is_none_or(|parent| parent == value.parent_session_id)
+                    && self
+                        .mode
+                        .as_deref()
+                        .is_none_or(|mode| mode == value.mode.as_str())
+            }
             _ => false,
         }
     }
@@ -136,7 +152,7 @@ pub enum ConversationEvent {
     Inbox {
         /// Address.
         address: WireAddress,
-        /// Full pending input.
+        /// Full or bounded pending input.
         inbox: InboxView,
     },
     /// One live assistant-stream frame.
@@ -175,7 +191,13 @@ pub fn parse_conversation_event(
                 .ok_or_else(|| WireError("conversation.inbox.inbox is missing".into()))?;
             Ok(ConversationEvent::Inbox {
                 address,
-                inbox: InboxView::from_value(inbox),
+                inbox: InboxView::from_event(
+                    inbox,
+                    payload
+                        .get("truncated")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                ),
             })
         }
         "conversation.stream" => {
@@ -289,6 +311,8 @@ mod tests {
         let wire = WireAddress {
             root_session_id: "root".into(),
             child_session_id: None,
+            parent_session_id: None,
+            mode: None,
         };
         assert!(wire.matches(&root));
         let child =

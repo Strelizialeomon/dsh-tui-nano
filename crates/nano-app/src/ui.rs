@@ -114,7 +114,7 @@ fn draw_feed(frame: &mut Frame, app: &mut App, area: Rect) {
             format!("你（{}）", echo.state.label()),
             Style::default().fg(Color::Cyan),
         )));
-        wrap_line(&mut lines, &text, width, 200, Color::Cyan);
+        wrap_block(&mut lines, &text, width, 200, Color::Cyan);
     }
     if lines.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -211,15 +211,32 @@ fn push_preview_tool(lines: &mut Vec<Line<'static>>, tool: &ToolPreview) {
 }
 
 fn draw_queue(frame: &mut Frame, app: &App, area: Rect) {
+    let focused = !app.scene.focus().input_focused();
     let title = format!(
-        " 队列 · 官方 inbox · {} 项（Alt+↑↓ 选择，Alt+E 编辑，Alt+D 删除，Alt+S 插话） ",
+        " 队列{}{} · 官方 inbox · {} 项（Alt+↑↓ 选择，Alt+E 编辑，Alt+D 删除，Alt+S 插话，Alt+X 清空并停止） ",
+        if focused { "（焦点）" } else { "" },
+        if app.model.inbox().truncated {
+            " · 预览截断"
+        } else {
+            ""
+        },
         app.model.inbox().len()
     );
     let block = Block::default().borders(Borders::TOP).title(title);
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    let items: Vec<_> = app.model.inbox().iter().collect();
+    let visible = 4.min(items.len());
+    let start = if items.len() <= visible {
+        0
+    } else {
+        app.queue_selected
+            .saturating_sub(visible.saturating_sub(1))
+            .min(items.len() - visible)
+    };
     let mut lines = Vec::new();
-    for (index, item) in app.model.inbox().iter().enumerate() {
+    for (offset, item) in items.iter().skip(start).take(visible).enumerate() {
+        let index = start + offset;
         let selected = index == app.queue_selected;
         let marker = if selected { "▶" } else { " " };
         let text = truncate(&item.text.replace('\n', " "), 120);
@@ -239,7 +256,8 @@ fn draw_queue(frame: &mut Frame, app: &App, area: Rect) {
 fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
     let title = match app.editing_queue() {
         Some(message_id) => format!(" 编辑队列项 {message_id} · Enter 应用，Esc 取消 "),
-        None => " 输入 · Enter 发送/排队，Alt+Enter 插话，Shift+Enter 换行 ".to_string(),
+        None => " 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） "
+            .to_string(),
     };
     let block = Block::default().borders(Borders::ALL).title(title);
     let inner = block.inner(area);
@@ -427,23 +445,6 @@ fn wrap_block(
                 Style::default().fg(color),
             )));
         }
-    }
-}
-
-/// Wrap one line at the current width and append it.
-fn wrap_line(
-    lines: &mut Vec<Line<'static>>,
-    text: &str,
-    width: usize,
-    max_chars: usize,
-    color: Color,
-) {
-    let text: String = text.chars().take(max_chars).collect();
-    for segment in wrap_segments(&text, width.max(1)) {
-        lines.push(Line::from(Span::styled(
-            segment.text,
-            Style::default().fg(color),
-        )));
     }
 }
 

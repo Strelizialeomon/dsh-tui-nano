@@ -199,7 +199,43 @@ impl PreviewAccumulator {
                     return None;
                 };
                 if preview.revision != *revision {
-                    preview.gap = true;
+                    // A new revision replaces the attempt. Rebuild from this
+                    // frame; a non-zero first index means a real gap.
+                    let turn = preview.turn;
+                    let step = preview.step;
+                    self.remove(attempt_id);
+                    let gap = *index != 0;
+                    self.previews.insert(
+                        attempt_id.clone(),
+                        Preview {
+                            attempt_id: attempt_id.clone(),
+                            revision: *revision,
+                            turn,
+                            step,
+                            text: String::new(),
+                            reasoning: String::new(),
+                            tools: BTreeMap::new(),
+                            expected_index: index + 1,
+                            gap,
+                            truncated: false,
+                            bytes: 0,
+                            finished: false,
+                            outcome: None,
+                        },
+                    );
+                    if !gap {
+                        let max_bytes = self.max_bytes;
+                        let max_total_bytes = self.max_total_bytes;
+                        if let Some(next) = self.previews.get_mut(attempt_id) {
+                            Self::apply_chunk(
+                                next,
+                                chunk,
+                                max_bytes,
+                                max_total_bytes,
+                                &mut self.total_bytes,
+                            );
+                        }
+                    }
                     return None;
                 }
                 if *index < preview.expected_index {
@@ -299,22 +335,49 @@ impl PreviewAccumulator {
                 let Some(index) = chunk.get("index").and_then(Value::as_u64) else {
                     return;
                 };
-                let entry = preview.tools.entry(index).or_insert_with(|| ToolPreview {
-                    index,
-                    ..ToolPreview::default()
-                });
-                if let Some(id) = chunk.get("id").and_then(Value::as_str) {
-                    entry.call_id = Some(id.to_string());
-                }
-                if let Some(name) = chunk.get("name").and_then(Value::as_str) {
-                    entry.name = Some(name.to_string());
-                }
-                if let Some(delta) = chunk.get("argumentsDelta").and_then(Value::as_str) {
-                    if entry.arguments.len() + delta.len() <= max_bytes {
-                        entry.arguments.push_str(delta);
-                    } else {
-                        preview.truncated = true;
+                let call_id = chunk.get("id").and_then(Value::as_str).map(str::to_string);
+                let name = chunk
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                let delta = chunk
+                    .get("argumentsDelta")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                let reserved = delta
+                    .as_ref()
+                    .map(|value| {
+                        reserve_bytes(
+                            preview,
+                            value.len(),
+                            max_bytes,
+                            max_total_bytes,
+                            total_bytes,
+                        )
+                    })
+                    .unwrap_or(true);
+                let mut truncated = false;
+                {
+                    let entry = preview.tools.entry(index).or_insert_with(|| ToolPreview {
+                        index,
+                        ..ToolPreview::default()
+                    });
+                    if let Some(call_id) = call_id {
+                        entry.call_id = Some(call_id);
                     }
+                    if let Some(name) = name {
+                        entry.name = Some(name);
+                    }
+                    if let Some(delta) = delta {
+                        if reserved {
+                            entry.arguments.push_str(&delta);
+                        } else {
+                            truncated = true;
+                        }
+                    }
+                }
+                if truncated {
+                    preview.truncated = true;
                 }
             }
             "block-end" => {
@@ -322,20 +385,58 @@ impl PreviewAccumulator {
                     return;
                 };
                 if let Some(block) = chunk.get("block") {
-                    let entry = preview.tools.entry(index).or_insert_with(|| ToolPreview {
-                        index,
-                        ..ToolPreview::default()
-                    });
-                    if let Some(id) = block.get("id").and_then(Value::as_str) {
-                        entry.call_id = Some(id.to_string());
+                    let call_id = block.get("id").and_then(Value::as_str).map(str::to_string);
+                    let name = block
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    let arguments = block
+                        .get("arguments")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    let old = preview
+                        .tools
+                        .get(&index)
+                        .map(|entry| entry.arguments.len())
+                        .unwrap_or(0);
+                    preview.bytes = preview.bytes.saturating_sub(old);
+                    *total_bytes = total_bytes.saturating_sub(old);
+                    let reserved = arguments
+                        .as_ref()
+                        .map(|value| {
+                            reserve_bytes(
+                                preview,
+                                value.len(),
+                                max_bytes,
+                                max_total_bytes,
+                                total_bytes,
+                            )
+                        })
+                        .unwrap_or(true);
+                    let mut truncated = false;
+                    {
+                        let entry = preview.tools.entry(index).or_insert_with(|| ToolPreview {
+                            index,
+                            ..ToolPreview::default()
+                        });
+                        if let Some(call_id) = call_id {
+                            entry.call_id = Some(call_id);
+                        }
+                        if let Some(name) = name {
+                            entry.name = Some(name);
+                        }
+                        if let Some(arguments) = arguments {
+                            if reserved {
+                                entry.arguments = arguments;
+                            } else {
+                                truncated = true;
+                            }
+                        }
+                        entry.complete = true;
                     }
-                    if let Some(name) = block.get("name").and_then(Value::as_str) {
-                        entry.name = Some(name.to_string());
+                    if truncated {
+                        preview.truncated = true;
                     }
-                    if let Some(arguments) = block.get("arguments").and_then(Value::as_str) {
-                        entry.arguments = arguments.to_string();
-                    }
-                    entry.complete = true;
                 }
             }
             "finish" => preview.finished = true,
@@ -358,6 +459,21 @@ impl PreviewAccumulator {
     }
 }
 
+fn reserve_bytes(
+    preview: &mut Preview,
+    bytes: usize,
+    max_bytes: usize,
+    max_total_bytes: usize,
+    total_bytes: &mut usize,
+) -> bool {
+    if preview.bytes + bytes > max_bytes || *total_bytes + bytes > max_total_bytes {
+        return false;
+    }
+    preview.bytes += bytes;
+    *total_bytes += bytes;
+    true
+}
+
 fn append(
     preview: &mut Preview,
     text: &str,
@@ -366,12 +482,10 @@ fn append(
     max_total_bytes: usize,
     total_bytes: &mut usize,
 ) {
-    if preview.bytes + text.len() > max_bytes || *total_bytes + text.len() > max_total_bytes {
+    if !reserve_bytes(preview, text.len(), max_bytes, max_total_bytes, total_bytes) {
         preview.truncated = true;
         return;
     }
-    preview.bytes += text.len();
-    *total_bytes += text.len();
     if visible {
         preview.text.push_str(text);
     } else {
@@ -467,6 +581,43 @@ mod tests {
         let retired = previews.retire_turn_step(2, 3);
         assert_eq!(retired.len(), 1);
         assert!(previews.is_empty());
+    }
+
+    #[test]
+    fn tool_argument_bytes_count_against_the_total_budget() {
+        let mut previews = PreviewAccumulator::new(100, 150);
+        previews.apply(&start("a", 1, 1));
+        previews.apply(&chunk(
+            "a",
+            0,
+            json!({"type": "tool-call-delta", "index": 0, "id": "c-1", "name": "bash", "argumentsDelta": "x".repeat(90)}),
+        ));
+        previews.apply(&chunk(
+            "a",
+            1,
+            json!({"type": "tool-call-delta", "index": 1, "id": "c-2", "name": "bash", "argumentsDelta": "y".repeat(90)}),
+        ));
+        let view = &previews.views()[0];
+        assert!(view.truncated);
+        let total: usize = view.tools.iter().map(|tool| tool.arguments.len()).sum();
+        assert!(total <= 150);
+    }
+
+    #[test]
+    fn a_new_revision_rebuilds_the_attempt() {
+        let mut previews = PreviewAccumulator::default();
+        previews.apply(&start("a", 1, 1));
+        previews.apply(&chunk("a", 0, json!({"type": "text-delta", "text": "old"})));
+        previews.apply(&StreamFrame::Chunk {
+            attempt_id: "a".into(),
+            revision: 2,
+            index: 0,
+            time: Some(0),
+            chunk: json!({"type": "text-delta", "text": "new"}),
+        });
+        let view = &previews.views()[0];
+        assert_eq!(view.text, "new");
+        assert!(!view.gap);
     }
 
     #[test]

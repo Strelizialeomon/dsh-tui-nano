@@ -77,6 +77,9 @@ pub struct InboxView {
     pub next_turn: Vec<QueuedItem>,
     /// Items waiting for the next step.
     pub next_step: Vec<QueuedItem>,
+    /// The live event carried bounded previews; a snapshot is required before
+    /// editing. The snapshot response is not truncated.
+    pub truncated: bool,
 }
 
 impl InboxView {
@@ -85,7 +88,15 @@ impl InboxView {
         Self {
             next_turn: parse_list(value.get("nextTurn"), QueueTarget::NextTurn),
             next_step: parse_list(value.get("nextStep"), QueueTarget::NextStep),
+            truncated: false,
         }
+    }
+
+    /// Parse a live event projection and its `truncated` flag.
+    pub fn from_event(inbox: &Value, truncated: bool) -> Self {
+        let mut view = Self::from_value(inbox);
+        view.truncated = truncated;
+        view
     }
 
     /// Whether both pending lists are empty.

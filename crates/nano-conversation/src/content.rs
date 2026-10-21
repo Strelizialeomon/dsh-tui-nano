@@ -99,6 +99,17 @@ impl OrderedContent {
         })
     }
 
+    /// UTF-8 byte length of all text parts.
+    pub fn text_bytes(&self) -> usize {
+        self.parts
+            .iter()
+            .map(|part| match part {
+                ContentPart::Text { text } => text.len(),
+                ContentPart::Attachment { .. } => 0,
+            })
+            .sum()
+    }
+
     /// Whether both text and attachment parts are present.
     pub fn mixed(&self) -> bool {
         self.has_attachment() && self.has_text()

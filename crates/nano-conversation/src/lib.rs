@@ -45,5 +45,12 @@ pub const MAX_PREVIEW_BYTES: usize = 256 * 1024;
 /// Maximum live preview bytes retained across all attempts.
 pub const MAX_TOTAL_PREVIEW_BYTES: usize = 1024 * 1024;
 
-/// Maximum durable conversation items retained for display.
+/// Maximum durable conversation items retained for display. Bounded so a long
+/// session cannot grow the display projection without limit; the official log
+/// remains the full history.
 pub const MAX_HISTORY_ITEMS: usize = 2_000;
+
+/// Maximum UTF-8 bytes in one submission. Kept below the bridge's per-event
+/// frame budget (262144 bytes) so one prompt cannot close the subscription via
+/// its own inbox projection; the bridge rejects the same limit.
+pub const MAX_SUBMIT_TEXT_BYTES: usize = 32 * 1024;

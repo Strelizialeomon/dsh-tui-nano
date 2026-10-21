@@ -111,7 +111,9 @@ impl SessionAddress {
     pub fn wire_value(&self) -> serde_json::Value {
         let mut value = serde_json::json!({ "rootSessionId": self.root_session_id });
         if let Some(child) = &self.child {
+            value["parentSessionId"] = serde_json::Value::String(child.parent_session_id.clone());
             value["childSessionId"] = serde_json::Value::String(child.child_session_id.clone());
+            value["mode"] = serde_json::Value::String(child.mode.as_str().to_string());
         }
         value
     }

@@ -55,6 +55,8 @@ test('limits and error codes match the contract', () => {
   assert.equal(LIMITS.gracefulShutdownMs, 10000)
   assert.equal(LIMITS.termGraceMs, 3000)
   assert.equal(LIMITS.mountLockStaleMs, 30000)
+  assert.equal(LIMITS.maxSubmitTextBytes, 32768)
+  assert.equal(ERROR_CODES.get('nano/conversation/too-large'), 1018)
   assert.equal(ERROR_CODES.get('nano/generation-mismatch'), 1005)
   assert.equal(ERROR_CODES.get('nano/unsupported'), 1008)
   assert.equal(ERROR_CODES.get('nano/closed'), 1010)

@@ -1,0 +1,34 @@
+# 真实模型会话 2：运行中队列 / 插话 / 删除 / 停止 / 清空（2026-10-21）
+
+- 授权：用户在修订卡上明确授权。
+- 路由：deepseek-official / deepseek-chat；凭据来自用户真实 `~/.dsh`（未复制）；profile 安装到 `~/.dsh/profiles/dsh-tui-nano`。
+- 数据根/cwd：临时目录；会话 `session-39777d81-1264-41df-b521-c3671acf04b8`。
+- 提示：`运行 bash 命令 sleep 20; echo nano-queue-test，不要做其他事，命令结束前不要回复。`
+- 操作：运行中依次排队 A、Alt+S 转插话、排队 B、Alt+D 删除、排队 C、Esc 停止（保留队列）、Alt+X 清空剩余队列。
+
+## 屏幕统计（PTY 120×50）
+
+```json
+{"connected": true, "running": true, "queue_initial": 0, "queue_after_enqueue": 1, "queue_after_steer": 1, "queue_after_enqueue_b": 2, "queue_after_delete": 1, "queue_before_stop": 2, "idle_after_stop": true, "queue_after_stop": 2, "queue_after_clear": 0, "exit": 0}
+```
+
+注：插话后队列计数仍为 1，因为该条从 next-turn 移到 next-step，仍在官方 inbox；下方 splice 日志证明移动。
+
+## 官方会话日志摘录（仅 inbox splice / 工具结果 / 回合终态；已剔除系统指令与运行时上下文）
+
+```
+seq 3  next-turn insert  {rpcId: nano-e988..., text: 运行 bash 命令 sleep 20; ...}
+seq 5  next-turn remove 1
+seq 19 next-turn insert  {rpcId: nano-14fc..., text: queued A}
+seq 23 next-turn remove 1
+seq 24 next-step insert  {rpcId: nano-14fc..., text: queued A}   ← Alt+S 插话
+seq 25 next-turn insert  {rpcId: nano-767d..., text: queued B}
+seq 26 next-turn remove 1                                        ← Alt+D 删除
+seq 27 next-turn insert  {rpcId: nano-9bb1..., text: queued C}
+TOOL_RESULT isError=true error={name: AbortError, code: ABORTED} text=Error: tool call aborted
+TURN_END {kind: aborted, reason: {kind: user}}                  ← Esc 停止；队列保留
+seq 32 next-turn remove 1                                        ← Alt+X 清空
+seq 33 next-step remove 1                                        ← Alt+X 清空
+```
+
+结论：运行中 queue、steer、delete、停止保留队列、逐项清空都可在真实官方会话上复现；停止会 abort 正在运行的 bash 工具。`Alt+X` 在空闲时只逐项删除；运行中「清空并取消」的取消段未单独用真实运行回合验证。

@@ -1,0 +1,14 @@
+# 真实模型会话 1：文本 + 工具 + 正式历史（2026-10-21）
+
+- 授权：用户在合并闸卡上明确授权一次真实模型会话。
+- 路由：deepseek-official / deepseek-chat；凭据来自用户真实 `~/.dsh`（未复制）；profile 安装到 `~/.dsh/profiles/dsh-tui-nano`。
+- 数据根/cwd：临时目录；会话 `session-a49b2891-f1a2-4d24-8ec2-5066f115061f`。
+- 提示：`只回复 ok，并运行一次 bash 命令 echo nano-s02-tool；把命令输出原样回复。不要读取文件，不要请求审批。`
+- 以下为官方会话日志中与对话相关的原始事件摘录（已剔除系统指令、运行时上下文和其他注入消息；未包含凭据）。
+
+USER {"messageId": "4ba87de5-ce8a-4992-9bdb-7bc73f35c07f", "rpcId": "nano-8d521f85675d2032b55eb89161bcdafa", "text": "只回复 ok，并运行一次 bash 命令 echo nano-s02-tool；把命令输出原样回复。不要读取文件，不要请求审批。"}
+ASSISTANT {"seq": 19, "turn": 1, "step": 1, "text": ""}
+TOOL_CALL {"callId": "call_00_ET_YtqUryPIGS9bLbXqirEe5728", "name": "bash", "arguments": "{\"description\": \"Echo the requested test string\", \"command\": \"echo nano-s02-tool\"}"}
+TOOL_RESULT {"callId": "call_00_ET_YtqUryPIGS9bLbXqirEe5728", "isError": false, "text": "nano-s02-tool\n"}
+ASSISTANT {"seq": 27, "turn": 1, "step": 2, "text": "ok\nnano-s02-tool"}
+TURN_END {"turn": 1, "reason": {"kind": "completed"}}

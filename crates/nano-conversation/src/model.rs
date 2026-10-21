@@ -24,6 +24,13 @@ pub enum SubmitError {
     Empty,
     /// A subagent address is reserved for S12.
     ChildAddress,
+    /// An attachment has not completed its S06 upload receipt.
+    AttachmentNotReady,
+    /// The text exceeds the bounded submission size.
+    TooLarge {
+        /// Actual bytes.
+        bytes: usize,
+    },
 }
 
 impl std::fmt::Display for SubmitError {
@@ -31,6 +38,12 @@ impl std::fmt::Display for SubmitError {
         match self {
             Self::Empty => formatter.write_str("内容为空，草稿已保留"),
             Self::ChildAddress => formatter.write_str("子代理输入属于 S12，本版不提供"),
+            Self::AttachmentNotReady => formatter.write_str("附件尚未就绪，草稿已保留"),
+            Self::TooLarge { bytes } => write!(
+                formatter,
+                "内容过长（{bytes} 字节，上限 {}），草稿已保留",
+                crate::MAX_SUBMIT_TEXT_BYTES
+            ),
         }
     }
 }
@@ -155,12 +168,22 @@ impl ConversationModel {
             Ok(ConversationEvent::Status { address, status }) if address.matches(&self.address) => {
                 let changed = self.status != status;
                 self.status = status;
+                if status == ConversationStatus::Idle
+                    && self.submissions.retire_missing(&self.inbox, &self.history) > 0
+                {
+                    self.last_notice = Some("有消息在回合结束前未落盘，已标为未确认".to_string());
+                }
                 changed
             }
             Ok(ConversationEvent::Inbox { address, inbox }) if address.matches(&self.address) => {
                 let changed = self.inbox != inbox;
                 self.inbox = inbox;
                 self.submissions.reconcile(&self.inbox, &self.history);
+                if self.status == ConversationStatus::Idle
+                    && self.submissions.retire_missing(&self.inbox, &self.history) > 0
+                {
+                    self.last_notice = Some("有消息在回合结束前未落盘，已标为未确认".to_string());
+                }
                 changed
             }
             Ok(ConversationEvent::Stream { address, frame }) if address.matches(&self.address) => {
@@ -208,7 +231,8 @@ impl ConversationModel {
             .get("address")
             .ok_or_else(|| "snapshot.address is missing".to_string())
             .and_then(|address| {
-                serde_json::from_value(address.clone()).map_err(|error| format!("snapshot.address: {error}"))
+                serde_json::from_value(address.clone())
+                    .map_err(|error| format!("snapshot.address: {error}"))
             })?;
         if !address.matches(&self.address) {
             return Err("snapshot belongs to another conversation".to_string());
@@ -234,6 +258,11 @@ impl ConversationModel {
         self.seq = self.seq.max(seq);
         self.inbox = inbox;
         self.submissions.reconcile(&self.inbox, &self.history);
+        if status == ConversationStatus::Idle
+            && self.submissions.retire_missing(&self.inbox, &self.history) > 0
+        {
+            self.last_notice = Some("有消息在回合结束前未落盘，已标为未确认".to_string());
+        }
         Ok(())
     }
 
@@ -249,30 +278,67 @@ impl ConversationModel {
         text: &str,
         delivery: Delivery,
     ) -> Result<SubmitPlan, SubmitError> {
+        self.begin_submit_content(&crate::OrderedContent::from_text(text), delivery)
+    }
+
+    /// Prepare one submission from ordered content. S02 keeps the order and
+    /// the submission boundary; an unresolved S06 attachment is refused.
+    pub fn begin_submit_content(
+        &mut self,
+        content: &crate::OrderedContent,
+        delivery: Delivery,
+    ) -> Result<SubmitPlan, SubmitError> {
         if !self.address.is_root() {
             return Err(SubmitError::ChildAddress);
         }
-        if !text.chars().any(|character| !character.is_whitespace()) {
-            return Err(SubmitError::Empty);
+        if content.text_bytes() > crate::MAX_SUBMIT_TEXT_BYTES {
+            return Err(SubmitError::TooLarge {
+                bytes: content.text_bytes(),
+            });
         }
+        let blocks = content.to_wire_text_blocks().map_err(|error| match error {
+            crate::ContentError::Empty => SubmitError::Empty,
+            crate::ContentError::AttachmentNotReady => SubmitError::AttachmentNotReady,
+        })?;
+        let text = content.text();
         let request_id = new_request_id();
-        let params = self.submit_params(&request_id, text, delivery);
-        self.submissions.begin(request_id.clone(), text, delivery);
+        let params = json!({
+            "address": self.address.wire_value(),
+            "requestId": request_id,
+            "delivery": delivery.as_str(),
+            "content": blocks,
+        });
+        self.submissions
+            .begin(request_id.clone(), text.clone(), delivery);
         Ok(SubmitPlan {
             request_id,
-            text: text.to_string(),
+            text,
             delivery,
             params,
         })
     }
 
-    /// The `nano.conversation.submit` params for a plan.
+    /// The `nano.conversation.submit` params for a text plan.
     pub fn submit_params(&self, request_id: &str, text: &str, delivery: Delivery) -> Value {
+        self.submit_params_content(
+            request_id,
+            &[json!({ "type": "text", "text": text })],
+            delivery,
+        )
+    }
+
+    /// The `nano.conversation.submit` params for ordered wire blocks.
+    pub fn submit_params_content(
+        &self,
+        request_id: &str,
+        blocks: &[Value],
+        delivery: Delivery,
+    ) -> Value {
         json!({
             "address": self.address.wire_value(),
             "requestId": request_id,
             "delivery": delivery.as_str(),
-            "content": [{ "type": "text", "text": text }],
+            "content": blocks,
         })
     }
 
@@ -320,12 +386,24 @@ impl ConversationModel {
         self.submissions.reconcile(&self.inbox, &self.history);
     }
 
-    /// Live display projection.
+    /// Live display projection. An echo that is already visible as an official
+    /// queue item is omitted from the transcript feed; QueueDock owns it.
     pub fn live(&self) -> LiveView {
         LiveView {
             previews: self.previews.views(),
-            echoes: self.submissions.echoes(),
+            echoes: self
+                .submissions
+                .echoes()
+                .into_iter()
+                .filter(|echo| self.inbox.find_by_request(&echo.request_id).is_none())
+                .collect(),
         }
+    }
+
+    /// Drop live previews without touching submission facts; used when an
+    /// observable subscription is rebuilt.
+    pub fn drop_previews(&mut self) {
+        self.previews.clear();
     }
 
     /// Durable display items.
@@ -501,7 +579,77 @@ mod tests {
             "child",
             crate::SubagentMode::Continuable,
         ));
-        assert_eq!(model.begin_submit("x", Delivery::Queue), Err(SubmitError::ChildAddress));
+        assert_eq!(
+            model.begin_submit("x", Delivery::Queue),
+            Err(SubmitError::ChildAddress)
+        );
+    }
+
+    #[test]
+    fn ordered_content_keeps_block_order_and_rejects_unready_parts() {
+        let mut model = model();
+        let content = crate::OrderedContent::from_parts(vec![
+            crate::ContentPart::Text { text: "a".into() },
+            crate::ContentPart::Text { text: "b".into() },
+        ]);
+        let plan = model
+            .begin_submit_content(&content, Delivery::Queue)
+            .unwrap();
+        assert_eq!(
+            plan.params["content"],
+            json!([{"type": "text", "text": "a"}, {"type": "text", "text": "b"}])
+        );
+        let attached = crate::OrderedContent::from_parts(vec![
+            crate::ContentPart::Text { text: "a".into() },
+            crate::ContentPart::Attachment {
+                attachment_id: "s06-1".into(),
+            },
+        ]);
+        assert_eq!(
+            model.begin_submit_content(&attached, Delivery::Queue),
+            Err(SubmitError::AttachmentNotReady)
+        );
+        let huge = crate::OrderedContent::from_text("x".repeat(crate::MAX_SUBMIT_TEXT_BYTES + 1));
+        assert!(matches!(
+            model.begin_submit_content(&huge, Delivery::Queue),
+            Err(SubmitError::TooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn an_echo_in_the_official_inbox_is_not_drawn_in_the_feed() {
+        let mut model = model();
+        let plan = model.begin_submit("hello", Delivery::Queue).unwrap();
+        assert_eq!(model.live().echoes.len(), 1);
+        model.apply_event(
+            "conversation.inbox",
+            &json!({
+                "address": {"rootSessionId": "root"},
+                "inbox": {
+                    "nextTurn": [{
+                        "id": "m-1",
+                        "role": "user",
+                        "content": [{"type": "text", "text": "hello"}],
+                        "source": {"kind": "user", "rpcId": plan.request_id}
+                    }],
+                    "nextStep": []
+                }
+            }),
+        );
+        assert!(model.live().echoes.is_empty());
+        assert_eq!(model.inbox().len(), 1);
+    }
+
+    #[test]
+    fn an_idle_turn_marks_an_unlanded_accepted_echo_unknown() {
+        let mut model = model();
+        let plan = model.begin_submit("hello", Delivery::Queue).unwrap();
+        model.submit_accepted(&plan.request_id, "m-1", false);
+        model.apply_event(
+            "conversation.status",
+            &json!({"address": {"rootSessionId": "root"}, "status": "idle"}),
+        );
+        assert_eq!(model.live().echoes[0].state.label(), "未确认");
     }
 
     #[test]
@@ -513,6 +661,10 @@ mod tests {
         });
         assert!(!model.apply_event("conversation.status", &payload));
         assert_eq!(model.status(), crate::ConversationStatus::Idle);
-        let _ = WireAddress { root_session_id: "root".into(), child_session_id: None };
+        let _ = WireAddress {
+            root_session_id: "root".into(),
+            child_session_id: None,
+            ..WireAddress::default()
+        };
     }
 }

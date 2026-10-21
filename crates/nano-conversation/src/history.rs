@@ -266,10 +266,14 @@ impl ConversationHistory {
             .get("source")
             .and_then(|source| source.get("kind"))
             .and_then(Value::as_str);
-        let kind = if source_kind == Some("bash-mode") || is_synthetic_bash(&text) {
+        let kind = if source_kind == Some("bash-mode") {
             MessageKind::SyntheticBash
         } else if source_kind == Some("user") {
+            // A real user prompt is never reclassified by its text, even when
+            // it discusses the Nano bash tags.
             MessageKind::User
+        } else if source_kind.is_some() && is_synthetic_bash(&text) {
+            MessageKind::SyntheticBash
         } else {
             MessageKind::Injected
         };
@@ -457,6 +461,8 @@ mod tests {
             address: crate::events::WireAddress {
                 root_session_id: "root".into(),
                 child_session_id: None,
+                parent_session_id: None,
+                mode: None,
             },
             seq,
             event_type: event_type.into(),
@@ -557,7 +563,7 @@ mod tests {
                 "id": "u-1",
                 "role": "user",
                 "content": [{"type": "text", "text": "<bash-input>ls</bash-input>"}],
-                "source": {"kind": "user"}
+                "source": {"kind": "bash-mode"}
             }),
         ));
         let ConversationItem::Message(message) = &history.items()[0] else {
@@ -593,6 +599,25 @@ mod tests {
         ));
         assert_eq!(history.items().len(), 2);
         assert!(!matches!(history.items()[1], ConversationItem::Message(ref m) if m.is_error));
+    }
+
+    #[test]
+    fn a_user_message_that_mentions_bash_tags_is_still_a_user_message() {
+        let mut history = ConversationHistory::default();
+        history.apply(&event(
+            1,
+            "user/message",
+            json!({
+                "id": "u-1",
+                "role": "user",
+                "content": [{"type": "text", "text": "how does <bash-input> work?"}],
+                "source": {"kind": "user"}
+            }),
+        ));
+        let ConversationItem::Message(message) = &history.items()[0] else {
+            panic!("expected message");
+        };
+        assert_eq!(message.kind, MessageKind::User);
     }
 
     #[test]

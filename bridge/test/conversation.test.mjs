@@ -47,10 +47,14 @@ function fakeAgent({ status = 'idle', nextTurn = [], nextStep = [] } = {}) {
       nextStep,
       replace(messageId, message) {
         agent.calls.replace.push({ messageId, message })
+        agent.inbox.nextTurn = agent.inbox.nextTurn.map((item) => (item.id === messageId ? message : item))
+        agent.inbox.nextStep = agent.inbox.nextStep.map((item) => (item.id === messageId ? message : item))
         return true
       },
       remove(messageId) {
         agent.calls.remove.push(messageId)
+        agent.inbox.nextTurn = agent.inbox.nextTurn.filter((item) => item.id !== messageId)
+        agent.inbox.nextStep = agent.inbox.nextStep.filter((item) => item.id !== messageId)
         return true
       },
     },
@@ -236,6 +240,71 @@ test('child addresses and foreign roots are refused', () => {
     () => service.snapshot({ address: { rootSessionId: 'other' } }),
     (error) => error.code === 1011,
   )
+})
+
+test('oversized text is rejected before it reaches the official inbox', () => {
+  const { agent, service } = serviceFor()
+  const text = 'x'.repeat(32 * 1024 + 1)
+  assert.throws(
+    () => service.submit({ address, requestId: 'big', delivery: 'queue', content: [{ type: 'text', text }] }),
+    (error) => error.code === 1018,
+  )
+  assert.equal(agent.calls.followup.length, 0)
+})
+
+test('a deleted queued item no longer dedupes a later submit', () => {
+  const { service } = serviceFor()
+  const first = service.submit({
+    address,
+    requestId: 'r-1',
+    delivery: 'queue',
+    content: [{ type: 'text', text: 'one' }],
+  })
+  service.deleteQueued({ address, messageId: first.messageId })
+  const second = service.submit({
+    address,
+    requestId: 'r-1',
+    delivery: 'queue',
+    content: [{ type: 'text', text: 'two' }],
+  })
+  assert.equal(second.duplicate, false)
+  assert.notEqual(second.messageId, first.messageId)
+})
+
+test('a discarded inbox item clears its accepted request id', () => {
+  const { ctx, agent, service } = serviceFor()
+  const first = service.submit({
+    address,
+    requestId: 'r-1',
+    delivery: 'queue',
+    content: [{ type: 'text', text: 'one' }],
+  })
+  agent.inbox.nextTurn = []
+  ctx.emit('agent/inbox/discarded', {
+    agent,
+    message: { id: first.messageId, role: 'user', content: [], source: { kind: 'user', rpcId: 'r-1' } },
+  })
+  const second = service.submit({
+    address,
+    requestId: 'r-1',
+    delivery: 'queue',
+    content: [{ type: 'text', text: 'two' }],
+  })
+  assert.equal(second.duplicate, false)
+})
+
+test('a huge inbox projection is bounded and flagged truncated', () => {
+  const huge = {
+    id: 'm-big',
+    role: 'user',
+    content: [{ type: 'text', text: 'x'.repeat(300_000) }],
+    source: { kind: 'user', rpcId: 'r-big' },
+  }
+  const { service } = serviceFor({ nextTurn: [huge] })
+  const payload = service.inboxPayload()
+  assert.equal(payload.truncated, true)
+  assert.ok(Buffer.byteLength(JSON.stringify(payload), 'utf8') <= 262_144)
+  assert.equal(payload.inbox.nextTurn[0].id, 'm-big')
 })
 
 test('live Agent events publish absolute conversation projections', () => {

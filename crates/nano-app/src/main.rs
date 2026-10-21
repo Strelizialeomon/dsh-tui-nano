@@ -8,7 +8,10 @@ mod ui;
 use std::io::{self, Stdout};
 use std::time::Duration;
 
-use crossterm::event::{self, DisableBracketedPaste, EnableBracketedPaste, Event};
+use crossterm::event::{
+    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyboardEnhancementFlags,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -53,6 +56,7 @@ fn run() -> Result<(), String> {
         for event in link_events {
             dirty |= app.handle_link(event);
         }
+        dirty |= app.tick();
         if dirty {
             terminal
                 .terminal
@@ -96,29 +100,63 @@ fn run() -> Result<(), String> {
 struct TerminalGuard {
     terminal: Terminal<CrosstermBackend<Stdout>>,
     alt_screen: bool,
+    enhanced_keyboard: bool,
 }
 
 impl TerminalGuard {
     fn new(alt_screen: bool) -> io::Result<Self> {
         enable_raw_mode()?;
-        let mut stdout = io::stdout();
-        execute!(stdout, EnableBracketedPaste)?;
-        if alt_screen {
-            execute!(stdout, EnterAlternateScreen)?;
+        // Any failure after raw mode must restore it; the guard is not
+        // constructed yet, so its Drop cannot run.
+        let result = (|| -> io::Result<Self> {
+            let mut stdout = io::stdout();
+            execute!(stdout, EnableBracketedPaste)?;
+            if alt_screen {
+                execute!(stdout, EnterAlternateScreen)?;
+            }
+            // Disambiguate Shift+Enter from Enter where the terminal supports
+            // the kitty keyboard protocol. Ctrl+J remains the fallback.
+            let enhanced_keyboard =
+                crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
+            if enhanced_keyboard {
+                execute!(
+                    stdout,
+                    PushKeyboardEnhancementFlags(
+                        KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                            | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                    )
+                )?;
+            }
+            let backend = CrosstermBackend::new(io::stdout());
+            let terminal = Terminal::new(backend)?;
+            Ok(Self {
+                terminal,
+                alt_screen,
+                enhanced_keyboard,
+            })
+        })();
+        match result {
+            Ok(guard) => Ok(guard),
+            Err(error) => {
+                let _ = disable_raw_mode();
+                let mut stdout = io::stdout();
+                let _ = execute!(stdout, DisableBracketedPaste);
+                if alt_screen {
+                    let _ = execute!(stdout, LeaveAlternateScreen);
+                }
+                Err(error)
+            }
         }
-        let backend = CrosstermBackend::new(io::stdout());
-        let terminal = Terminal::new(backend)?;
-        Ok(Self {
-            terminal,
-            alt_screen,
-        })
     }
 }
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        let _ = disable_raw_mode();
         let mut stdout = io::stdout();
+        if self.enhanced_keyboard {
+            let _ = execute!(stdout, PopKeyboardEnhancementFlags);
+        }
+        let _ = disable_raw_mode();
         let _ = execute!(stdout, DisableBracketedPaste);
         if self.alt_screen {
             let _ = execute!(stdout, LeaveAlternateScreen);

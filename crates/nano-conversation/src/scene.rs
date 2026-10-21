@@ -7,6 +7,8 @@
 
 use std::collections::BTreeSet;
 
+use crate::address::SessionAddress;
+
 /// Stable feature identity, such as `S03` or `conversation`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FeatureId(pub String);
@@ -236,11 +238,13 @@ impl FocusStack {
     }
 }
 
-/// One main scene plus its focus stack.
+/// One main scene plus its focus stack, address, and reading anchor slot.
 #[derive(Debug, Clone)]
 pub struct SceneState {
     active: SceneId,
     focus: FocusStack,
+    address: Option<SessionAddress>,
+    reading_anchor: Option<String>,
 }
 
 impl SceneState {
@@ -249,7 +253,30 @@ impl SceneState {
         Self {
             active: SceneId::conversation(),
             focus: FocusStack::default(),
+            address: None,
+            reading_anchor: None,
         }
+    }
+
+    /// Address currently displayed by the scene. Switching scenes keeps it;
+    /// a caller that changes conversations updates it explicitly.
+    pub fn address(&self) -> Option<&SessionAddress> {
+        self.address.as_ref()
+    }
+
+    /// Bind the scene to one conversation address.
+    pub fn set_address(&mut self, address: SessionAddress) {
+        self.address = Some(address);
+    }
+
+    /// Reading anchor slot consumed by S03; S02 preserves it across switches.
+    pub fn reading_anchor(&self) -> Option<&str> {
+        self.reading_anchor.as_deref()
+    }
+
+    /// Store a reading anchor without interpreting it.
+    pub fn set_reading_anchor(&mut self, anchor: Option<String>) {
+        self.reading_anchor = anchor;
     }
 
     /// Active scene.
@@ -269,9 +296,18 @@ impl SceneState {
 
     /// Switch the main scene and reset focus to input. Overlays are popped;
     /// the address-bound drafts are owned by the draft store, not the scene.
+    /// The address and reading anchor survive a scene switch.
     pub fn switch(&mut self, scene: SceneId) {
         self.active = scene;
         self.focus.reset(FocusId::input());
+    }
+
+    /// Switch to a scene bound to a different address, dropping the old
+    /// reading anchor because it belonged to the old transcript.
+    pub fn switch_to(&mut self, scene: SceneId, address: SessionAddress) {
+        self.address = Some(address);
+        self.reading_anchor = None;
+        self.switch(scene);
     }
 }
 
@@ -289,6 +325,24 @@ mod tests {
         assert_eq!(stack.pop().unwrap().0, "queue");
         assert!(stack.input_focused());
         assert!(stack.pop().is_none());
+    }
+
+    #[test]
+    fn scene_switch_keeps_address_and_anchor_but_change_of_address_clears_the_anchor() {
+        let mut scene = SceneState::conversation();
+        scene.set_address(crate::address::SessionAddress::root("root"));
+        scene.set_reading_anchor(Some("msg-7".to_string()));
+        scene.focus_mut().push(FocusId::queue());
+        scene.switch(SceneId::new("transcript"));
+        assert!(scene.focus().input_focused());
+        assert_eq!(scene.address().unwrap().root_session_id, "root");
+        assert_eq!(scene.reading_anchor(), Some("msg-7"));
+        scene.switch_to(
+            SceneId::conversation(),
+            crate::address::SessionAddress::root("other"),
+        );
+        assert_eq!(scene.address().unwrap().root_session_id, "other");
+        assert!(scene.reading_anchor().is_none());
     }
 
     #[test]

@@ -39,9 +39,9 @@
 --- SCREEN ---
  nano  work · 已连接 · 空闲 · seq 8 · 队列 0
 回合 （失败）
-agent "session-c5962c50-fc7e-4945-8d1c-fb82f794d1ca" has no provider/model: set AgentOptions.provider and AgentOptions.m
+agent "session-389a5e7c-3cfc-4121-b53d-abd6e7829a6c" has no provider/model: set AgentOptions.provider and AgentOptions.m
 odel or supply both via the agent/request waterfall
-你（已接收）
+你（未确认）
 第一行
 second line
 
@@ -73,7 +73,7 @@ second line
 
 
 
-┌ 输入 · Enter 发送/排队，Alt+Enter 插话，Shift+Enter 换行 ────────────────────────────────────────────────────────────┐
+┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） ─────────────────────────────────────────┐
 │                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-Enter 发送/排队 · Alt+Enter 插话 · Shift+Enter 换行 · Esc 停止 · Ctrl+C 退出
+Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行 · Esc 停止 · Ctrl+Y 复制原文 · Ctrl+C 退出

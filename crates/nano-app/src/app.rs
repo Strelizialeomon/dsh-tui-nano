@@ -1,18 +1,19 @@
 //! Application state and key handling.
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use nano_conversation::{
     CommandRouter, ConversationModel, Delivery, DraftStore, FeatureContribution, FeatureRegistry,
-    FocusId, InputBuffer, InputEvent, InputOutcome, InputRoute, SceneId, SceneState,
-    SessionAddress, SubmitError,
+    FocusId, InputBuffer, InputEvent, InputOutcome, InputRoute, OrderedContent, SceneId,
+    SceneState, SessionAddress, SubmitError,
 };
 use nano_runtime::Hello;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::cli::Cli;
-use crate::link::{HostLink, LinkEvent};
+use crate::link::{HostLink, LinkEvent, RequestError, RequestErrorKind};
 
 /// Connection lifecycle as the UI may claim it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,6 +69,10 @@ pub enum Pending {
     Cancel,
     /// Read the absolute baseline.
     Snapshot,
+    /// Rebuild the observable subscription after `streamEnded failed`.
+    Resubscribe,
+    /// One item of a clear-and-stop batch.
+    ClearStopDelete,
 }
 
 /// One frame of application state.
@@ -114,6 +119,17 @@ pub struct App {
     pub replay_truncated: bool,
     /// A stop was admitted but the official idle fact has not arrived yet.
     pub stop_pending: bool,
+    /// When to rebuild a closed subscription.
+    pub resubscribe_at: Option<Instant>,
+    /// A resubscribe request is in flight.
+    pub resubscribing: bool,
+    /// Number of queued deletes still pending in a clear-and-stop batch.
+    pub clear_stop_remaining: usize,
+    /// Whether the clear-and-stop batch cancels the active turn after deleting.
+    pub clear_stop_cancel: bool,
+    /// After a truncated queue projection, reopen this item's editor once a
+    /// full snapshot arrives.
+    pub edit_after_snapshot: Option<String>,
 }
 
 impl App {
@@ -124,12 +140,14 @@ impl App {
         registry.register(
             FeatureContribution::new("conversation", SceneId::conversation()).with_key("enter"),
         );
+        let mut scene = SceneState::conversation();
+        scene.set_address(address.clone());
         Self {
             cli,
             model: ConversationModel::new(address.clone()),
             drafts: DraftStore::new(address),
             registry,
-            scene: SceneState::conversation(),
+            scene,
             link: None,
             connection: Connection::Starting,
             ready: false,
@@ -146,6 +164,11 @@ impl App {
             hello: None,
             replay_truncated,
             stop_pending: false,
+            resubscribe_at: None,
+            resubscribing: false,
+            clear_stop_remaining: 0,
+            clear_stop_cancel: false,
+            edit_after_snapshot: None,
         }
     }
 
@@ -160,12 +183,35 @@ impl App {
             return false;
         }
         self.clear_transient_status();
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('q'))
+        {
+            self.should_quit = true;
+            return true;
+        }
+        if matches!(key.code, KeyCode::PageUp) {
+            self.scroll_back = self
+                .scroll_back
+                .saturating_add(self.feed_height.saturating_sub(1).max(1));
+            return true;
+        }
+        if matches!(key.code, KeyCode::PageDown) {
+            self.scroll_back = self
+                .scroll_back
+                .saturating_sub(self.feed_height.saturating_sub(1).max(1));
+            return true;
+        }
+        if matches!(key.code, KeyCode::Tab) {
+            self.toggle_focus();
+            return true;
+        }
+        // Only the top focus receives keys. Queue focus must not leak Alt or
+        // control shortcuts into the hidden input draft.
+        if !self.scene.focus().input_focused() {
+            return self.handle_queue_key(key);
+        }
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
-                KeyCode::Char('c') | KeyCode::Char('q') => {
-                    self.should_quit = true;
-                    return true;
-                }
                 KeyCode::Char('u') => {
                     self.drafts.current_mut().clear();
                     return true;
@@ -185,18 +231,6 @@ impl App {
                 _ => {}
             }
             return false;
-        }
-        if matches!(key.code, KeyCode::PageUp) {
-            self.scroll_back = self
-                .scroll_back
-                .saturating_add(self.feed_height.saturating_sub(1).max(1));
-            return true;
-        }
-        if matches!(key.code, KeyCode::PageDown) {
-            self.scroll_back = self
-                .scroll_back
-                .saturating_sub(self.feed_height.saturating_sub(1).max(1));
-            return true;
         }
         if key.modifiers.contains(KeyModifiers::ALT) {
             match key.code {
@@ -220,19 +254,16 @@ impl App {
                     self.steer_selected_queue();
                     return true;
                 }
+                KeyCode::Char('x') | KeyCode::Char('X') => {
+                    self.clear_and_stop();
+                    return true;
+                }
                 KeyCode::Enter => {
                     self.submit_draft(Delivery::Steer);
                     return true;
                 }
                 _ => {}
             }
-        }
-        if matches!(key.code, KeyCode::Tab) {
-            self.toggle_focus();
-            return true;
-        }
-        if !self.scene.focus().input_focused() {
-            return self.handle_queue_key(key);
         }
         if matches!(key.code, KeyCode::Esc) {
             if self.edit_target.is_some() {
@@ -247,10 +278,20 @@ impl App {
                 self.drafts.current_mut().handle(&InputEvent::Newline);
                 return true;
             }
-            if self.edit_target.is_some() {
-                self.apply_queue_edit();
-            } else {
-                self.submit_draft(Delivery::Queue);
+            // The input model owns the IME gate: while composing, Enter is
+            // ignored here and belongs to the terminal input method.
+            match self.drafts.current_mut().handle(&InputEvent::Enter) {
+                InputOutcome::Send => {
+                    if self.edit_target.is_some() {
+                        self.apply_queue_edit();
+                    } else {
+                        self.submit_draft(Delivery::Queue);
+                    }
+                }
+                InputOutcome::RejectedEmpty => {
+                    self.error = Some("内容为空，草稿已保留".to_string());
+                }
+                _ => {}
             }
             return true;
         }
@@ -338,6 +379,9 @@ impl App {
                     self.stop_pending = false;
                     self.notice = Some("官方已确认停止".to_string());
                 }
+                if self.model.inbox().is_empty() && !self.scene.focus().input_focused() {
+                    self.scene.focus_mut().pop();
+                }
                 if changed {
                     self.clamp_queue_selection();
                 }
@@ -345,13 +389,20 @@ impl App {
             }
             HostEvent::StreamEnded(params) => {
                 if params.outcome == nano_runtime::protocol::StreamOutcome::Failed {
-                    self.ready = false;
-                    self.connection = Connection::Disconnected;
-                    self.error = Some(format!(
-                        "订阅被关闭（{}）；请重启窗口以重新建立会话",
-                        params.reason.unwrap_or_else(|| "慢消费者".to_string())
-                    ));
-                    self.model.mark_disconnected();
+                    if self.ready {
+                        // The host is alive; only the observable subscription
+                        // was closed. Rebuild it from the last applied seq.
+                        self.notice = Some(format!(
+                            "订阅被关闭（{}）；正在重建",
+                            params.reason.unwrap_or_else(|| "慢消费者".to_string())
+                        ));
+                        self.resubscribe_at = Some(Instant::now() + Duration::from_millis(500));
+                        self.model.drop_previews();
+                    } else {
+                        self.connection = Connection::Disconnected;
+                        self.error = Some("订阅已关闭".to_string());
+                        self.model.mark_disconnected();
+                    }
                 }
                 true
             }
@@ -359,10 +410,13 @@ impl App {
                 self.ready = false;
                 self.connection = Connection::Disconnected;
                 self.stop_pending = false;
+                self.resubscribe_at = None;
+                self.resubscribing = false;
+                let root = &self.model.address().root_session_id;
                 self.error = Some(if lost {
-                    "宿主进程已退出".to_string()
+                    format!("宿主进程已退出（会话 {root}）；重启时用 --resume {root}")
                 } else {
-                    "通信已断开".to_string()
+                    format!("通信已断开（会话 {root}）")
                 });
                 self.model.mark_disconnected();
                 true
@@ -383,7 +437,7 @@ impl App {
         }
     }
 
-    fn handle_request_done(&mut self, id: u64, result: Result<Value, String>) {
+    fn handle_request_done(&mut self, id: u64, result: Result<Value, RequestError>) {
         let Some(pending) = self.pending.remove(&id) else {
             return;
         };
@@ -412,27 +466,34 @@ impl App {
                         self.restore_draft(&request_id, &text);
                     }
                 }
-                Err(message) if timed_out(&message) => {
-                    self.submit_backups.remove(&request_id);
-                    self.model.submit_unknown(&request_id, message);
-                }
-                Err(message) => {
-                    self.model.submit_failed(&request_id, message.clone());
+                Err(error)
+                    if matches!(error.kind, RequestErrorKind::Rpc | RequestErrorKind::Local) =>
+                {
+                    self.model.submit_failed(&request_id, error.message.clone());
                     self.restore_draft(&request_id, &text);
-                    self.error = Some(format!("发送失败：{message}"));
+                    self.error = Some(format!("发送失败：{}", error.message));
+                }
+                Err(error) => {
+                    // A transport failure may have delivered the prompt. Never
+                    // claim failure or restore the draft for an unknown result.
+                    self.submit_backups.remove(&request_id);
+                    self.model.submit_unknown(&request_id, error.message);
                 }
             },
             Pending::Edit { message_id } => match result {
                 Ok(_) => {
                     self.edit_target = None;
-                    self.edit_backup = None;
-                    self.drafts.current_mut().take();
+                    if let Some(backup) = self.edit_backup.take() {
+                        *self.drafts.current_mut() = backup;
+                    } else {
+                        self.drafts.current_mut().take();
+                    }
                     self.scene.focus_mut().reset(FocusId::input());
                     self.notice = Some(format!("队列项 {message_id} 已更新"));
                 }
-                Err(message) => {
-                    self.error = Some(format!("编辑失败：{message}"));
-                    if message.contains("queue-item-not-found") {
+                Err(error) => {
+                    self.error = Some(format!("编辑失败：{}", error.message));
+                    if error.message.contains("queue-item-not-found") {
                         self.refresh_snapshot();
                     }
                 }
@@ -441,8 +502,8 @@ impl App {
                 Ok(_) => {
                     self.notice = Some(format!("队列项 {message_id} 已删除（持久取消）"));
                 }
-                Err(message) => {
-                    self.error = Some(format!("删除失败：{message}"));
+                Err(error) => {
+                    self.error = Some(format!("删除失败：{}", error.message));
                     self.refresh_snapshot();
                 }
             },
@@ -450,8 +511,8 @@ impl App {
                 Ok(_) => {
                     self.notice = Some(format!("队列项 {message_id} 已转为插话（best-effort）"));
                 }
-                Err(message) => {
-                    self.error = Some(format!("插话失败：{message}"));
+                Err(error) => {
+                    self.error = Some(format!("插话失败：{}", error.message));
                     self.refresh_snapshot();
                 }
             },
@@ -459,9 +520,9 @@ impl App {
                 Ok(_) => {
                     self.notice = Some("已请求停止；等待官方 idle 事实".to_string());
                 }
-                Err(message) => {
+                Err(error) => {
                     self.stop_pending = false;
-                    self.error = Some(format!("停止失败：{message}"));
+                    self.error = Some(format!("停止失败：{}", error.message));
                 }
             },
             Pending::Snapshot => match result {
@@ -469,15 +530,47 @@ impl App {
                     Ok(()) => {
                         self.model.reconcile();
                         self.clamp_queue_selection();
+                        if self.model.status() == nano_conversation::ConversationStatus::Idle {
+                            self.stop_pending = false;
+                        }
+                        if self.edit_after_snapshot.take().is_some() {
+                            self.begin_queue_edit();
+                        }
                     }
                     Err(message) => {
                         self.error = Some(format!("快照无效：{message}"));
                     }
                 },
-                Err(message) => {
-                    self.error = Some(format!("读取会话状态失败：{message}"));
+                Err(error) => {
+                    self.error = Some(format!("读取会话状态失败：{}", error.message));
                 }
             },
+            Pending::Resubscribe => {
+                self.resubscribing = false;
+                match result {
+                    Ok(_) => {
+                        self.notice = Some("订阅已重建；正在对齐官方 baseline".to_string());
+                        self.refresh_snapshot();
+                    }
+                    Err(error) => {
+                        self.ready = false;
+                        self.connection = Connection::Disconnected;
+                        self.error = Some(format!("订阅重建失败：{}", error.message));
+                        self.model.mark_disconnected();
+                    }
+                }
+            }
+            Pending::ClearStopDelete => {
+                if let Err(error) = &result {
+                    if error.message.contains("queue-item-not-found") {
+                        self.refresh_snapshot();
+                    }
+                }
+                self.clear_stop_remaining = self.clear_stop_remaining.saturating_sub(1);
+                if self.clear_stop_remaining == 0 {
+                    self.finish_clear_stop();
+                }
+            }
         }
     }
 
@@ -491,8 +584,18 @@ impl App {
     }
 
     fn restore_draft(&mut self, request_id: &str, text: &str) {
-        if self.submit_backups.remove(request_id).is_some() && self.drafts.current().is_empty() {
+        if self.submit_backups.remove(request_id).is_none() {
+            return;
+        }
+        let current = self.drafts.current().text().to_string();
+        if current.is_empty() {
             self.drafts.current_mut().set_text(text);
+        } else if current != text && !current.starts_with(text) {
+            // The user typed while the request was in flight. Keep both the
+            // failed text and the new draft instead of silently dropping one.
+            self.drafts
+                .current_mut()
+                .set_text(format!("{text}\n\n{current}"));
         }
     }
 
@@ -503,7 +606,7 @@ impl App {
             self.error = Some("内容为空，草稿已保留".to_string());
             return;
         }
-        let route = CommandRouter::new(&self.registry, SceneId::conversation()).route(&text);
+        let route = CommandRouter::new(&self.registry, self.scene.active().clone()).route(&text);
         match route {
             InputRoute::Prompt { .. } => {}
             InputRoute::Bash { .. } => {
@@ -531,7 +634,10 @@ impl App {
             self.error = Some("正在停止，等待官方 idle；草稿已保留".to_string());
             return;
         }
-        match self.model.begin_submit(&text, delivery) {
+        match self
+            .model
+            .begin_submit_content(&OrderedContent::from_text(&text), delivery)
+        {
             Ok(plan) => {
                 self.drafts.current_mut().take();
                 self.submit_backups
@@ -559,8 +665,8 @@ impl App {
             Err(SubmitError::Empty) => {
                 self.error = Some("内容为空，草稿已保留".to_string());
             }
-            Err(SubmitError::ChildAddress) => {
-                self.error = Some("子代理输入属于 S12，本版不提供".to_string());
+            Err(error) => {
+                self.error = Some(error.to_string());
             }
         }
     }
@@ -591,6 +697,10 @@ impl App {
             self.notice = Some("当前没有活动回合".to_string());
             return;
         }
+        if self.stop_pending {
+            self.notice = Some("已在停止中，等待官方 idle".to_string());
+            return;
+        }
         let Some(link) = &self.link else {
             return;
         };
@@ -619,6 +729,17 @@ impl App {
     }
 
     fn begin_queue_edit(&mut self) {
+        if self.edit_target.is_some() {
+            self.notice = Some("已经在编辑队列项；Enter 应用，Esc 取消".to_string());
+            return;
+        }
+        if self.model.inbox().truncated {
+            let selected = self.selected_queue_item().map(|item| item.id.clone());
+            self.edit_after_snapshot = selected;
+            self.notice = Some("队列投影被截断；正在读取完整快照".to_string());
+            self.refresh_snapshot();
+            return;
+        }
         let Some(item) = self.selected_queue_item().cloned() else {
             self.error = Some("没有选中的队列项".to_string());
             return;
@@ -766,6 +887,10 @@ impl App {
     }
 
     fn handle_queue_key(&mut self, key: KeyEvent) -> bool {
+        if self.model.inbox().is_empty() {
+            self.scene.focus_mut().pop();
+            return true;
+        }
         match key.code {
             KeyCode::Up => {
                 self.select_queue_previous();
@@ -775,7 +900,7 @@ impl App {
                 self.select_queue_next();
                 true
             }
-            KeyCode::Enter => {
+            KeyCode::Enter if key.modifiers.is_empty() => {
                 self.begin_queue_edit();
                 true
             }
@@ -787,11 +912,11 @@ impl App {
                 self.steer_selected_queue();
                 true
             }
-            KeyCode::Esc => {
-                self.scene.focus_mut().pop();
+            KeyCode::Char('x') | KeyCode::Char('X') => {
+                self.clear_and_stop();
                 true
             }
-            KeyCode::Tab => {
+            KeyCode::Esc => {
                 self.scene.focus_mut().pop();
                 true
             }
@@ -809,6 +934,10 @@ impl App {
         if self.stop_pending {
             return "停止中：等待官方 idle 事实（草稿保留）".to_string();
         }
+        if !self.scene.focus().input_focused() {
+            return "队列焦点：↑↓ 选择 · Enter 编辑 · d 删除 · s 插话 · x 清空并停止 · Tab 返回"
+                .to_string();
+        }
         if let Some(error) = &self.error {
             return error.clone();
         }
@@ -818,12 +947,115 @@ impl App {
         if let Some(message_id) = &self.edit_target {
             return format!("编辑队列项 {message_id}：Enter 应用，Esc 取消");
         }
-        "Enter 发送/排队 · Alt+Enter 插话 · Shift+Enter 换行 · Esc 停止 · Ctrl+Y 复制原文 · Ctrl+C 退出".to_string()
+        "Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行 · Esc 停止 · Ctrl+Y 复制原文 · Ctrl+C 退出"
+            .to_string()
     }
 }
 
-fn timed_out(message: &str) -> bool {
-    message.starts_with("timeout:")
+impl App {
+    /// Time-based work: rebuild a closed observable subscription.
+    pub fn tick(&mut self) -> bool {
+        let Some(at) = self.resubscribe_at else {
+            return false;
+        };
+        if Instant::now() < at {
+            return false;
+        }
+        self.resubscribe_at = None;
+        self.send_resubscribe();
+        true
+    }
+
+    fn send_resubscribe(&mut self) {
+        if !self.ready || self.resubscribing {
+            return;
+        }
+        let Some(link) = &self.link else {
+            return;
+        };
+        let params = json!({
+            "address": self.model.address().wire_value(),
+            "kinds": [
+                "session.event",
+                "conversation.status",
+                "conversation.inbox",
+                "conversation.stream"
+            ],
+            "fromSeq": self.model.seq().saturating_add(1),
+        });
+        match link.request("nano.subscribe", params) {
+            Ok(id) => {
+                self.resubscribing = true;
+                self.pending.insert(id, Pending::Resubscribe);
+            }
+            Err(message) => {
+                self.ready = false;
+                self.connection = Connection::Disconnected;
+                self.error = Some(format!("订阅重建失败：{message}"));
+                self.model.mark_disconnected();
+            }
+        }
+    }
+
+    /// Per-item delete then cancel: the official cancel hardcodes
+    /// `keepInbox: true`, so clearing is necessarily a composite best-effort
+    /// action with a claim race.
+    pub fn clear_and_stop(&mut self) {
+        if !self.ready {
+            self.error = Some("宿主未就绪".to_string());
+            return;
+        }
+        let ids: Vec<String> = self
+            .model
+            .inbox()
+            .iter()
+            .map(|item| item.id.clone())
+            .collect();
+        let cancel_after = self.model.status() == nano_conversation::ConversationStatus::Running;
+        if ids.is_empty() {
+            if cancel_after {
+                self.stop_turn();
+            } else {
+                self.notice = Some("队列已空".to_string());
+            }
+            return;
+        }
+        let Some(link) = &self.link else {
+            return;
+        };
+        self.clear_stop_remaining = 0;
+        self.clear_stop_cancel = cancel_after;
+        self.notice = Some(format!(
+            "正在逐项清空队列（{} 项）{}",
+            ids.len(),
+            if cancel_after { "，随后停止" } else { "" }
+        ));
+        for message_id in &ids {
+            let params = self.model.queue_delete_params(message_id);
+            match link.request("nano.conversation.deleteQueued", params) {
+                Ok(id) => {
+                    self.clear_stop_remaining += 1;
+                    self.pending.insert(id, Pending::ClearStopDelete);
+                }
+                Err(message) => {
+                    self.error = Some(format!("删除请求未能发出：{message}"));
+                }
+            }
+        }
+        if self.clear_stop_remaining == 0 {
+            self.finish_clear_stop();
+        }
+    }
+
+    fn finish_clear_stop(&mut self) {
+        let cancel = self.clear_stop_cancel;
+        self.clear_stop_cancel = false;
+        if cancel && self.model.status() == nano_conversation::ConversationStatus::Running {
+            self.stop_turn();
+        } else {
+            self.notice = Some("队列已逐项清空（持久取消；已 claim 的步骤不保证回滚）".to_string());
+        }
+    }
 }
 
 /// Minimal standard base64 for the OSC 52 clipboard payload.
@@ -995,6 +1227,157 @@ mod tests {
         assert_eq!(base64(b"fo"), "Zm8=");
         assert_eq!(base64(b"foo"), "Zm9v");
         assert_eq!(base64("第一行".as_bytes()), "56ys5LiA6KGM");
+    }
+
+    #[test]
+    fn a_too_large_submission_is_rejected_before_it_reaches_the_host() {
+        let mut app = app();
+        app.ready = true;
+        let oversized = "x".repeat(nano_conversation::MAX_SUBMIT_TEXT_BYTES + 1);
+        app.drafts.current_mut().set_text(oversized.clone());
+        app.submit_draft(Delivery::Queue);
+        assert_eq!(app.drafts.current().text(), oversized);
+        assert!(app.error.as_deref().unwrap().contains("内容过长"));
+    }
+
+    #[test]
+    fn queue_focus_never_submits_the_hidden_input_draft() {
+        let mut app = app();
+        app.drafts.current_mut().set_text("hidden draft");
+        queue_event(&mut app, "queued");
+        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert!(!app.scene.focus().input_focused());
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
+        assert_eq!(app.drafts.current().text(), "hidden draft");
+        assert!(app.model.live().echoes.is_empty());
+    }
+
+    #[test]
+    fn an_empty_inbox_drops_queue_focus() {
+        let mut app = app();
+        queue_event(&mut app, "queued");
+        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert!(!app.scene.focus().input_focused());
+        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::Event(
+            nano_runtime::protocol::EventParams {
+                runtime_id: "rt".into(),
+                generation: 1,
+                subscription_id: "sub-1".into(),
+                sequence: 2,
+                kind: "conversation.inbox".into(),
+                payload: json!({
+                    "address": {"rootSessionId": "root"},
+                    "inbox": {"nextTurn": [], "nextStep": []}
+                }),
+            },
+        )));
+        assert!(app.scene.focus().input_focused());
+    }
+
+    #[test]
+    fn repeated_alt_e_does_not_overwrite_the_edit_backup() {
+        let mut app = app();
+        app.drafts.current_mut().set_text("original");
+        queue_event(&mut app, "queued");
+        app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::ALT));
+        app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::ALT));
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.drafts.current().text(), "original");
+    }
+
+    #[test]
+    fn a_failed_submission_keeps_both_the_failed_text_and_new_input() {
+        let mut app = app();
+        app.drafts.current_mut().set_text("new draft");
+        app.submit_backups
+            .insert("r-1".into(), "failed text".into());
+        app.restore_draft("r-1", "failed text");
+        assert_eq!(app.drafts.current().text(), "failed text\n\nnew draft");
+    }
+
+    #[test]
+    fn a_snapshot_idle_clears_a_stuck_stop() {
+        let mut app = app();
+        app.ready = true;
+        app.stop_pending = true;
+        app.pending.insert(7, Pending::Snapshot);
+        app.handle_request_done(
+            7,
+            Ok(json!({
+                "address": {"rootSessionId": "root"},
+                "seq": 1,
+                "status": "idle",
+                "inbox": {"nextTurn": [], "nextStep": []}
+            })),
+        );
+        assert!(!app.stop_pending);
+    }
+
+    #[test]
+    fn a_failed_stream_schedules_a_rebuild_without_dropping_the_connection() {
+        let mut app = app();
+        app.ready = true;
+        app.connection = Connection::Ready;
+        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::StreamEnded(
+            nano_runtime::protocol::StreamEndedParams {
+                runtime_id: "rt".into(),
+                generation: 1,
+                subscription_id: "sub-1".into(),
+                outcome: nano_runtime::protocol::StreamOutcome::Failed,
+                reason: Some("slow".into()),
+            },
+        )));
+        assert_eq!(app.connection, Connection::Ready);
+        assert!(app.resubscribe_at.is_some());
+    }
+
+    #[test]
+    fn an_unknown_transport_result_is_not_reported_as_a_failed_send() {
+        let mut app = app();
+        app.ready = true;
+        let plan = app.model.begin_submit("text", Delivery::Queue).unwrap();
+        app.submit_backups
+            .insert(plan.request_id.clone(), "text".into());
+        app.pending.insert(
+            9,
+            Pending::Submit {
+                request_id: plan.request_id.clone(),
+                text: "text".into(),
+            },
+        );
+        app.handle_request_done(
+            9,
+            Err(RequestError {
+                kind: RequestErrorKind::Unknown,
+                message: "transport closed".into(),
+            }),
+        );
+        assert!(app.drafts.current().is_empty());
+        assert!(app.model.submissions().get(&plan.request_id).is_some());
+    }
+
+    #[test]
+    fn a_local_rejection_restores_the_draft() {
+        let mut app = app();
+        app.ready = true;
+        let plan = app.model.begin_submit("text", Delivery::Queue).unwrap();
+        app.submit_backups
+            .insert(plan.request_id.clone(), "text".into());
+        app.pending.insert(
+            9,
+            Pending::Submit {
+                request_id: plan.request_id.clone(),
+                text: "text".into(),
+            },
+        );
+        app.handle_request_done(
+            9,
+            Err(RequestError {
+                kind: RequestErrorKind::Local,
+                message: "not sent".into(),
+            }),
+        );
+        assert_eq!(app.drafts.current().text(), "text");
     }
 
     #[test]

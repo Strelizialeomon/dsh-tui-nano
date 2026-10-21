@@ -41,7 +41,6 @@ pub struct Cli {
     pub help: bool,
 }
 
-
 impl Cli {
     /// Parse process arguments.
     pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Self, String> {
@@ -162,8 +161,8 @@ nano — 极简 DeepSeek Harness 终端界面
   -h, --help               显示本帮助
 
 按键：
-  Enter 发送/排队；Alt+Enter 插话；Shift+Enter 换行
+  Enter 发送/排队；Alt+Enter 插话；Ctrl+J 换行（Shift+Enter 需终端支持键盘增强）
   Esc 停止当前回合（保留队列）；Ctrl+Y 复制草稿原文（OSC 52）；Ctrl+C 退出
-  Alt+↑/↓ 选择队列项；Alt+E 编辑；Alt+D 删除；Alt+S 转为插话
+  Alt+↑/↓ 选择队列项；Alt+E 编辑；Alt+D 删除；Alt+S 转为插话；Alt+X 清空并停止
   PageUp/PageDown 翻阅记录；Ctrl+End 回到底部
 ";

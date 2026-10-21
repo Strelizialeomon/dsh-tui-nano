@@ -15,6 +15,28 @@ use nano_runtime::{
 };
 use serde_json::Value;
 
+/// How a request failed, for deciding whether a result is explicitly failed or
+/// merely unknown. Only an RPC error or a local pre-send rejection is a fact;
+/// a transport failure may have delivered the request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestErrorKind {
+    /// The host answered with a JSON-RPC error.
+    Rpc,
+    /// The request never left this process.
+    Local,
+    /// The request may or may not have reached the host.
+    Unknown,
+}
+
+/// One request failure.
+#[derive(Debug, Clone)]
+pub struct RequestError {
+    /// Classification used by the submission state machine.
+    pub kind: RequestErrorKind,
+    /// Sanitized description.
+    pub message: String,
+}
+
 /// One message from the background link.
 #[derive(Debug)]
 pub enum LinkEvent {
@@ -31,8 +53,8 @@ pub enum LinkEvent {
     RequestDone {
         /// Caller-generated request id.
         id: u64,
-        /// Result or a sanitized error.
-        result: Result<Value, String>,
+        /// Result or a classified error.
+        result: Result<Value, RequestError>,
     },
     /// The link cannot continue.
     Fatal(String),
@@ -129,7 +151,7 @@ impl HostLink {
             while let Ok((id, method, params)) = command_rx.recv() {
                 let result = command_host
                     .request(&method, params)
-                    .map_err(describe_request_error);
+                    .map_err(classify_request_error);
                 if command_events
                     .send(LinkEvent::RequestDone { id, result })
                     .is_err()
@@ -173,10 +195,24 @@ fn describe_host_error(error: &HostError) -> String {
     format!("{error}")
 }
 
-/// Prefix a timeout so the app can mark the result unknown instead of failed.
-fn describe_request_error(error: HostError) -> String {
-    match &error {
-        HostError::Timeout(detail) => format!("timeout: {detail}"),
-        _ => describe_host_error(&error),
+/// Classify a request failure without losing the fact that it may have been
+/// delivered. The app must not restore the draft or claim failure for Unknown.
+fn classify_request_error(error: HostError) -> RequestError {
+    let kind = match &error {
+        HostError::Rpc(_) => RequestErrorKind::Rpc,
+        HostError::PendingLimit
+        | HostError::Protocol(_)
+        | HostError::Lifecycle(_)
+        | HostError::UnsupportedVersion(_)
+        | HostError::Startup { .. }
+        | HostError::Handshake(_) => RequestErrorKind::Local,
+        HostError::Timeout(_) | HostError::TransportClosed | HostError::ProcessGone => {
+            RequestErrorKind::Unknown
+        }
+        HostError::Io(_) | HostError::Spawn(_) => RequestErrorKind::Unknown,
+    };
+    RequestError {
+        kind,
+        message: describe_host_error(&error),
     }
 }
