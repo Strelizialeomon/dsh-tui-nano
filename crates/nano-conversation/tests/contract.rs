@@ -74,11 +74,13 @@ fn every_event_kind_is_covered_by_the_contract_shape() {
                 "session.event",
                 "conversation.status",
                 "conversation.inbox",
-                "conversation.stream"
+                "conversation.stream",
+                "controls.model",
+                "controls.permission"
             ]
             .contains(kind),
             "unexpected event kind {kind}"
         );
     }
-    assert_eq!(kinds.len(), 4);
+    assert_eq!(kinds.len(), 6);
 }

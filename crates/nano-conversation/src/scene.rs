@@ -150,6 +150,18 @@ impl FeatureRegistry {
         &self.contributions
     }
 
+    /// Replace every contribution owned by `contribution.id` with this one.
+    ///
+    /// Feature catalogs that load after startup (the official command list) use
+    /// this to publish one current contribution instead of accumulating stale
+    /// prefixes. Other owners are untouched.
+    pub fn replace(&mut self, contribution: FeatureContribution) {
+        let id = contribution.id.clone();
+        self.contributions
+            .retain(|existing| existing.id != id);
+        self.contributions.push(contribution);
+    }
+
     /// Visible contributions for one scene.
     pub fn visible_for<'a>(
         &'a self,
@@ -343,6 +355,32 @@ mod tests {
         );
         assert_eq!(scene.address().unwrap().root_session_id, "other");
         assert!(scene.reading_anchor().is_none());
+    }
+
+    #[test]
+    fn replace_swaps_only_the_same_owner() {
+        let mut registry = FeatureRegistry::new();
+        registry.register(FeatureContribution::new("S05", SceneId::conversation()));
+        registry.register(
+            FeatureContribution::new("S04", SceneId::conversation()).with_command("/model"),
+        );
+        registry.replace(
+            FeatureContribution::new("S04", SceneId::conversation())
+                .with_command("/model")
+                .with_command("/permission"),
+        );
+        assert_eq!(registry.contributions().len(), 2);
+        assert_eq!(
+            registry
+                .command_owner(&SceneId::conversation(), "/permission")
+                .unwrap()
+                .id
+                .0,
+            "S04"
+        );
+        assert!(registry
+            .command_owner(&SceneId::conversation(), "/skill")
+            .is_none());
     }
 
     #[test]

@@ -10,11 +10,13 @@
     "./conversation": "./conversation/service.mjs",
     "./profile/install": "./profile/install.mjs",
     "./cordis.patch.yml": "./cordis.patch.yml",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./controls": "./controls/service.mjs"
   },
   "files": [
     "runtime/**/*.mjs",
     "conversation/**/*.mjs",
+    "controls/**/*.mjs",
     "profile/**/*.mjs",
     "cordis.patch.yml",
     "README.md"

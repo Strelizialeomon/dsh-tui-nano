@@ -209,6 +209,26 @@
     {
       "code": 1018,
       "name": "nano/conversation/too-large"
+    },
+    {
+      "code": 1019,
+      "name": "nano/controls/writer-held"
+    },
+    {
+      "code": 1020,
+      "name": "nano/controls/model-unavailable"
+    },
+    {
+      "code": 1021,
+      "name": "nano/controls/permission-rejected"
+    },
+    {
+      "code": 1022,
+      "name": "nano/controls/command-unknown"
+    },
+    {
+      "code": 1023,
+      "name": "nano/controls/unavailable"
     }
   ],
   "shapes": {
@@ -315,6 +335,79 @@
       "seq": "integer",
       "status": "enum:idle|running",
       "inbox": "conversationInbox"
+    },
+    "controlsSelection": {
+      "provider": "string",
+      "model": "string",
+      "reasoningEffort": "string?"
+    },
+    "controlsModelState": {
+      "lastUsed": "controlsSelection?",
+      "next": "controlsSelection?"
+    },
+    "controlsEffort": {
+      "id": "string",
+      "name": "string",
+      "description": "string?"
+    },
+    "controlsReasoning": {
+      "efforts": "array:controlsEffort",
+      "defaultEffort": "string?"
+    },
+    "controlsCatalogModel": {
+      "id": "string",
+      "name": "string",
+      "description": "string?",
+      "reasoning": "controlsReasoning?"
+    },
+    "controlsProviderGroup": {
+      "id": "string",
+      "name": "string",
+      "models": "array:controlsCatalogModel"
+    },
+    "controlsCatalogFailure": {
+      "id": "string",
+      "name": "string",
+      "message": "string"
+    },
+    "controlsModelCatalog": {
+      "default": "controlsSelection",
+      "routableProviders": "array:string",
+      "groups": "array:controlsProviderGroup",
+      "failures": "array:controlsCatalogFailure"
+    },
+    "controlsPresetOption": {
+      "value": "string",
+      "name": "string",
+      "description": "string?"
+    },
+    "controlsPermissionCatalog": {
+      "options": "array:controlsPresetOption",
+      "defaultOptions": "array:controlsPresetOption",
+      "defaultPreset": "string"
+    },
+    "controlsPermissionState": {
+      "current": "string?",
+      "catalog": "controlsPermissionCatalog"
+    },
+    "controlsCommand": {
+      "name": "string",
+      "description": "string",
+      "inputHint": "string?",
+      "definitionId": "string?"
+    },
+    "controlsState": {
+      "address": "address",
+      "model": "controlsModelState",
+      "permission": "controlsPermissionState",
+      "commands": "array:controlsCommand"
+    },
+    "controlsCommandExecution": {
+      "executed": "boolean",
+      "commandId": "string?",
+      "kind": "enum:success|error?",
+      "text": "string?",
+      "permission": "controlsPermissionState?"
     }
   },
   "methods": [
@@ -733,6 +826,121 @@
         ],
         "optional": []
       }
+    },
+    {
+      "name": "nano.controls.state",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S04",
+      "status": "implemented",
+      "params": {
+        "required": [],
+        "optional": []
+      },
+      "result": {
+        "shape": "controlsState",
+        "required": [
+          "address",
+          "model",
+          "permission",
+          "commands"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.controls.modelCatalog",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S04",
+      "status": "implemented",
+      "params": {
+        "required": [],
+        "optional": []
+      },
+      "result": {
+        "shape": "controlsModelCatalog",
+        "required": [
+          "default",
+          "routableProviders",
+          "groups",
+          "failures"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.controls.selectModel",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S04",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "provider",
+          "model"
+        ],
+        "optional": [
+          "reasoningEffort"
+        ]
+      },
+      "result": {
+        "required": [
+          "selected"
+        ],
+        "optional": [],
+        "shape": "controlsSelection"
+      }
+    },
+    {
+      "name": "nano.controls.setPermission",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S04",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "preset"
+        ],
+        "optional": []
+      },
+      "result": {
+        "shape": "controlsCommandExecution",
+        "required": [
+          "executed"
+        ],
+        "optional": [
+          "commandId",
+          "kind",
+          "text",
+          "permission"
+        ]
+      }
+    },
+    {
+      "name": "nano.controls.executeCommand",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S04",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "line"
+        ],
+        "optional": []
+      },
+      "result": {
+        "shape": "controlsCommandExecution",
+        "required": [
+          "executed"
+        ],
+        "optional": [
+          "commandId",
+          "kind",
+          "text",
+          "permission"
+        ]
+      }
     }
   ],
   "eventKinds": [
@@ -775,6 +983,24 @@
       "payload": {
         "address": "address",
         "frame": "conversationStreamFrame"
+      }
+    },
+    {
+      "kind": "controls.model",
+      "owner": "S04",
+      "status": "implemented",
+      "payload": {
+        "address": "address",
+        "model": "controlsModelState"
+      }
+    },
+    {
+      "kind": "controls.permission",
+      "owner": "S04",
+      "status": "implemented",
+      "payload": {
+        "address": "address",
+        "permission": "controlsPermissionState"
       }
     }
   ],
@@ -984,7 +1210,10 @@
     "monitor",
     "terminal",
     "tool-ask-user",
-    "networkListener"
+    "networkListener",
+    "modelSelection",
+    "permissionPresets",
+    "commands"
   ],
   "shutdownSteps": [
     "accepting",

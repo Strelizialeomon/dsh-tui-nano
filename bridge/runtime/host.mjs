@@ -15,6 +15,7 @@ import { BoundedWriter } from './writer.mjs'
 import { claimMount, releaseMount } from './ledger.mjs'
 import { SubscriptionHub } from './events.mjs'
 import { ConversationService } from '../conversation/service.mjs'
+import { ControlsService } from '../controls/service.mjs'
 import { buildCapabilities } from './capabilities.mjs'
 import { IMPLEMENTED_REQUEST_METHODS } from './methods.mjs'
 
@@ -197,6 +198,13 @@ async function runStartup(state, config) {
     nonceRequired: state.transport.nonceRequired,
   })
   state.conversation = new ConversationService({
+    ctx,
+    hub: state.hub,
+    agent: state.agentHandle.agent,
+    session,
+    rootSessionId: state.config.rootSessionId,
+  })
+  state.controls = new ControlsService({
     ctx,
     hub: state.hub,
     agent: state.agentHandle.agent,
@@ -457,6 +465,26 @@ async function dispatchRequest(state, frame) {
       await sendResult(state, id, state.conversation.snapshot(params))
       return undefined
     }
+    case 'nano.controls.state': {
+      await sendResult(state, id, state.controls.state())
+      return undefined
+    }
+    case 'nano.controls.modelCatalog': {
+      await sendResult(state, id, await state.controls.modelCatalog())
+      return undefined
+    }
+    case 'nano.controls.selectModel': {
+      await sendResult(state, id, await state.controls.selectModel(params))
+      return undefined
+    }
+    case 'nano.controls.setPermission': {
+      await sendResult(state, id, await state.controls.setPermission(params))
+      return undefined
+    }
+    case 'nano.controls.executeCommand': {
+      await sendResult(state, id, await state.controls.executeCommand(params))
+      return undefined
+    }
     default: {
       const reserved = RESERVED_METHODS.get(method)
       if (reserved !== undefined) {
@@ -535,6 +563,8 @@ async function runShutdown(state, reason) {
   steps.push({ name: 'accepting', status: 'stopped' })
 
   steps.push(await runStep('subscriptions', deadline, () => {
+    state.controls?.close()
+    state.controls = undefined
     state.conversation?.close()
     state.conversation = undefined
     state.hub?.closeAll(reason)
@@ -646,6 +676,14 @@ async function failStartup(state, error) {
   let code = startupError.code
   let message = startupError.message
   const cleanupFailures = []
+  if (state.controls !== undefined) {
+    try {
+      state.controls.close()
+      state.controls = undefined
+    } catch (cleanupError) {
+      cleanupFailures.push(`controls: ${describe(cleanupError)}`)
+    }
+  }
   if (state.conversation !== undefined) {
     try {
       state.conversation.close()

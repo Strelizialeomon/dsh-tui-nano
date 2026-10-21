@@ -113,6 +113,8 @@ impl HostLink {
                 "conversation.status".to_string(),
                 "conversation.inbox".to_string(),
                 "conversation.stream".to_string(),
+                "controls.model".to_string(),
+                "controls.permission".to_string(),
             ];
             let _subscription = match startup_host.subscribe(address, Some(kinds), Some(from_seq)) {
                 Ok(subscription) => subscription,
