@@ -1,7 +1,7 @@
 # [2026-10-20-nano-v1/S11] 调度
 
 - 组标识：`2026-10-20-nano-v1`；角色：子件 S11，单交付为官方定时任务 CRUD、投递与补投展示。
-- 状态：草案，未批准实施；Issue：待规格合入后创建。
+- 状态：已实施（#14）；Issue：#14。
 - 总纲：[共享约定与依据](README.md)。上游：S02 入口，S01 会话认领与启动顺序。下游：S13（D09）；D10 是 S13→全部子件的发布条件，不是本份下游。
 - 合入前提：S01 的会话认领与 `nano-schedule-json` 路由可用；S02 可运行（D02）；D05 不涉及本份。本份用真实定时任务验证创建、补投、删除和重复风险展示。发布由 S13 承担。
 
@@ -131,6 +131,8 @@
 
 ## 10. 审核修订记录
 
-待本稿逐份过闸；上述验收均未执行。
+2026-10-21 实施完成（PR #23）；§7 勾选在实施 PR 合并后回填，验收证据见 `docs/evidence/2026-10-21-s11/README.md`。
+
+2026-10-21 重审（用户点档「重审」；审核由主 agent 派子代理执行，结论只有主 agent 的分量，不是独立第三方）：规格符合性 1 条阻断 + 6 条重要，对抗 0 条阻断 + 8 条重要。阻断为补投证据只覆盖一次遗漏；对抗发现官方「无改动 update」被误判为 `schedule_not_found`。处置：补 >2 周期补投与一次性过期重启用例；修 `parse_update`；租约回收加保护锁并改为原子发布；Unknown 结果不再断言失败；catalog 失败不再自动重发；探针损坏可回收；`shapes.event.kind` 同步；`failStartup` 在调度未停下时保留租约；归档后果改为静态提示；失败夹具 `bridge/test/fixtures/schedule-post-flush-write-failure.json`（界面级，不声称注入官方内部写失败）。未执行项见证据 README。
 
 2026-10-21 原型（独立 Node 脚本，非完整宿主）：官方 `JsonStorageBackend` 的两个 root 各写同一个 `schedule` unit，记录和文件互不可见；O_EXCL 租约两进程只有一个 owner，owner 退出后新进程可接管。完整 `storage-domain.routes.schedule` + `--patch` 组合和真实 `dsh-schedule` 投递仍待 S11 宿主验收。

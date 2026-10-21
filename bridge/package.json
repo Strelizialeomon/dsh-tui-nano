@@ -20,6 +20,7 @@
   "files": [
     "runtime/**/*.mjs",
     "conversation/**/*.mjs",
+    "schedule/**/*.mjs",
     "attachments/**/*.mjs",
     "shell/**/*.mjs",
     "jobs/**/*.mjs",

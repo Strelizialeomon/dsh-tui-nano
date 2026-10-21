@@ -81,7 +81,7 @@ pub const LIFECYCLE_TRANSITIONS: [(&str, &str); 15] = [
 ];
 
 /// Error code names shared with the bridge contract.
-pub const ERROR_CODE_NAMES: [(&str, i64); 47] = [
+pub const ERROR_CODE_NAMES: [(&str, i64); 49] = [
     ("jsonrpc/parse-error", -32700),
     ("jsonrpc/invalid-request", -32600),
     ("jsonrpc/method-not-found", -32601),
@@ -129,10 +129,12 @@ pub const ERROR_CODE_NAMES: [(&str, i64); 47] = [
     ("nano/attachments/limit", 1040),
     ("nano/attachments/file-failed", 1041),
     ("nano/file-references/failed", 1042),
+    ("nano/schedule/unavailable", 1043),
+    ("nano/schedule/error", 1044),
 ];
 
 /// Method names implemented by this generation.
-pub const IMPLEMENTED_METHODS: [&str; 36] = [
+pub const IMPLEMENTED_METHODS: [&str; 42] = [
     "nano.hello",
     "nano.startupError",
     "nano.shutdown",
@@ -152,6 +154,12 @@ pub const IMPLEMENTED_METHODS: [&str; 36] = [
     "nano.conversation.steerQueued",
     "nano.conversation.cancel",
     "nano.conversation.snapshot",
+    "nano.schedule.catalog",
+    "nano.schedule.list",
+    "nano.schedule.create",
+    "nano.schedule.update",
+    "nano.schedule.delete",
+    "nano.schedule.history",
     "nano.sessions.list",
     "nano.sessions.rename",
     "nano.sessions.context",
@@ -172,11 +180,12 @@ pub const IMPLEMENTED_METHODS: [&str; 36] = [
 ];
 
 /// Event kinds this client accepts.
-pub const EVENT_KINDS: [&str; 11] = [
+pub const EVENT_KINDS: [&str; 12] = [
     "session.event",
     "conversation.status",
     "conversation.inbox",
     "conversation.stream",
+    "schedule.changed",
     "controls.model",
     "controls.permission",
     "sessions.context",

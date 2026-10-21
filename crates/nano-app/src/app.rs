@@ -17,11 +17,12 @@ use nano_attachments::{
 use nano_controls::{ControlsModel, ModelSelection, Panel, PanelAction, PanelMode};
 use nano_conversation::{
     CommandRouter, ConversationItem, ConversationModel, Delivery, DraftStore, FeatureContribution,
-    FeatureRegistry, FocusId, InputBuffer, InputEvent, InputOutcome, InputRoute,
-    SceneId, SceneState, SessionAddress, SubmitError,
+    FeatureRegistry, FocusId, InputBuffer, InputEvent, InputOutcome, InputRoute, SceneId,
+    SceneState, SessionAddress, SubmitError,
 };
 use nano_jobs::{BashRecord, JobsModel, SHELL_NOTICE};
 use nano_runtime::{CapabilityStatus, Hello, SessionMode};
+use nano_schedule::{ScheduleAction, ScheduleModel};
 use nano_sessions::{
     CompactionOutcome, ContextMeter, RenameOutcome, SessionSummary, SwitchMachine, SwitchTarget,
     TargetMode,
@@ -195,6 +196,19 @@ pub enum Pending {
         line: String,
         /// Name used in status messages.
         name: String,
+    },
+    /// Read the schedule catalog.
+    ScheduleCatalog,
+    /// Create one schedule task.
+    ScheduleCreate,
+    /// Update one schedule task.
+    ScheduleUpdate,
+    /// Delete one schedule task.
+    ScheduleDelete,
+    /// Read one delivery-history page.
+    ScheduleHistory {
+        /// Exclusive cursor for an older page.
+        before: Option<String>,
     },
 }
 
@@ -370,6 +384,10 @@ pub struct App {
     /// After a truncated queue projection, reopen this item's editor once a
     /// full snapshot arrives.
     pub edit_after_snapshot: Option<String>,
+    /// Schedule overlay state.
+    pub schedule: ScheduleModel,
+    /// Hello capability detail when the scheduler is not usable.
+    pub schedule_unsupported: Option<String>,
     /// Per-address attachments and their text anchors.
     pub attachments: AttachmentDraftStore,
     /// Deployment image limits, when the host reports them.
@@ -502,6 +520,8 @@ impl App {
             clear_stop_failed: false,
             clear_after_snapshot: false,
             edit_after_snapshot: None,
+            schedule: ScheduleModel::new(),
+            schedule_unsupported: None,
             attachment_limits: None,
             completion: CompletionState::default(),
             completion_cancel: None,
@@ -907,6 +927,23 @@ impl App {
             self.notice = Some(self.switch.state().label());
             return false;
         }
+        if self.schedule.open {
+            if key.modifiers.contains(KeyModifiers::CONTROL)
+                && matches!(key.code, KeyCode::Char('g') | KeyCode::Char('G'))
+            {
+                self.schedule.close_view();
+                return true;
+            }
+            let action = self.schedule.handle_key(key);
+            self.apply_schedule_action(action);
+            return true;
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('g') | KeyCode::Char('G'))
+        {
+            self.toggle_schedule();
+            return true;
+        }
         if self.sessions_panel.open {
             return self.handle_sessions_panel_key(key);
         }
@@ -1165,6 +1202,15 @@ impl App {
 
     /// Insert a bracketed-paste payload exactly as received.
     pub fn handle_paste(&mut self, text: String) -> bool {
+        if self.schedule.open {
+            if let Some(form) = self.schedule.form.as_mut() {
+                if let Some(field) = form.focused_text() {
+                    field.insert_str(&text);
+                    return true;
+                }
+            }
+            return false;
+        }
         if let Some(picker) = &mut self.picker {
             picker.path.push_str(&text);
             return true;
@@ -1217,6 +1263,20 @@ impl App {
                 );
                 self.claim_controls_commands();
                 self.hello = Some(hello);
+                self.schedule_unsupported = match self
+                    .hello
+                    .as_ref()
+                    .and_then(|hello| hello.capabilities.get("schedule"))
+                {
+                    Some(capability) if capability.status == CapabilityStatus::Supported => None,
+                    Some(capability) => Some(
+                        capability
+                            .detail
+                            .clone()
+                            .unwrap_or_else(|| "宿主未挂载官方调度服务".to_string()),
+                    ),
+                    None => Some("宿主没有声明 schedule 能力".to_string()),
+                };
                 if self.switch.busy() {
                     if let Some(target) = self.switch.succeed() {
                         self.notice = Some(format!("已切换到会话 {}", target.label()));
@@ -1337,6 +1397,9 @@ impl App {
                     if let Err(error) = self.instructions.apply(&params.payload, &root) {
                         self.error = Some(format!("项目规矩投影无效：{error}"));
                     }
+                }
+                if params.kind == "schedule.changed" && self.schedule.open && self.ready {
+                    self.refresh_schedule_catalog();
                 }
                 let changed = match params.kind.as_str() {
                     "jobs.event" => {
@@ -1486,10 +1549,16 @@ impl App {
                     | Pending::SkillsList
                     | Pending::SkillPreview { .. }
                     | Pending::InstructionsSnapshot
+                    | Pending::ScheduleCatalog
+                    | Pending::ScheduleCreate
+                    | Pending::ScheduleUpdate
+                    | Pending::ScheduleDelete
+                    | Pending::ScheduleHistory { .. }
             )
         {
             self.resubscribing = false;
             self.clear_stop_remaining = 0;
+            self.schedule.fail("宿主连接已关闭；结果未知");
             self.skills_refresh_in_flight = false;
             self.skills_refresh_queued = false;
             self.clear_skill_preview();
@@ -1718,7 +1787,7 @@ impl App {
                         }
                     }
                 }
-            },
+            }
             Pending::SessionsList => {
                 self.sessions_panel.loading = false;
                 match result {
@@ -2027,6 +2096,59 @@ impl App {
                     }
                 },
             },
+            Pending::ScheduleCatalog => match result {
+                Ok(value) => {
+                    if let Err(message) = self.schedule.apply_catalog(&value) {
+                        self.schedule
+                            .fail_catalog(format!("任务列表无效：{message}"));
+                    }
+                }
+                Err(error) => self
+                    .schedule
+                    .fail_catalog(format!("读取任务列表失败：{}", error.message)),
+            },
+            Pending::ScheduleCreate => match result {
+                Ok(value) => {
+                    if let Err(message) = self.schedule.apply_create(&value) {
+                        self.schedule.fail(format!("创建回执无效：{message}"));
+                    }
+                }
+                Err(error) => self.report_schedule_failure("创建", error),
+            },
+            Pending::ScheduleUpdate => match result {
+                Ok(value) => {
+                    let inner = value.get("result").unwrap_or(&Value::Null);
+                    if let Err(message) = self.schedule.apply_update(inner) {
+                        self.schedule.fail(format!("修改回执无效：{message}"));
+                    }
+                }
+                Err(error) => self.report_schedule_failure("修改", error),
+            },
+            Pending::ScheduleDelete => match result {
+                Ok(value) => {
+                    let inner = value.get("result").unwrap_or(&Value::Null);
+                    if let Err(message) = self.schedule.apply_delete(inner) {
+                        self.schedule.fail(format!("删除回执无效：{message}"));
+                    }
+                }
+                Err(error) => self.report_schedule_failure("删除", error),
+            },
+            Pending::ScheduleHistory { before } => match result {
+                Ok(value) => {
+                    let inner = value.get("result").unwrap_or(&Value::Null);
+                    if let Err(message) = self.schedule.apply_history(inner, before.is_some()) {
+                        self.schedule.fail(format!("投递历史无效：{message}"));
+                    }
+                }
+                Err(error) => {
+                    if let Some(history) = self.schedule.history.as_mut() {
+                        history.loading_older = false;
+                        history.error = Some(error.message.clone());
+                    }
+                    self.schedule
+                        .fail(format!("读取投递历史失败：{}", error.message));
+                }
+            },
             Pending::SkillsList => {
                 self.skills_refresh_in_flight = false;
                 let root = self.model.address().root_session_id.clone();
@@ -2083,7 +2205,7 @@ impl App {
                         self.error = Some(format!("读取项目规矩来源失败：{}", error.message));
                     }
                 }
-            },
+            }
             Pending::Shell { record_id } => {
                 let command = self
                     .bash_records
@@ -2242,7 +2364,141 @@ impl App {
                         self.refresh_jobs_snapshot();
                     }
                 }
-            },
+            }
+        }
+        if self.schedule.take_refresh() {
+            self.refresh_schedule_catalog();
+        }
+    }
+
+    /// Toggle the schedule overlay. Opening always reads the official catalog
+    /// unless the hello capability says the scheduler is unusable.
+    pub fn toggle_schedule(&mut self) {
+        if self.schedule.open {
+            self.schedule.close_view();
+            return;
+        }
+        let unsupported = self.schedule_unsupported.clone();
+        self.schedule.open_view(unsupported);
+        if self.schedule.take_refresh() {
+            self.refresh_schedule_catalog();
+        }
+    }
+
+    /// Read the complete catalog (active and ended). This is the read path the
+    /// list uses; the official `list` path is reserved for active-only callers.
+    pub fn refresh_schedule_catalog(&mut self) {
+        if !self.schedule.open {
+            return;
+        }
+        if !self.ready {
+            self.schedule.fail("宿主未就绪；连接后按 r 重试");
+            return;
+        }
+        let params = serde_json::json!({ "address": self.schedule_address() });
+        self.send_schedule_request("nano.schedule.catalog", params, Pending::ScheduleCatalog);
+    }
+
+    fn schedule_address(&self) -> Value {
+        serde_json::json!({ "rootSessionId": self.model.address().root_session_id })
+    }
+
+    fn send_schedule_request(&mut self, method: &str, params: Value, pending: Pending) {
+        let Some(link) = &self.link else {
+            self.schedule.fail("宿主连接已关闭；结果未知");
+            return;
+        };
+        match link.request(method, params) {
+            Ok(id) => {
+                self.pending.insert(id, pending);
+            }
+            Err(message) => {
+                self.schedule.fail(format!("请求未能发出：{message}"));
+            }
+        }
+    }
+
+    fn report_schedule_failure(&mut self, action: &str, error: RequestError) {
+        // A timeout or lost response may still have committed the official
+        // write. Never claim failure for that case; refresh and let the catalog
+        // decide.
+        if matches!(error.kind, RequestErrorKind::Unknown) {
+            self.schedule.fail(format!(
+                "{action}结果未知（可能已提交）：{}；按 r 刷新确认，不要盲目重试",
+                error.message
+            ));
+        } else {
+            self.schedule
+                .fail(format!("{action}失败：{}", error.message));
+        }
+    }
+
+    fn apply_schedule_action(&mut self, action: ScheduleAction) {
+        match action {
+            ScheduleAction::None | ScheduleAction::Redraw | ScheduleAction::Close => {}
+            ScheduleAction::Refresh => self.refresh_schedule_catalog(),
+            ScheduleAction::Create(request) => {
+                if !self.ready {
+                    self.schedule.fail("宿主未就绪");
+                    return;
+                }
+                let params = serde_json::json!({
+                    "address": self.schedule_address(),
+                    "request": request,
+                });
+                self.send_schedule_request("nano.schedule.create", params, Pending::ScheduleCreate);
+            }
+            ScheduleAction::Update {
+                id,
+                expected,
+                fields,
+            } => {
+                if !self.ready {
+                    self.schedule.fail("宿主未就绪");
+                    return;
+                }
+                let mut params = serde_json::json!({
+                    "address": self.schedule_address(),
+                    "id": id,
+                    "expected": expected,
+                });
+                if let (Some(target), Some(update)) = (params.as_object_mut(), fields.as_object()) {
+                    for (key, value) in update {
+                        target.insert(key.clone(), value.clone());
+                    }
+                }
+                self.send_schedule_request("nano.schedule.update", params, Pending::ScheduleUpdate);
+            }
+            ScheduleAction::Delete { id } => {
+                if !self.ready {
+                    self.schedule.fail("宿主未就绪");
+                    return;
+                }
+                let params = serde_json::json!({
+                    "address": self.schedule_address(),
+                    "id": id,
+                });
+                self.send_schedule_request("nano.schedule.delete", params, Pending::ScheduleDelete);
+            }
+            ScheduleAction::History { id, before } => {
+                if !self.ready {
+                    self.schedule.fail("宿主未就绪");
+                    return;
+                }
+                let mut params = serde_json::json!({
+                    "address": self.schedule_address(),
+                    "id": id,
+                    "limit": 50,
+                });
+                if let (Some(target), Some(cursor)) = (params.as_object_mut(), before.as_ref()) {
+                    target.insert("before".into(), Value::String(cursor.clone()));
+                }
+                self.send_schedule_request(
+                    "nano.schedule.history",
+                    params,
+                    Pending::ScheduleHistory { before },
+                );
+            }
         }
     }
 
@@ -3890,6 +4146,18 @@ impl App {
         if self.switch.busy() {
             return self.switch.state().label();
         }
+        if self.schedule.open {
+            if let Some(busy) = &self.schedule.busy {
+                return busy.clone();
+            }
+            if let Some(error) = &self.schedule.error {
+                return format!("定时任务：{error}");
+            }
+            if let Some(notice) = &self.schedule.notice {
+                return format!("定时任务：{notice}");
+            }
+            return "定时任务 · Ctrl+G 或 Esc 关闭".to_string();
+        }
         if self.sessions_panel.open {
             return "会话列表：↑↓ 选择 · Enter 切换 · n 改名 · c 压缩 · r 刷新 · Esc 关闭"
                 .to_string();
@@ -4733,6 +5001,68 @@ mod tests {
     }
 
     #[test]
+    fn an_unknown_schedule_result_is_not_reported_as_failure() {
+        let mut app = app();
+        app.schedule.open_view(None);
+        app.schedule.busy = Some("正在创建…".into());
+        app.report_schedule_failure(
+            "创建",
+            RequestError {
+                kind: RequestErrorKind::Unknown,
+                code: None,
+                message: "transport closed".into(),
+            },
+        );
+        let error = app.schedule.error.as_deref().unwrap();
+        assert!(error.contains("结果未知"));
+        assert!(!error.contains("创建失败"));
+        assert!(app.schedule.busy.is_none());
+    }
+
+    #[test]
+    fn a_definitive_schedule_rejection_is_reported_as_failure() {
+        let mut app = app();
+        app.schedule.open_view(None);
+        app.report_schedule_failure(
+            "创建",
+            RequestError {
+                kind: RequestErrorKind::Rpc,
+                code: Some(1044),
+                message: "invalid_rule: bad cron".into(),
+            },
+        );
+        assert!(app.schedule.error.as_deref().unwrap().contains("创建失败"));
+    }
+
+    #[test]
+    fn control_g_opens_and_closes_the_schedule_overlay() {
+        let mut app = app();
+        assert!(app.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL)));
+        assert!(app.schedule.open);
+        assert!(app.status_hint().contains("定时任务"));
+        assert!(app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        assert!(!app.schedule.open);
+    }
+
+    #[test]
+    fn an_unsupported_schedule_capability_is_shown_and_blocks_actions() {
+        let mut app = app();
+        app.schedule_unsupported = Some("调度未挂载".into());
+        app.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        assert!(app.schedule.open);
+        assert_eq!(app.schedule.unsupported.as_deref(), Some("调度未挂载"));
+        app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        assert!(app.schedule.form.is_none());
+        let rows: Vec<String> = app
+            .schedule
+            .rows()
+            .into_iter()
+            .map(|row| row.text)
+            .collect();
+        assert!(rows.iter().any(|row| row.contains("调度未挂载")));
+    }
+
+    #[test]
     fn enter_on_blank_keeps_the_draft_and_reports_rejection() {
         let mut app = app();
         app.drafts.current_mut().set_text("  \n");
@@ -5420,10 +5750,7 @@ mod tests {
     #[test]
     fn ctrl_p_opens_the_palette_and_escape_closes_it() {
         let mut app = app();
-        assert!(app.handle_key(KeyEvent::new(
-            KeyCode::Char('p'),
-            KeyModifiers::CONTROL
-        )));
+        assert!(app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL)));
         assert!(app.panel.is_open());
         assert_eq!(app.panel.mode(), &PanelMode::Commands);
         assert!(app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
@@ -5456,7 +5783,9 @@ mod tests {
     #[test]
     fn a_command_needs_a_ready_host_and_keeps_the_draft_until_then() {
         let mut app = app();
-        app.drafts.current_mut().set_text("/permission danger-full-access");
+        app.drafts
+            .current_mut()
+            .set_text("/permission danger-full-access");
         assert!(app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
         assert_eq!(
             app.drafts.current().text(),
@@ -5669,11 +5998,7 @@ mod tests {
             Ok(json!({"executed": true, "commandId": "cmd-2", "kind": "error", "text": "nope"})),
         );
         assert!(app.error.as_deref().unwrap().contains("命令 compact 失败"));
-        assert!(!app
-            .notice
-            .as_deref()
-            .unwrap_or_default()
-            .contains("已完成"));
+        assert!(!app.notice.as_deref().unwrap_or_default().contains("已完成"));
     }
 
     #[test]

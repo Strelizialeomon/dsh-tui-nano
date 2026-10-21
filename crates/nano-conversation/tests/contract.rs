@@ -78,6 +78,7 @@ fn every_event_kind_is_covered_by_the_contract_shape() {
             "conversation.status",
             "conversation.inbox",
             "conversation.stream",
+            "schedule.changed",
             "controls.model",
             "controls.permission",
             "sessions.context",
@@ -95,6 +96,7 @@ fn every_event_kind_is_covered_by_the_contract_shape() {
         ("S05", "instructions.changed"),
         ("S08", "jobs.event"),
         ("S08", "jobs.output"),
+        ("S11", "schedule.changed"),
     ] {
         let event = contract["eventKinds"]
             .as_array()

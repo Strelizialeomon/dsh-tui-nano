@@ -8,6 +8,7 @@ use nano_attachments::{AttachmentState, CandidateKind};
 use nano_controls::{PanelMode, PanelRow};
 use nano_conversation::{ConversationItem, MessageKind, PreviewView, ToolPreview, ToolStatus};
 use nano_jobs::{BashRecord, BashState, JobStatus};
+use nano_schedule::RowKind;
 use nano_sessions::{format_clock, Occupancy};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -21,6 +22,10 @@ use unicode_width::UnicodeWidthChar;
 /// Draw one frame.
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
+    if app.schedule.open {
+        draw_schedule(frame, app, area);
+        return;
+    }
     let queue_height = if app.model.inbox().is_empty() {
         0
     } else {
@@ -152,6 +157,63 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         ));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn draw_schedule(frame: &mut Frame, app: &mut App, area: Rect) {
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(3),
+            Constraint::Length(1),
+        ])
+        .split(area);
+    draw_header(frame, app, layout[0]);
+    draw_schedule_body(frame, app, layout[1]);
+    draw_status(frame, app, layout[2], area.width);
+}
+
+fn draw_schedule_body(frame: &mut Frame, app: &App, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" 定时任务 · 官方 schedule ");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let width = inner.width.max(1) as usize;
+    let rows = app.schedule.rows();
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut selected_line = None;
+    for row in rows {
+        if row.kind == RowKind::Selected && selected_line.is_none() {
+            selected_line = Some(lines.len());
+        }
+        let style = schedule_style(row.kind);
+        for segment in wrap_segments(&row.text, width) {
+            lines.push(Line::from(Span::styled(segment.text, style)));
+        }
+    }
+    let viewport = inner.height as usize;
+    let offset = selected_line
+        .map(|start| start.saturating_sub(viewport.saturating_sub(1)))
+        .unwrap_or(0);
+    frame.render_widget(
+        Paragraph::new(Text::from(lines)).scroll((offset.min(u16::MAX as usize) as u16, 0)),
+        inner,
+    );
+}
+
+fn schedule_style(kind: RowKind) -> Style {
+    match kind {
+        RowKind::Title => Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+        RowKind::Plain => Style::default(),
+        RowKind::Dim => Style::default().fg(Color::DarkGray),
+        RowKind::Error => Style::default().fg(Color::Red),
+        RowKind::Selected => Style::default().fg(Color::Black).bg(Color::Cyan),
+        RowKind::SelectedDim => Style::default().fg(Color::Black).bg(Color::DarkGray),
+        RowKind::Notice => Style::default().fg(Color::Yellow),
+    }
 }
 
 /// Session panel: the official list plus context provenance and the last

@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 nano-runtime = { path = "../nano-runtime" }
 nano-conversation = { path = "../nano-conversation" }
+nano-schedule = { path = "../nano-schedule" }
 nano-attachments = { path = "../nano-attachments" }
 nano-jobs = { path = "../nano-jobs" }
 nano-controls = { path = "../nano-controls" }

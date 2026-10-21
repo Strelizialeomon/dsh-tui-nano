@@ -306,6 +306,14 @@
     {
       "code": 1042,
       "name": "nano/file-references/failed"
+    },
+    {
+      "code": 1043,
+      "name": "nano/schedule/unavailable"
+    },
+    {
+      "code": 1044,
+      "name": "nano/schedule/error"
     }
   ],
   "shapes": {
@@ -399,7 +407,7 @@
       "generation": "integer",
       "subscriptionId": "string",
       "sequence": "integer",
-      "kind": "enum:session.event|conversation.status|conversation.inbox|conversation.stream",
+      "kind": "enum:session.event|conversation.status|conversation.inbox|conversation.stream|schedule.changed|controls.model|controls.permission|sessions.context|skills.changed|instructions.changed|jobs.event|jobs.output",
       "payload": "object"
     },
     "streamEnded": {
@@ -1037,6 +1045,135 @@
       }
     },
     {
+      "name": "nano.schedule.catalog",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S11",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "address",
+          "entries"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.schedule.list",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S11",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "address",
+          "records"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.schedule.create",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S11",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address",
+          "request"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "address",
+          "record"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.schedule.update",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S11",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address",
+          "id",
+          "expected"
+        ],
+        "optional": [
+          "title",
+          "prompt",
+          "change"
+        ]
+      },
+      "result": {
+        "required": [
+          "result"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.schedule.delete",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S11",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address",
+          "id"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "result"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.schedule.history",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S11",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address",
+          "id",
+          "limit"
+        ],
+        "optional": [
+          "before"
+        ]
+      },
+      "result": {
+        "required": [
+          "result"
+        ],
+        "optional": []
+      }
+    },
+    {
       "name": "nano.fileReferences.list",
       "direction": "client-to-host",
       "kind": "request",
@@ -1632,6 +1769,14 @@
       }
     },
     {
+      "kind": "schedule.changed",
+      "owner": "S11",
+      "status": "implemented",
+      "payload": {
+        "address": "address"
+      }
+    },
+    {
       "kind": "controls.model",
       "owner": "S04",
       "status": "implemented",
@@ -1802,7 +1947,12 @@
           "maxMessageImageBytes": 209715200,
           "maxImagePixels": 64000000,
           "maxImageDimension": 8192,
-          "mediaTypes": ["image/png", "image/jpeg", "image/webp", "image/gif"],
+          "mediaTypes": [
+            "image/png",
+            "image/jpeg",
+            "image/webp",
+            "image/gif"
+          ],
           "maxChunkBytes": 49152,
           "fileAdmission": "verbatim"
         }

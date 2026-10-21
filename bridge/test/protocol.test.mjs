@@ -32,7 +32,10 @@ import {
 test('implemented methods match the contract', () => {
   assert.deepEqual([...IMPLEMENTED_METHODS].sort(), [...CONTRACT_IMPLEMENTED.keys()].sort())
   for (const [name, method] of CONTRACT_IMPLEMENTED) {
-    assert.ok(['S01', 'S02', 'S04', 'S05', 'S06', 'S07', 'S08'].includes(method.owner), `${name} owner`)
+    assert.ok(
+      ['S01', 'S02', 'S04', 'S05', 'S06', 'S07', 'S08', 'S09', 'S11'].includes(method.owner),
+      `${name} owner`,
+    )
     if (method.kind === 'request') {
       assert.ok(IMPLEMENTED_REQUEST_METHODS.includes(name), `${name} must be dispatched as a request`)
     } else {
@@ -91,6 +94,7 @@ test('event kinds match', () => {
     'conversation.status',
     'conversation.inbox',
     'conversation.stream',
+    'schedule.changed',
     'controls.model',
     'controls.permission',
     'sessions.context',
@@ -99,6 +103,11 @@ test('event kinds match', () => {
     'jobs.event',
     'jobs.output',
   ])
+})
+
+test('the event shape enum and the event kind table agree', () => {
+  const shapeKinds = CONTRACT.shapes.event.kind.replace(/^enum:/, '').split('|')
+  assert.deepEqual([...shapeKinds].sort(), [...EVENT_KINDS.keys()].sort())
 })
 
 test('request fixture parses as a request', () => {
