@@ -1,12 +1,18 @@
 # 真实终端控制会话（2026-10-21）
 
 - 环境：macOS + 真实 PTY 120x40，`nano --no-install --no-alt-screen`；真实 `~/.dsh` 凭据（未复制）；临时数据根与 cwd。
-- 路由：`deepseek-official`；会话 `session-517af2eb-5bef-4ba6-8f4f-55fbcd71df10`。
+- 路由：`deepseek-official`；会话 `session-38a210c5-4e40-4bef-8114-8f9db24742d9`。
 - 本文件由 `scripts/pty-controls-evidence.py` 生成；屏幕快照保留 TUI 原始输出（ANSI 光标序列未全部还原）。
 
 ## 检查结果
 
 - 通过：connected
+- 通过：command palette opened
+- 通过：official commands listed
+- 通过：no-op receipt shown
+- 通过：no-op does not claim a model notice
+- 通过：cold-start reply visible
+- 通过：cold-start turn did not fail
 - 通过：model pane opened
 - 通过：provider or model rows shown
 - 通过：current model line shown
@@ -20,20 +26,17 @@
 - 通过：approval rejection consequence shown
 - 通过：permission switch confirmed
 - 通过：status bar shows new preset
-- 通过：assistant reply visible
-- 通过：turn did not fail
 - 通过：permission restored
 - 通过：model restored
 - 通过：clean exit
-- 通过：next request used the switched route
-- 通过：approval notice reached the model
+- 通过：cold-start request used an official route
 
 ## 屏幕快照
 
 ### connected
 
 ```text
- nano  work · 已连接 · 空闲 · seq 3 · 队列 0
+ nano 已连接 · 空闲 · seq 3 · 队列 0
 输入消息后按 Enter 发送。
 
 
@@ -72,13 +75,13 @@
 ┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） ─────────────────────────────────────────┐
 │                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-权限 workspace-write · 已连接官方会话
+work · 权限 workspace-write · 已连接官方会话
 ```
 
-### model-panel
+### command-palette
 
 ```text
- nano  work · 已连接 · 空闲 · seq 3 · 队列 0
+ nano 已连接 · 空闲 · seq 3 · 队列 0
 输入消息后按 Enter 发送。
 
 
@@ -92,60 +95,15 @@
 
 
 
-
-
-               ┌ 模型 · 查询： ─────────────────────────────────────────────────────────────────────────┐
-               │当前：默认 · 强度 默认                                                                  │
-               │DeepSeek                                                                                │
-               │▶ DeepSeek-V4.1-Flash                                                                   │
-               │强度：Off / Low / High / Max；默认 High                                                 │
-               │  DeepSeek-V4-Pro  Stronger agentic coding, knowledge, and difficult reasoning; suite…  │[38;2H
-               │↑↓ 选择 · Enter 确认 · Esc 返回 · 输入筛选[23;105H│
-               └────────────────────────────────────────────────────────────────────────────────────────┘
-
-
-
-
-
-
-
-
-
-
-
-
-┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） ─────────────────────────────────────────┐
-│/model                                                                                                                │
-└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-权限 workspace-write · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行 · Esc 停止 · Ctrl+Y 复制原文 · Ctrl+C 退出
-```
-
-### model-enter
-
-```text
- nano  work · 已连接 · 空闲 · seq 3 · 队列 0
-输入消息后按 Enter 发送。
-
-
-
-
-
-
-
-
-
-
-
-
-
-               ┌ 推理强度 · 查询： ─────────────────────────────────────────────────────────────────────┐
-               │当前：默认 · 强度 默认                                                                  │
-               │▶ 默认（当前）                                                                          │
-               │使用模型默认强度（High）                                                                │
-               │  Off  Use for simple tasks that do not need reasoning.                                 │
-               │  Low  Prefer for routine or latency-sensitive tasks.                                   │
-               │  High  The default balance for most tasks.                                 8H H        │[38;2H
-               │  Max  Reserve for the hardest quality-first3tasks.
+               ┌ 命令 · 查询： ─────────────────────────────────────────────────────────────────────────┐
+               │官方命令优先于同名技能；不可用命令显示原因                                              │
+               │▶ /compact                                                                              │
+               │Compact older conversation history                                                      │
+               │  /feedback  Record feedback about this session · 参数 <text>                           │
+               │  /goal  Set or view the goal for a long-running task · 参[20[<objective>|clear|edit …  │
+               │  /model  选择模型与推理强度（纯视图；读取官方目录）                                    │
+               │  /permission  Switch the permission preset (sandbox mode + approval policy) · 参数 <…  │
+               │  /plan  Enter or leave plan mode · 参数 [off|message]                                  │
                │↑↓ 选择 · Enter 确认 · Esc 返回 · 输入筛选                                              │
                └────────────────────────────────────────────────────────────────────────────────────────┘
 
@@ -160,105 +118,15 @@
 
 
 ┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） ─────────────────────────────────────────┐
-│/model                                                                                                                │
-└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-权限 workspace-write · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行 · Esc 停止 · Ctrl+Y 复制原文 · Ctrl+C 退出
-```
-
-### effort-selected
-
-```text
- nano  work · 已连接 · 空闲 · seq 3 · 队列 0
-输入消息后按 Enter 发送。
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                                                                                            8H H         [38;2H
-                                                            3
-
-
-
-
-
-
-
-
-
-
-
-
-
-┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） ─────────────────────────────────────────┐
-│/model                                                                                                                │
-└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-权限 workspace-write · 会话内模型已切换为 deepseek-official/deepseek-v4-pro；新会话默认值由官方后台保存（本次回执不代表
-```
-
-### model-reopened
-
-```text
- nano  work · 已连接 · 空闲 · seq 3 · 队列 0
-输入消息后按 Enter 发送。
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-               ┌ 模型 · 查询： ─────────────────────────────────────────────────────────────────────────┐
-               │当前：DeepSeek-V4-Pro · deepseek-official · 强度 Low                                    │
-               │DeepSeek                                                                                │
-               │▶ DeepSeek-V4.1-Flash                                                                   │
-               │强度：Off / Low / High / Max；默认 High                                                 │
-               │  DeepSeek-V4-Pro（当前）  Stronger agentic coding, knowledge, and difficult8reasoning; │[38;2H
-               │↑↓ 选择 · Enter 确认 · Esc 返回 · 输入筛选  3                                           │
-               └────────────────────────────────────────────────────────────────────────────────────────┘
-
-
-
-
-
-
-
-
-
-
-
-
-┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） ─────────────────────────────────────────┐
 │                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-权限 workspace-write · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行 · Esc 停止 · Ctrl+Y 复制原文 · Ctrl+C 退出
+work · 权限 workspace-write
 ```
 
-### permission-panel
+### permission-noop
 
 ```text
- nano  work · 已连接 · 空闲 · seq 3 · 队列 0
+ nano 已连接 · 空闲 · seq 4 · 队列 0
 输入消息后按 Enter 发送。
 
 
@@ -274,13 +142,13 @@
 
 
 
-               ┌ 权限预设 · 查询： ─────────────────────────────────────────────────────────────────────┐
-               │当前：workspace-write · 新会话默认 workspace-write                                      │
-               │▶ read-only（read-only）                                                                │
-               │  workspace-write（workspace-write）（当前）                                            │
-               │  danger-full-access（danger-full-access）  sandbox=danger-full-access：工具可访问工作区│
-               │↑↓ 选择 · Enter 确认 · Esc 返回 · 输入筛选                                  8           │[38;2H
-               └────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+                                                                            0
+
+
+
 
 
 
@@ -297,104 +165,13 @@
 ┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） ─────────────────────────────────────────┐
 │                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-权限 workspace-write · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行 · Esc 停止 · Ctrl+Y 复制原文 · Ctrl+C 退出
+work · 权限 workspace-write · 权限已切换为 workspace-write（官方回执）
 ```
 
-### permission-filtered
+### cold-turn
 
 ```text
- nano  work · 已连接 · 空闲 · seq 3 · 队列 0
-输入消息后按 Enter 发送。
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-               ┌ 权限预设 · 查询：danger ───────────────────────────────────────────────────────────────┐
-               │当前：workspace-write · 新会话默认 workspace-write                                      │
-               │▶ danger-full-access（danger-full-access）                                              │
-               │sandbox=danger-full-access：工具可访问工作区之外，风险由你承担 · approval=never：所有   │
-               │审批请求自动拒绝，不再出现审批卡                                                        │
-               │↑↓ 选择 · Enter 确认 · Esc 返回 · 输入筛选                                  8           │[38;2H
-               └────────────────────────────────────────────────────────────────────────────────────────┘
-
-
-
-
-
-
-
-
-
-
-
-
-
-┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） ─────────────────────────────────────────┐
-│                                                                                                                      │
-└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-权限 workspace-write · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行 · Esc 停止 · Ctrl+Y 复制原文 · Ctrl+C 退出
-```
-
-### permission-switched
-
-```text
- nano  work · 已连接 · 空闲 · seq 9 · 队列 1
-输入消息后按 Enter 发送。
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                                                                                            8            [38;2H
-
-
-
-
-
-
-
-
-
-
-
-
- 队列 · 官方 inbox · 1 项（Alt+↑↓ 选择，Alt+E 编辑，Alt+D 删除，Alt+S 插话，Alt+X 清空并停止） ─────────────────────────
-▶ [待下一步] The approval policy changed from "ask" to "never" (changed by the user).
-┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） ─────────────────────────────────────────┐
-│                                                                                                                      │
-└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-权限 danger-full-access · 权限已切换为 danger-full-access（官方回执；模型已收到 changed-by-user 通知）
-```
-
-### real-turn
-
-```text
- nano  work · 已连接 · 运行中 · seq 26 · 队列 0
-
+ nano 已连接 · 运行中 · seq 19 · 队列 0
 # 全局规矩（跨 harness 唯一真相源）
 
 **Claude Code / Codex / kimi 读的是本文件，规矩正文一字不差：**
@@ -405,18 +182,19 @@
 | Codex | `~/.codex/AGENTS.md` 是指向本文件的符号链接，启动时自动读取 |
 | kimi | 原生读 `~/.agents/AGENTS.md` |
 
-**要改规矩，只改这一份**——各工具下[1加载全局指令时读取同一份正文；已有会话需重新启动以确保加载新内容。
+**要改规矩，只改这一份**——各工[1下次加载全局指令时读取同一份正文；已有会话需重新启动以确保加载新内容。
 别在任何
 上下文
 Current runtime context. This snapshot supersedes earlier runtime-context snapshots.
 
-Current working directory: "/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s04-rs3m1bcg/work".
+Current working directory: "/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s04-g2bzvari/work".
 
-Current DSH file policy: danger-full-access. The DSH file sandbox does not restrict file modifications by available oper
-ations.
-                                                                                            8            [38;2H
-Approval prompts are disabled in this session: actions that require approval are rejected automatically — do not request
- sandbox escalation (do not set `sandbox_permissions`).
+Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files unde
+r the session workspace: "/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s04-g2bzvari/work". Some platfor
+m temporary areas may also be writable.
+
+Approval policy: ask. Operations that require approval may ask through the configured answerers; without an available an
+sw
 上下文
 <system-reminder>
 A skill is a reusable set of task-specific instructions. The following skills are available in this session:
@@ -426,20 +204,289 @@ A skill is a reusable set of task-specific instructions. The following skills ar
 t / MCP OAuth。控制面优先走 ForTop/OpenTOP，Session 运行时和 Files 走数据面直联。
 - `arkcli-api-explorer`: Inspect or invoke locally registered ArkCLI actions when product commands cannot cover a task.
 Use for registry errors or exact raw payloads. Not for public API catalogs or OpenAPI schemas.
-- `arkcli-auth`: arkcli 认证管理：交互式登录、Volc SSO 登录、[3看状态、退出登录、生成 A
+- `arkcli-auth`: arkcli 认证管[3：交互式登录、Volc SSO 登录、查看状态、退出登录、生成 A
 助手（流式）
 
 ┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） ─────────────────────────────────────────┐
 │                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-权限 danger-full-access · 已接收
+work · 权限 workspace-write · 已接收
 ```
 
-### permission-restored
+### model-panel
 
 ```text
- nano  work · 已连接 · 运行中 · seq 32 · 队列 1
+ nano 已连接 · 空闲 · seq 23 · 队列 0
+# 全局规矩（跨 harness 唯一真相源）
 
+**Claude Code / Codex / kimi 读的是本文件，规矩正文一字不差：**
+
+| harness | 怎么读到 |
+|---|---|
+| Claude Code | `~/.claude/CLAUDE.md` 用 `@` 把它导入 |
+| Codex | `~/.codex/AGENTS.md` 是指向本文件的符号链接，启动时自动读取 |
+| kimi | 原生读 `~/.agents/AGENTS.md` |
+
+**要改规矩，只改这一份**——各工[1下次加载全局指令时读取同一份正文；已有会话需重新启动以确保加载新内容。
+别在任何
+上下文
+Current runtime context. This snapshot supersedes earlier runtime-context snapshots.
+
+Current working┌ 模型 · 查询： ─────────────────────────────────────────────────────────────────────────┐rk".
+               │当前：DeepSeek-V4.1-Flash · deepseek-official · 强度 High                               │
+Current DSH fil│DeepSeek                                                                                │dify files unde
+r the session w│▶ DeepSeek-V4.1-Flash（当前）                                                           │". Some platfor
+m temporary are│强度：Off / Low / High / Max；默认 High                                                 │
+               │  DeepSeek-V4-Pro  Stronger agentic coding, knowledge, and difficult reasoning; suite…  │
+Approval policy│↑↓ 选择 · Enter 确认 · Esc 返回 · 输入筛选                                              │an available an
+sw             └────────────────────────────────────────────────────────────────────────────────────────┘
+上下文
+<system-reminder>
+A skill is a reusable set of task-specific instructions. The following skills are available in this session:
+
+<available_skills>
+- `arkcli-agent`: arkcli agent：管理 ARK Managed Agents，包括 Agent / Skill / Env / Session / File / Memory Store / Vaul
+t / MCP OAuth。控制面优先走 ForTop/OpenTOP，Session 运行时和 Files 走数据面直联。
+- `arkcli-api-explorer`: Inspect or invoke locally registered ArkCLI actions when product commands cannot cover a task.
+Use for registry errors or exact raw payloads. Not for public API catalogs or OpenAPI schemas.
+- `arkcli-auth`: arkcli 认证管[3：交互式登录、Volc SSO 登录、查看状态、退出登录、生成 A
+助手
+[reasoning]ok
+┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） ─────────────────────────────────────────┐
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+work · 权限 workspace-write
+```
+
+### model-enter
+
+```text
+ nano 已连接 · 空闲 · seq 23 · 队列 0
+# 全局规矩（跨 harness 唯一真相源）
+
+**Claude Code / Codex / kimi 读的是本文件，规矩正文一字不差：**
+
+| harness | 怎么读到 |
+|---|---|
+| Claude Code | `~/.claude/CLAUDE.md` 用 `@` 把它导入 |
+| Codex | `~/.codex/AGENTS.md` 是指向本文件的符号链接，启动时自动读取 |
+| kimi | 原生读 `~/.agents/AGENTS.md` |
+
+**要改规矩，只改这一份**——各工[1下次加载全局指令时读取同一份正文；已有会话需重新启动以确保加载新内容。
+别在任何
+上下文
+Current runtime context. This snapshot supersedes earlier runtime-context snapshots.
+               ┌ 推理强度 · 查询： ─────────────────────────────────────────────────────────────────────┐
+Current working│当前：DeepSeek-V4.1-Flash · deepseek-official · 强度 High                               │rk".
+               │▶ 默认（当前）                                                                          │
+Current DSH fil│使用模型默认强度（High）                                                                │dify files unde
+r the session w│  Off  Use for simple tasks that do not need reasoning.                                 │". Some platfor
+m temporary are│  Low  Prefer for routine or latency-sensitive tasks.                                   │
+               │  High  The default balance for most tasks.                                             │
+Approval policy│  Max  Reserve for the hardest quality-first tasks.                                     │an available an
+sw             │↑↓ 选择 · Enter 确认 · Esc 返回 · 输入筛选                                              │
+上下文         └────────────────────────────────────────────────────────────────────────────────────────┘
+<system-reminder>
+A skill is a reusable set of task-specific instructions. The following skills are available in this session:
+
+<available_skills>
+- `arkcli-agent`: arkcli agent：管理 ARK Managed Agents，包括 Agent / Skill / Env / Session / File / Memory Store / Vaul
+t / MCP OAuth。控制面优先走 ForTop/OpenTOP，Session 运行时和 Files 走数据面直联。
+- `arkcli-api-explorer`: Inspect or invoke locally registered ArkCLI actions when product commands cannot cover a task.
+Use for registry errors or exact raw payloads. Not for public API catalogs or OpenAPI schemas.
+- `arkcli-auth`: arkcli 认证管[3：交互式登录、Volc SSO 登录、查看状态、退出登录、生成 A
+助手
+[reasoning]ok
+┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） ─────────────────────────────────────────┐
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+work · 权限 workspace-write
+```
+
+### effort-selected
+
+```text
+ nano 已连接 · 空闲 · seq 24 · 队列 0
+# 全局规矩（跨 harness 唯一真相源）
+
+**Claude Code / Codex / kimi 读的是本文件，规矩正文一字不差：**
+
+| harness | 怎么读到 |
+|---|---|
+| Claude Code | `~/.claude/CLAUDE.md` 用 `@` 把它导入 |
+| Codex | `~/.codex/AGENTS.md` 是指向本文件的符号链接，启动时自动读取 |
+| kimi | 原生读 `~/.agents/AGENTS.md` |
+
+**要改规矩，只改这一份**——各工[1下次加载全局指令时读取同一份正文；已有会话需重新启动以确保加载新内容。
+别在任何
+上下文
+Current runtime context. This snapshot supersedes earlier runtime-context snapshots.
+
+Current working directory: "/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s04-g2bzvari/work".
+
+Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files unde
+r the session workspace: "/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s04-g2bzvari/work". Some platfor
+m temporary areas may also be writable.
+
+Approval policy: ask. Operations that require approval may ask through the configured answerers; without an available an
+sw
+上下文                                                                                                   [?25h
+<system-reminder>
+A skill is a reusable set of task-specific instructions. The following skills are available in this session:
+
+<available_skills>
+- `arkcli-agent`: arkcli agent：管理 ARK Managed Agents，包括 Agent / Skill / Env / Session / File / Memory Store / Vaul
+t / MCP OAuth。控制面优先走 ForTop/OpenTOP，Session 运行时和 Files 走数据面直联。
+- `arkcli-api-explorer`: Inspect or invoke locally registered ArkCLI actions when product commands cannot cover a task.
+Use for registry errors or exact raw payloads. Not for public API catalogs or OpenAPI schemas.
+- `arkcli-auth`: arkcli 认证管[3：交互式登录、Volc SSO 登录、查看状态、退出登录、生成 A
+助手
+[reasoning]ok
+┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） ─────────────────────────────────────────┐
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+work · 权限 workspace-write · 会话内模型已切换为 deepseek-official/deepseek-v4-pro；新会话默认值由官方后台保存（本次回…
+```
+
+### model-reopened
+
+```text
+ nano 已连接 · 空闲 · seq 24 · 队列 0
+# 全局规矩（跨 harness 唯一真相源）
+
+**Claude Code / Codex / kimi 读的是本文件，规矩正文一字不差：**
+
+| harness | 怎么读到 |
+|---|---|
+| Claude Code | `~/.claude/CLAUDE.md` 用 `@` 把它导入 |
+| Codex | `~/.codex/AGENTS.md` 是指向本文件的符号链接，启动时自动读取 |
+| kimi | 原生读 `~/.agents/AGENTS.md` |
+
+**要改规矩，只改这一份**——各工[1下次加载全局指令时读取同一份正文；已有会话需重新启动以确保加载新内容。
+别在任何
+上下文
+Current runtime context. This snapshot supersedes earlier runtime-context snapshots.
+
+Current working┌ 模型 · 查询： ─────────────────────────────────────────────────────────────────────────┐rk".
+               │当前：DeepSeek-V4-Pro · deepseek-official · 强度 Low                                    │
+Current DSH fil│DeepSeek                                                                                │dify files unde
+r the session w│▶ DeepSeek-V4.1-Flash                                                                   │". Some platfor
+m temporary are│强度：Off / Low / High / Max；默认 High                                                 │
+               │  DeepSeek-V4-Pro（当前）  Stronger agentic coding, knowledge, and difficult reasonin…[22;105H│
+Approval policy│↑↓ 选择 · Enter 确认 · Esc 返回 · 输入筛选                                              │an available an
+sw             └────────────────────────────────────────────────────────────────────────────────────────┘
+上下文                                                                                                   [?25h
+<system-reminder>
+A skill is a reusable set of task-specific instructions. The following skills are available in this session:
+
+<available_skills>
+- `arkcli-agent`: arkcli agent：管理 ARK Managed Agents，包括 Agent / Skill / Env / Session / File / Memory Store / Vaul
+t / MCP OAuth。控制面优先走 ForTop/OpenTOP，Session 运行时和 Files 走数据面直联。
+- `arkcli-api-explorer`: Inspect or invoke locally registered ArkCLI actions when product commands cannot cover a task.
+Use for registry errors or exact raw payloads. Not for public API catalogs or OpenAPI schemas.
+- `arkcli-auth`: arkcli 认证管[3：交互式登录、Volc SSO 登录、查看状态、退出登录、生成 A
+助手
+[reasoning]ok
+┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） ─────────────────────────────────────────┐
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+work · 权限 workspace-write
+```
+
+### permission-panel
+
+```text
+ nano 已连接 · 空闲 · seq 24 · 队列 0
+# 全局规矩（跨 harness 唯一真相源）
+
+**Claude Code / Codex / kimi 读的是本文件，规矩正文一字不差：**
+
+| harness | 怎么读到 |
+|---|---|
+| Claude Code | `~/.claude/CLAUDE.md` 用 `@` 把它导入 |
+| Codex | `~/.codex/AGENTS.md` 是指向本文件的符号链接，启动时自动读取 |
+| kimi | 原生读 `~/.agents/AGENTS.md` |
+
+**要改规矩，只改这一份**——各工[1下次加载全局指令时读取同一份正文；已有会话需重新启动以确保加载新内容。
+别在任何
+上下文
+Current runtime context. This snapshot supersedes earlier runtime-context snapshots.
+
+Current working┌ 权限预设 · 查询： ─────────────────────────────────────────────────────────────────────┐rk".
+               │当前：workspace-write · 新会话默认 workspace-write                                      │
+Current DSH fil│▶ read-only                                                                             │dify files unde
+r the session w│  workspace-write（当前）                                                               │". Some platfor
+m temporary are│  danger-full-access  sandbox=danger-full-access：工具可访问工作区之外，风险由你承担 …  │
+               │[38;5择 · Enter 确认 · Esc 返回 · 输入筛选                                            [2│;105H│
+Approval policy└────────────────────────────────────────────────────────────────────────────────────────┘an available an
+sw
+上下文                                                                                                   [?25h
+<system-reminder>
+A skill is a reusable set of task-specific instructions. The following skills are available in this session:
+
+<available_skills>
+- `arkcli-agent`: arkcli agent：管理 ARK Managed Agents，包括 Agent / Skill / Env / Session / File / Memory Store / Vaul
+t / MCP OAuth。控制面优先走 ForTop/OpenTOP，Session 运行时和 Files 走数据面直联。
+- `arkcli-api-explorer`: Inspect or invoke locally registered ArkCLI actions when product commands cannot cover a task.
+Use for registry errors or exact raw payloads. Not for public API catalogs or OpenAPI schemas.
+- `arkcli-auth`: arkcli 认证管[3：交互式登录、Volc SSO 登录、查看状态、退出登录、生成 A
+助手
+[reasoning]ok
+┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） ─────────────────────────────────────────┐
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+work · 权限 workspace-write
+```
+
+### permission-filtered
+
+```text
+ nano 已连接 · 空闲 · seq 24 · 队列 0
+# 全局规矩（跨 harness 唯一真相源）
+
+**Claude Code / Codex / kimi 读的是本文件，规矩正文一字不差：**
+
+| harness | 怎么读到 |
+|---|---|
+| Claude Code | `~/.claude/CLAUDE.md` 用 `@` 把它导入 |
+| Codex | `~/.codex/AGENTS.md` 是指向本文件的符号链接，启动时自动读取 |
+| kimi | 原生读 `~/.agents/AGENTS.md` |
+
+**要改规矩，只改这一份**——各工[1下次加载全局指令时读取同一份正文；已有会话需重新启动以确保加载新内容。
+别在任何
+上下文
+Current runtime context. This snapshot supersedes earlier runtime-context snapshots.
+
+Current working┌ 权限预设 · 查询：danger ───────────────────────────────────────────────────────────────┐rk".
+               │当前：workspace-write · 新会话默认 workspace-write                                      │
+Current DSH fil│▶ danger-full-access                                                                    │dify files unde
+r the session w│sandbox=danger-full-access：工具可访问工作区之外，风险由你承担 · approval=never：所有   │". Some platfor
+m temporary are│审批请求自动拒绝，不再出现审[2卡                                                        │
+               │[38;5择 · Enter 确认 · Esc 返回 · 输入筛选                                            [2│;105H│
+Approval policy└────────────────────────────────────────────────────────────────────────────────────────┘an available an
+sw
+上下文                                                                                                   [?25h
+<system-reminder>
+A skill is a reusable set of task-specific instructions. The following skills are available in this session:
+
+<available_skills>
+- `arkcli-agent`: arkcli agent：管理 ARK Managed Agents，包括 Agent / Skill / Env / Session / File / Memory Store / Vaul
+t / MCP OAuth。控制面优先走 ForTop/OpenTOP，Session 运行时和 Files 走数据面直联。
+- `arkcli-api-explorer`: Inspect or invoke locally registered ArkCLI actions when product commands cannot cover a task.
+Use for registry errors or exact raw payloads. Not for public API catalogs or OpenAPI schemas.
+- `arkcli-auth`: arkcli 认证管[3：交互式登录、Volc SSO 登录、查看状态、退出登录、生成 A
+助手
+[reasoning]ok
+┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） ─────────────────────────────────────────┐
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+work · 权限 workspace-write
+```
+
+### permission-switched
+
+```text
+ nano 已连接 · 空闲 · seq 30 · 队列 1
 **Claude Code / Codex / kimi 读的是本文件，规矩正文一字不差：**
 
 | harness | 怎么读到 |
@@ -453,76 +500,122 @@ Use for registry errors or exact raw payloads. Not for public API catalogs or Op
 上下文
 Current runtime context. This snapshot supersedes earlier runtime-context snapshots.
 
-Current working directory: "/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s04-rs3m1bcg/work".
+Current working directory: "/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s04-g2bzvari/work".
 
-Current DSH file policy: danger-full-access. The DSH file sandbox does not restrict file modifications by available oper
-ations.
+Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files unde
+r the session workspace: "/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s04-g2bzvari/work". Some platfor
+m temporary areas may also be writable.
 
-Approval prompts are disabled in this session: actions that require approval are rejected automatically — do not request
- sandbox escalation (do not set `sandbox_permissions`).                                                  [38;2H
+Approval policy: ask. Operations that require approval may ask through the configured answerers; without an available an
+sw                                                                                                    [2 ;105H│
 上下文
 <system-reminder>
-A skill is a reusable set of task-specific instructions. The following skills are available in this session:
+A skill is a reusable set of task-specific instructions. The following skills are available in this session:5h
 
 <available_skills>
-- `arkcli-agent`: arkcli agent：管理 ARK Managed Agents，包括 Agent / Skill / Env / Session / File / Memory Store / Vaul
+[38;5;8;49m- `arkcli-agent`: ark管理 ARK Managed Agents，包括 Agent / Skill / Env / Session / File / Memory Store / Vaul
 t / MCP OAuth。控制面优先走 ForTop/OpenTOP，Session 运行时和 Files 走数据面直联。
 - `arkcli-api-explorer`: Inspect or invoke locally registered ArkCLI actions when product commands cannot cover a task.
 Use for registry errors or exact raw payloads. Not for public API catalogs or OpenAPI schemas.
-- `arkcli-auth`: arkcli 认证管理：交互式登录、Volc SSO 登录、查看状态、退出登录、生成 A
-助手（流式）[33;13H
-
+- `arkcli-auth`: arkcli 认证管理：交互式登录、Volc SSO 登录、查看状态、退出登录、生[3 A
+助手
+[reasoning]ok
  队列 · 官方 inbox · 1 项（Alt+↑↓ 选择，Alt+E 编辑，Alt+D 删除，Alt+S 插话，Alt+X 清空并停止） ─────────────────────────
-▶ [待下一步] The approval policy changed from "never" to "ask" (changed by the user).
+▶ [待下一步] The approval policy changed from "ask" to "never" (changed by the user).
 ┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） ─────────────────────────────────────────┐
 │                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-权限 workspace-write · 权限已切换为 workspace-write（官方回执；模型已收到 changed-by-user 通知）
+work · 权限 danger-full-access · 权限已切换为 danger-full-access（官方回执）
+```
+
+### permission-restored
+
+```text
+ nano 已连接 · 空闲 · seq 36 · 队列 2
+
+| harness | 怎么读到 |
+|---|---|
+| Claude Code | `~/.claude/CLAUDE.md` 用 `@` 把它导入 |
+| Codex | `~/.codex/AGENTS.md` 是指向本文件的符号链接，启动时自动读取 |
+| kimi | 原生读 `~/.agents/AGENTS.md` |
+
+**要改规矩，只改这一份**——各工具下次加载全局指令时读取同一份正文；已有[9话需重新启动以确保加载新内容。
+别在任何
+上下文
+Current runtime context. This snapshot supersedes earlier runtime-context snapshots.
+
+Current working directory: "/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s04-g2bzvari/work".
+
+Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files unde
+r the session workspace: "/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s04-g2bzvari/work". Some platfor
+m temporary areas may also be writable.
+
+Approval policy: ask. Operations that require approval may ask through the configured answerers; without an available an
+sw
+上下文                                                                                                   ;105H│
+<system-reminder>
+A skill is a reusable set of task-specific instructions. The following skills are available in this session:
+                                                                                                            5h
+<available_skills>
+- `arkcli-agent`: arkcli agent：管理 ARK Managed Agents，包[2 Agent / Skill / Env / Session / File / Memory Store / Vaul
+t3/ MCP OAuth。控制面优先走 ForTop/OpenTOP，Session 运行时和 Files 走数据面直联。
+- `arkcli-api-explorer`: Inspect or invoke locally registered ArkCLI actions when product commands cannot cover a task.
+Use for registry errors or exact raw payloads. Not for public API catalogs or OpenAPI schemas.
+- `arkcli-auth`: arkcli 认证管理：交互式登录、Volc SSO 登录、查看状态、退[3登录、生成 A
+助手
+[reasoning]ok
+ 队列 · 官方 inbox · 2 项（Alt+↑↓ 选择，Alt+E 编辑，Alt+D 删除，Alt+S 插话，Alt+X 清空并停止） ─────────────────────────
+▶ [待下一步] The approval policy changed from "ask" to "never" (changed by the user).
+  [待下一步] The approval policy changed from "never" to "ask" (changed by the user).
+┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） ─────────────────────────────────────────┐
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+work · 权限 workspace-write · 权限已切换为 workspace-write（官方回执）
 ```
 
 ### model-restored
 
 ```text
- nano  work · 已连接 · 空闲 · seq 44 · 队列 0
+ nano 已连接 · 空闲 · seq 37 · 队列 2
 
-Current working directory: "/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s04-rs3m1bcg/work".
+| harness | 怎么读到 |
+|---|---|
+| Claude Code | `~/.claude/CLAUDE.md` 用 `@` 把它导入 |
+| Codex | `~/.codex/AGENTS.md` 是指向本文件的符号链接，启动时自动读取 |
+| kimi | 原生读 `~/.agents/AGENTS.md` |
 
-Current DSH file policy: danger-full-access. The DSH file sandbox does not restrict file modifications by available oper
-ations.
-
-Approval prompts are disabled in this session: actions that require approval are rejected automatically — do not request
- sandbox escalation (do not set `sandbox_permissions`).
-上下文
-<system-reminder>
-A skill is a reusable set of task-specific instructions. The following skills are available in this session:
-
-<available_skills>
-- `arkcli-agent`: arkcli agent：管理 ARK Managed Agents，包括 Agent / Skill / Env / Session / File / Memory Store / Vaul
-t / MCP OAuth。控制面优先走 ForTop/OpenTOP，Session 运行时和 Files 走数据面直联。
-- `arkcli-api-explorer`: Inspect or invoke locally registered ArkCLI actions when product commands cannot cover a task.
-Use for registry errors or exact raw payloads. Not for public API catalogs or OpenAPI schemas.
-- `arkcli-auth`: arkcli 认证管理：交互式登录、Volc SSO 登录、查看状态、退出登录、生成 A
-助手
-[reasoning]ok
-上下文                                                                                                   [38;2H
-The approval policy changed from "never" to "ask" (changed by the user).
+**要改规矩，只改这一份**——各工具下次加载全局指令时读取同一份正文；已有[9话需重新启动以确保加载新内容。
+别在任何
 上下文
 Current runtime context. This snapshot supersedes earlier runtime-context snapshots.
 
-Current working directory: "/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s04-rs3m1bcg/work".
+Current working directory: "/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s04-g2bzvari/work".
 
 Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files unde
-r the session workspace: "/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s04-rs3m1bcg/work". Some platfor
+r the session workspace: "/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s04-g2bzvari/work". Some platfor
 m temporary areas may also be writable.
 
 Approval policy: ask. Operations that require approval may ask through the configured answerers; without an available an
 sw
+上下文                                                                                                   ;105H│
+<system-reminder>
+A skill is a reusable set of task-specific instructions. The following skills are available in this session:
+                                                                                                            5h
+<available_skills>
+- `arkcli-agent`: arkcli agent：管理 ARK Managed Agents，包[2 Agent / Skill / Env / Session / File / Memory Store / Vaul
+t3/ MCP OAuth。控制面优先走 ForTop/OpenTOP，Session 运行时和 Files 走数据面直联。
+- `arkcli-api-explorer`: Inspect or invoke locally registered ArkCLI actions when product commands cannot cover a task.
+Use for registry errors or exact raw payloads. Not for public API catalogs or OpenAPI schemas.
+- `arkcli-auth`: arkcli 认证管理：交互式登录、Volc SSO 登录、查看状态、退[3登录、生成 A
 助手
 [reasoning]ok
+ 队列 · 官方 inbox · 2 项（Alt+↑↓ 选择，Alt+E 编辑，Alt+D 删除，Alt+S 插话，Alt+X 清空并停止） ─────────────────────────
+▶ [待下一步] The approval policy changed from "ask" to "never" (changed by the user).
+  [待下一步] The approval policy changed from "never" to "ask" (changed by the user).
 ┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行（Shift+Enter 视终端） ─────────────────────────────────────────┐
 │                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-权限 workspace-write · 会话内模型已切换为 deepseek-official/deepseek-flash；新会话默认值由官方后台保存（本次回执不代表默
+work · 权限 workspace-write · 会话内模型已切换为 deepseek-official/deepseek-flash；新会话默认值由官方后台保存（本次回执…
 ```
 
 ## 官方会话日志摘录（只保留控制、请求头与回合相关事件）
@@ -530,21 +623,20 @@ sw
 {"type": "permission/preset", "data": {"preset": "workspace-write"}}
 {"type": "sandbox/mode", "data": {"mode": "workspace-write"}}
 {"type": "approval/policy", "data": {"policy": "ask"}}
+{"type": "command/run", "data": {"commandId": "cmd-9ce59815-1", "name": "permission", "args": " workspace-write", "source": {"kind": "user"}}}
+{"type": "command/done", "data": {"commandId": "cmd-9ce59815-1", "kind": "success", "text": "preset workspace-write"}}
+{"type": "request/header", "config": {"provider": "deepseek-official", "model": "deepseek-flash", "reasoningEffort": "high", "maxTokens": 256000}}
+{"type": "assistant/message", "data": {"turn": 1, "step": 1, "message": {"role": "assistant", "content": [{"type": "reasoning", "text": ""}, {"type": "text", "text": "ok"}], "source": {"kind": "model", "provider": "deepseek-official", "model": "deepseek-flash", "replayState": {"response": {"kind": "deepseek-messages", "version": 1, "model": "deepseek-flash"}, "blocks": [{"type": "reasoning", "signature": "51ef63a7-7ecb-4308-b9c0-79f21b6a836e"}, {"type": "text"}]}}, "id": "c6bd328d-3f47-4a64-8433-195543a28c95"}, "usage": {"inputTokens": 13554, "outputTokens": 2, "cacheReadTokens": 5632, "cacheWriteTokens": 0, "totalTokens": 19188}, "stream": [{"type": "chunk", "time": 1792592454576, "chunk": {"type": "block-start", "index": 0, "blockType": "reasoning"}}, {"type": "chunk", "time": 1792592455338, "chunk": {"type": "block-end", "index": 0, "block": {"type": "reasoning", "text": ""}}}, {"type": "chunk", "time": 1792592455338, "chunk": {"type": "block-start", "index": 1, "blockType": "text"}}, {"type": "text-chunks", "time0": 1792592455338, "index": 1, "dt": [], "texts": ["ok"]}, {"type": "chunk", "time": 1792592455364, "chunk": {"type": "block-end", "index": 1, "block": {"type": "text", "text": "ok"}}}, {"type": "chunk", "time": 1792592455364, "chunk": {"type": "usage", "usage": {"inputTokens": 13554, "outputTokens": 2, "cacheReadTokens": 5632, "cacheWriteTokens": 0, "totalTokens": 19188}}}, {"type": "chunk", "time": 1792592455364, "chunk": {"type": "finish", "reason": {"kind": "stop"}, "replayState": {"response": {"kind": "deepseek-messages", "version": 1, "model": "deepseek-flash"}, "blocks": [{"type": "reasoning", "signature": "51ef63a7-7ecb-4308-b9c0-79f21b6a836e"}, {"type": "text"}]}}}]}}
+{"type": "turn/end", "data": {"turn": 1, "reason": {"kind": "completed"}}}
 {"type": "model/selection", "data": {"provider": "deepseek-official", "model": "deepseek-v4-pro", "reasoningEffort": "low"}}
-{"type": "command/run", "data": {"commandId": "cmd-ad505b79-1", "name": "permission", "args": " danger-full-access", "source": {"kind": "user"}}}
+{"type": "command/run", "data": {"commandId": "cmd-9ce59815-2", "name": "permission", "args": " danger-full-access", "source": {"kind": "user"}}}
 {"type": "permission/preset", "data": {"preset": "danger-full-access"}}
 {"type": "sandbox/mode", "data": {"mode": "danger-full-access"}}
 {"type": "approval/policy", "data": {"policy": "never"}}
-{"type": "command/done", "data": {"commandId": "cmd-ad505b79-1", "kind": "success", "text": "preset danger-full-access"}}
-{"type": "user/message", "source": "user-approval", "text": "The approval policy changed from \"ask\" to \"never\" (changed by the user)."}
-{"type": "request/header", "config": {"provider": "deepseek-official", "model": "deepseek-v4-pro", "reasoningEffort": "low", "maxTokens": 256000}}
-{"type": "command/run", "data": {"commandId": "cmd-ad505b79-2", "name": "permission", "args": " workspace-write", "source": {"kind": "user"}}}
+{"type": "command/done", "data": {"commandId": "cmd-9ce59815-2", "kind": "success", "text": "preset danger-full-access"}}
+{"type": "command/run", "data": {"commandId": "cmd-9ce59815-3", "name": "permission", "args": " workspace-write", "source": {"kind": "user"}}}
 {"type": "permission/preset", "data": {"preset": "workspace-write"}}
 {"type": "sandbox/mode", "data": {"mode": "workspace-write"}}
 {"type": "approval/policy", "data": {"policy": "ask"}}
-{"type": "command/done", "data": {"commandId": "cmd-ad505b79-2", "kind": "success", "text": "preset workspace-write"}}
-{"type": "assistant/message", "data": {"turn": 1, "step": 1, "message": {"role": "assistant", "content": [{"type": "reasoning", "text": ""}, {"type": "text", "text": "ok"}], "source": {"kind": "model", "provider": "deepseek-official", "model": "deepseek-v4-pro", "replayState": {"response": {"kind": "deepseek-messages", "version": 1, "model": "deepseek-v4-pro"}, "blocks": [{"type": "reasoning", "signature": "8eb60f59-c7a2-4d5e-8597-a6da53a1797b"}, {"type": "text"}]}}, "id": "2163ab30-fc31-4020-ae07-417e71d0bbfe"}, "usage": {"inputTokens": 19143, "outputTokens": 2, "cacheReadTokens": 0, "cacheWriteTokens": 0, "totalTokens": 19145}, "stream": [{"type": "chunk", "time": 1792591291732, "chunk": {"type": "block-start", "index": 0, "blockType": "reasoning"}}, {"type": "chunk", "time": 1792591293896, "chunk": {"type": "block-end", "index": 0, "block": {"type": "reasoning", "text": ""}}}, {"type": "chunk", "time": 1792591293896, "chunk": {"type": "block-start", "index": 1, "blockType": "text"}}, {"type": "text-chunks", "time0": 1792591293896, "index": 1, "dt": [], "texts": ["ok"]}, {"type": "chunk", "time": 1792591293897, "chunk": {"type": "block-end", "index": 1, "block": {"type": "text", "text": "ok"}}}, {"type": "chunk", "time": 1792591293897, "chunk": {"type": "usage", "usage": {"inputTokens": 19143, "outputTokens": 2, "cacheReadTokens": 0, "cacheWriteTokens": 0, "totalTokens": 19145}}}, {"type": "chunk", "time": 1792591293897, "chunk": {"type": "finish", "reason": {"kind": "stop"}, "replayState": {"response": {"kind": "deepseek-messages", "version": 1, "model": "deepseek-v4-pro"}, "blocks": [{"type": "reasoning", "signature": "8eb60f59-c7a2-4d5e-8597-a6da53a1797b"}, {"type": "text"}]}}}]}}
-{"type": "user/message", "source": "user-approval", "text": "The approval policy changed from \"never\" to \"ask\" (changed by the user)."}
+{"type": "command/done", "data": {"commandId": "cmd-9ce59815-3", "kind": "success", "text": "preset workspace-write"}}
 {"type": "model/selection", "data": {"provider": "deepseek-official", "model": "deepseek-flash", "reasoningEffort": "high"}}
-{"type": "assistant/message", "data": {"turn": 1, "step": 2, "message": {"role": "assistant", "content": [{"type": "reasoning", "text": ""}, {"type": "text", "text": "ok"}], "source": {"kind": "model", "provider": "deepseek-official", "model": "deepseek-v4-pro", "replayState": {"response": {"kind": "deepseek-messages", "version": 1, "model": "deepseek-v4-pro"}, "blocks": [{"type": "reasoning", "signature": "07d9a49f-ce75-4afe-bfc8-52b333be4653"}, {"type": "text"}]}}, "id": "f7b5f782-d52a-4cad-9080-e01d0ffb1862"}, "usage": {"inputTokens": 266, "outputTokens": 2, "cacheReadTokens": 19072, "cacheWriteTokens": 0, "totalTokens": 19340}, "stream": [{"type": "chunk", "time": 1792591294090, "chunk": {"type": "block-start", "index": 0, "blockType": "reasoning"}}, {"type": "chunk", "time": 1792591295116, "chunk": {"type": "block-end", "index": 0, "block": {"type": "reasoning", "text": ""}}}, {"type": "chunk", "time": 1792591295116, "chunk": {"type": "block-start", "index": 1, "blockType": "text"}}, {"type": "text-chunks", "time0": 1792591295116, "index": 1, "dt": [], "texts": ["ok"]}, {"type": "chunk", "time": 1792591295127, "chunk": {"type": "block-end", "index": 1, "block": {"type": "text", "text": "ok"}}}, {"type": "chunk", "time": 1792591295127, "chunk": {"type": "usage", "usage": {"inputTokens": 266, "outputTokens": 2, "cacheReadTokens": 19072, "cacheWriteTokens": 0, "totalTokens": 19340}}}, {"type": "chunk", "time": 1792591295127, "chunk": {"type": "finish", "reason": {"kind": "stop"}, "replayState": {"response": {"kind": "deepseek-messages", "version": 1, "model": "deepseek-v4-pro"}, "blocks": [{"type": "reasoning", "signature": "07d9a49f-ce75-4afe-bfc8-52b333be4653"}, {"type": "text"}]}}}]}}
-{"type": "turn/end", "data": {"turn": 1, "reason": {"kind": "completed"}}}

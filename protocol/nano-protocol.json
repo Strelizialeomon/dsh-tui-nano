@@ -224,7 +224,7 @@
     },
     {
       "code": 1022,
-      "name": "nano/controls/command-unknown"
+      "name": "nano/controls/command-failed"
     },
     {
       "code": 1023,
@@ -379,7 +379,9 @@
     "controlsPresetOption": {
       "value": "string",
       "name": "string",
-      "description": "string?"
+      "description": "string?",
+      "sandbox": "string?",
+      "approval": "string?"
     },
     "controlsPermissionCatalog": {
       "options": "array:controlsPresetOption",
@@ -387,6 +389,7 @@
       "defaultPreset": "string"
     },
     "controlsPermissionState": {
+      "available": "boolean?",
       "current": "string?",
       "catalog": "controlsPermissionCatalog"
     },
@@ -1194,6 +1197,109 @@
           },
           "status": "running"
         }
+      }
+    },
+    "controlsState": {
+      "jsonrpc": "2.0",
+      "id": "req-5",
+      "method": "nano.controls.state",
+      "result": {
+        "address": {
+          "rootSessionId": "session-fixture"
+        },
+        "model": {
+          "lastUsed": {
+            "provider": "deepseek-official",
+            "model": "deepseek-flash"
+          },
+          "next": {
+            "provider": "deepseek-official",
+            "model": "deepseek-flash",
+            "reasoningEffort": "high"
+          }
+        },
+        "permission": {
+          "available": true,
+          "current": "workspace-write",
+          "catalog": {
+            "options": [
+              {
+                "value": "workspace-write",
+                "name": "workspace-write",
+                "sandbox": "workspace-write",
+                "approval": "ask"
+              },
+              {
+                "value": "danger-full-access",
+                "name": "danger-full-access",
+                "sandbox": "danger-full-access",
+                "approval": "never"
+              }
+            ],
+            "defaultOptions": [
+              {
+                "value": "workspace-write",
+                "name": "workspace-write",
+                "sandbox": "workspace-write",
+                "approval": "ask"
+              }
+            ],
+            "defaultPreset": "workspace-write"
+          }
+        },
+        "commands": [
+          {
+            "name": "permission",
+            "description": "Switch the permission preset",
+            "inputHint": "<preset>"
+          }
+        ]
+      }
+    },
+    "controlsCatalog": {
+      "jsonrpc": "2.0",
+      "id": "req-6",
+      "method": "nano.controls.modelCatalog",
+      "result": {
+        "default": {
+          "provider": "deepseek-official",
+          "model": "deepseek-flash"
+        },
+        "routableProviders": [
+          "deepseek-official"
+        ],
+        "groups": [
+          {
+            "id": "deepseek-official",
+            "name": "DeepSeek",
+            "models": [
+              {
+                "id": "deepseek-flash",
+                "name": "DeepSeek-V4.1-Flash",
+                "reasoning": {
+                  "efforts": [
+                    {
+                      "id": "low",
+                      "name": "Low"
+                    },
+                    {
+                      "id": "high",
+                      "name": "High"
+                    }
+                  ],
+                  "defaultEffort": "high"
+                }
+              }
+            ]
+          }
+        ],
+        "failures": [
+          {
+            "id": "third-party",
+            "name": "Third Party",
+            "message": "no credentials"
+          }
+        ]
       }
     }
   },

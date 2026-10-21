@@ -421,7 +421,11 @@ impl Panel {
             }
             rows.push(PanelRow {
                 group: None,
-                label: format!("{}（{}）", option.name, option.value),
+                label: if option.name == option.value {
+                    option.value.clone()
+                } else {
+                    format!("{}（{}）", option.name, option.value)
+                },
                 detail: (!consequences.is_empty()).then(|| consequences.join(" · ")),
                 current: permission.is_current(&option.value),
                 disabled: None,
@@ -511,8 +515,8 @@ mod tests {
                     "current": "workspace-write",
                     "catalog": {
                         "options": [
-                            {"value": "workspace-write", "name": "Workspace", "approval": "ask", "sandbox": "workspace-write"},
-                            {"value": "danger-full-access", "name": "Danger", "approval": "never", "sandbox": "danger-full-access"}
+                            {"value": "workspace-write", "name": "workspace-write", "approval": "ask", "sandbox": "workspace-write"},
+                            {"value": "danger-full-access", "name": "danger-full-access", "approval": "never", "sandbox": "danger-full-access"}
                         ],
                         "defaultOptions": [],
                         "defaultPreset": "workspace-write"
@@ -717,6 +721,19 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert!(rows[0].current);
         assert!(!rows[0].selectable());
+    }
+
+    #[test]
+    fn preset_labels_do_not_repeat_the_value() {
+        let controls = controls();
+        let mut panel = Panel::new();
+        panel.open(PanelMode::Permissions);
+        let rows = panel.rows(&controls);
+        assert!(rows.iter().any(|row| row.label == "workspace-write"));
+        assert!(rows.iter().any(|row| row.label == "danger-full-access"));
+        assert!(!rows
+            .iter()
+            .any(|row| row.label.contains("（workspace-write）")));
     }
 
     #[test]

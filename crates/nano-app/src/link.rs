@@ -33,6 +33,8 @@ pub enum RequestErrorKind {
 pub struct RequestError {
     /// Classification used by the submission state machine.
     pub kind: RequestErrorKind,
+    /// JSON-RPC error code, when the host answered with one.
+    pub code: Option<i64>,
     /// Sanitized description.
     pub message: String,
 }
@@ -213,8 +215,13 @@ fn classify_request_error(error: HostError) -> RequestError {
         }
         HostError::Io(_) | HostError::Spawn(_) => RequestErrorKind::Unknown,
     };
+    let code = match &error {
+        HostError::Rpc(body) => Some(body.code),
+        _ => None,
+    };
     RequestError {
         kind,
+        code,
         message: describe_host_error(&error),
     }
 }

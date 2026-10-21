@@ -96,4 +96,24 @@ S04 不新增官方没有的命令语义；本项目自有入口（例如底部�
 
 ## 10. 审核修订记录
 
-待本稿逐份过闸；上述验收均未执行。
+2026-10-21 重审（用户点档：重审；2 个只读 agent；原文见 PR #26 评论）。处置：
+
+| # | 严重度 | 发现 | 处置 |
+| --- | --- | --- | --- |
+| 对抗-B1 / 规格-2 | blocker | 模型 selection 初值只取 pending，未回退到已记录请求头/官方默认；冷启动发送和恢复会话可能与显示路由不一致 | 已修：初值按 pending → `requestHeader` → `agentDefaultModel` 回退；补三条单测 |
+| 规格-1 | blocker | 路由钩子、模型变更提示和目录构建是官方实现的复制品，不是官方公开导出 | 已修：导入官方 `installModelSelection` 与 `buildModelCatalog`（注入 `llm` 子上下文）；删除副本与自造提示文本 |
+| 对抗-M1 / 规格-5 | major | 权限读取失败被伪装成空目录成功，丢失最后值 | 已修：投影/目录读取失败返回 RPC 错误；`available: false` 是显式事实；客户端保留旧值并标「可能过期」 |
+| 对抗-M2 / 规格-6 | major | 协议 shape 缺 `sandbox`/`approval`，完整后果不在契约内 | 已修：补字段、`controlsState`/`controlsCatalog` fixtures 与 `nano-controls` 契约测试 |
+| 规格-3 / 对抗-m3 | major | 所有成功切换都宣称模型收到 changed-by-user；no-op 实际没有通知 | 已修：成功文案只写「官方回执」，不再宣称未发生的通知 |
+| 规格-4 / 对抗-m2 | major | writer-held 按消息子串判断，真实错误不含该词；权限路径无分支 | 已修：`RequestError` 携带 RPC code，模型与权限都按 1019 处理 |
+| 规格-5 | major | 未知/过期模型状态显示成「默认」，失败无过期标记 | 已修：未读取显示「未知」；控制读取失败在底栏/面板标「可能过期」 |
+| 规格-7/9/10、对抗-m7/m11 | minor | 命令列表未知说成不存在；错误码声明未用；提示用请求值 | 已修：区分列表未知/服务未组合；1022 改为 `command-failed`；提示用官方 `selected` |
+| 规格-8 | minor | 命令列表不随注册变化刷新 | 已修：Ctrl+P 打开时重读控制状态 |
+| 对抗-m1/m4/m5/m6/m8/m9/m10 | minor | 预填覆盖队列编辑、按字符截断、reset 后面板空、预设标签重复、stale 标记缺失、光标留在输入框、state 非原子 | 均已修并补测试 |
+| 规格-11 | minor | 底部缺工作目录，且常驻键位提示 | 已修：cwd 移到底部常驻行；空闲提示回到输入框标题 |
+| 规格-12 | minor | 控制目录/权限没有共享契约夹具 | 已修：protocol fixtures + 契约测试 |
+| 规格-13 | minor | 证据把复制实现称为官方钩子；长度保护可绕过；未测清单不全 | 已修：改用官方导出后表述成立；命令行长保护覆盖 typed 路径；证据更新 |
+| 规格-14 | minor | 在 S02 crate 新增 `FeatureRegistry::replace` | 已修：撤回该 API，改为按前缀一次性 claim |
+| 对抗-m12 | minor | 组合 `sessionController` 时会装两套选择钩子 | 已修：仅在未组合 controller 时安装官方钩子 |
+
+残余未实测：冷启动直接发送（若未再跑真实请求）、回合运行中切换模型、第二窗口真实 writer-held、第三方 provider 真实目录、默认值保存失败、无 reasoning 的真实模型、Ghostty 最终键位；证据文档逐项标注。

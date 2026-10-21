@@ -118,6 +118,36 @@ def main():
     snapshot("connected")
     checks = [("connected", "已连接" in connected)]
 
+    # Command palette: the list must come from the official command service.
+    send("\x10")
+    palette = snapshot("command-palette")
+    checks.append(("command palette opened", "命令 · 查询" in palette))
+    checks.append(("official commands listed", "/permission" in palette))
+    send("\x1b")
+    pump(0.3)
+
+    # A no-op preset switch succeeds without claiming a model notification.
+    send("/permission\r")
+    pump(0.5)
+    send("workspace")
+    pump(0.4)
+    send("\r")
+    noop = snapshot("permission-noop")
+    checks.append(("no-op receipt shown", "权限已切换为 workspace-write（官方回执）" in noop))
+    checks.append(("no-op does not claim a model notice", "模型已收到" not in noop))
+
+    # Cold start: no model selection yet. The request must use the official
+    # deployment default that the bridge injected into the selection ref.
+    cold_turn = ""
+    if os.environ.get("NANO_COLD_PROMPT") == "1":
+        send("\x1b[200~只回复 ok\x1b[201~")
+        pump(0.3)
+        send("\r")
+        cold_turn = wait_for(["助手", "失败", "错误"], 60)
+        snapshot("cold-turn")
+        checks.append(("cold-start reply visible", "助手" in cold_turn))
+        checks.append(("cold-start turn did not fail", "失败" not in cold_turn))
+
     # Model pane: open, show the catalog, then walk the current model.
     send("/model\r")
     model_panel = snapshot("model-panel")
@@ -163,15 +193,16 @@ def main():
     checks.append(("permission switch confirmed", "权限已切换为" in permission_switched))
     checks.append(("status bar shows new preset", "权限 danger-full-access" in permission_switched))
 
-    # One authorized real model call: the selected route and the two injected
-    # changed-by-user notices must reach the next request.
-    send("\x1b[200~只回复 ok\x1b[201~")
-    pump(0.3)
-    send("\r")
-    turn = wait_for(["助手", "失败", "错误"], 60)
-    snapshot("real-turn")
-    checks.append(("assistant reply visible", "助手" in turn))
-    checks.append(("turn did not fail", "失败" not in turn))
+    # One authorized real model call: the selected route and the injected
+    # changed-by-user notice must reach the next request.
+    if os.environ.get("NANO_SKIP_MODEL") != "1" and os.environ.get("NANO_COLD_PROMPT") != "1":
+        send("\x1b[200~只回复 ok\x1b[201~")
+        pump(0.3)
+        send("\r")
+        turn = wait_for(["助手", "失败", "错误"], 60)
+        snapshot("real-turn")
+        checks.append(("assistant reply visible", "助手" in turn))
+        checks.append(("turn did not fail", "失败" not in turn))
 
     # Switch back to the workspace-write preset through the same command path.
     send("/permission\r")
@@ -254,22 +285,35 @@ def main():
                 )
 
     routes = [entry.get("config") for entry in extracted if entry["type"] == "request/header"]
-    checks.append((
-        "next request used the switched route",
-        any(
-            route is not None
-            and route.get("model") == "deepseek-v4-pro"
-            and route.get("reasoningEffort") == "low"
-            for route in routes
-        ),
-    ))
-    checks.append((
-        "approval notice reached the model",
-        any(
-            entry["type"] == "user/message" and entry.get("source") == "user-approval"
-            for entry in extracted
-        ),
-    ))
+    if os.environ.get("NANO_COLD_PROMPT") == "1":
+        checks.append((
+            "cold-start request used an official route",
+            any(
+                route is not None
+                and isinstance(route.get("provider"), str)
+                and route.get("provider") != ""
+                and isinstance(route.get("model"), str)
+                and route.get("model") != ""
+                for route in routes
+            ),
+        ))
+    elif os.environ.get("NANO_SKIP_MODEL") != "1":
+        checks.append((
+            "next request used the switched route",
+            any(
+                route is not None
+                and route.get("model") == "deepseek-v4-pro"
+                and route.get("reasoningEffort") == "low"
+                for route in routes
+            ),
+        ))
+        checks.append((
+            "approval notice reached the model",
+            any(
+                entry["type"] == "user/message" and entry.get("source") == "user-approval"
+                for entry in extracted
+            ),
+        ))
 
     report = {
         "ok": all(ok for _, ok in checks),

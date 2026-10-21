@@ -90,6 +90,9 @@ impl PermissionCatalog {
 /// Current permission selection plus its process catalog.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PermissionState {
+    /// Whether the official permission service is composed. `None` means no
+    /// read has happened yet; `Some(false)` is an explicit unsupported fact.
+    pub available: Option<bool>,
     /// Effective current value: a preset key, `auto`, or `custom`.
     pub current: Option<String>,
     /// Process catalog the official service advertises.
@@ -101,6 +104,7 @@ pub struct PermissionState {
 impl PermissionState {
     /// Parse one permission object from `nano.controls.state`.
     pub fn parse(value: &Value) -> Result<Self, String> {
+        let available = value.get("available").and_then(Value::as_bool);
         let current = value
             .get("current")
             .and_then(Value::as_str)
@@ -111,14 +115,18 @@ impl PermissionState {
                 .ok_or_else(|| "permission.catalog is missing".to_string())?,
         )?;
         Ok(Self {
+            available: Some(available.unwrap_or(true)),
             current,
             catalog,
-            loaded: true,
+            loaded: available != Some(false),
         })
     }
 
     /// Display value: an official fact, `custom`, or an explicit unknown.
     pub fn label(&self) -> String {
+        if self.available == Some(false) {
+            return "服务未组合".to_string();
+        }
         if !self.loaded {
             return "未知".to_string();
         }
@@ -248,12 +256,14 @@ impl ControlsModel {
 
     /// Parse a successful `nano.controls.state` result.
     pub fn apply_state(&mut self, value: &Value) -> Result<(), String> {
+        // Parse everything before assigning anything: a malformed command list
+        // must not leave a half-applied model or permission projection behind.
         let model = value
             .get("model")
             .ok_or_else(|| "controls state has no model object".to_string())?;
-        self.model.last_used = ModelSelection::parse(model.get("lastUsed"));
-        self.model.next = ModelSelection::parse(model.get("next"));
-        self.permission = PermissionState::parse(
+        let last_used = ModelSelection::parse(model.get("lastUsed"));
+        let next = ModelSelection::parse(model.get("next"));
+        let permission = PermissionState::parse(
             value
                 .get("permission")
                 .ok_or_else(|| "controls state has no permission object".to_string())?,
@@ -262,7 +272,12 @@ impl ControlsModel {
             .get("commands")
             .and_then(Value::as_array)
             .ok_or_else(|| "controls state has no command list".to_string())?;
-        self.official_commands = parse_commands(commands)?;
+        let official_commands = parse_commands(commands)?;
+
+        self.model.last_used = last_used;
+        self.model.next = next;
+        self.permission = permission;
+        self.official_commands = official_commands;
         self.state_loaded = true;
         self.state_error = None;
         self.rebuild_commands();
@@ -341,6 +356,7 @@ impl ControlsModel {
         self.model_selection_available = model_selection_available;
         self.permission_available = permission_available;
         self.commands_available = commands_available;
+        self.rebuild_commands();
     }
 
     /// Last successful catalog, if any.
@@ -464,6 +480,9 @@ impl ControlsModel {
     /// Current model selection as a display label. `None` means the official
     /// deployment default, shown as "默认" rather than a concrete route.
     pub fn model_label(&self) -> String {
+        if !self.state_loaded {
+            return "未知".to_string();
+        }
         let Some(selection) = &self.model.next else {
             return "默认".to_string();
         };
@@ -479,6 +498,9 @@ impl ControlsModel {
     /// Current effort as a display label. An explicit effort uses its official
     /// display name; no explicit effort is shown as "默认".
     pub fn effort_label(&self) -> String {
+        if !self.state_loaded {
+            return "未知".to_string();
+        }
         let Some(selection) = &self.model.next else {
             return "默认".to_string();
         };
@@ -736,10 +758,25 @@ mod tests {
 
     #[test]
     fn an_unselected_model_is_shown_as_default_not_fabricated() {
-        let controls = ControlsModel::new();
+        let mut controls = ControlsModel::new();
+        assert_eq!(controls.model_label(), "未知");
+        assert_eq!(controls.effort_label(), "未知");
+        assert_eq!(controls.permission_label(), "未知");
+        controls
+            .apply_state(&json!({
+                "address": {"rootSessionId": "root"},
+                "model": {"lastUsed": null, "next": null},
+                "permission": {
+                    "available": true,
+                    "current": "custom",
+                    "catalog": {"options": [], "defaultOptions": [], "defaultPreset": "workspace-write"}
+                },
+                "commands": []
+            }))
+            .unwrap();
         assert_eq!(controls.model_label(), "默认");
         assert_eq!(controls.effort_label(), "默认");
-        assert_eq!(controls.permission_label(), "未知");
+        assert_eq!(controls.permission_label(), "custom（非命名预设）");
     }
 
     #[test]
@@ -791,6 +828,50 @@ mod tests {
             .unwrap();
         assert!(!workspace.approval_never());
         assert!(!workspace.danger_full_access());
+    }
+
+    #[test]
+    fn a_malformed_state_is_not_partially_applied() {
+        let mut controls = ControlsModel::new();
+        controls.apply_state(&state_value()).unwrap();
+        let before = controls.model.next.clone();
+        let mut broken = state_value();
+        broken["model"]["next"] = json!({"provider": "p", "model": "other"});
+        broken["commands"] = json!("bad");
+        assert!(controls.apply_state(&broken).is_err());
+        assert_eq!(controls.model.next, before);
+        assert!(controls.state_loaded());
+    }
+
+    #[test]
+    fn reset_rebuilds_the_static_view_commands() {
+        let mut controls = ControlsModel::new();
+        controls.set_capabilities(true, true, true);
+        controls.apply_state(&state_value()).unwrap();
+        assert!(controls.find_command("compact").is_some());
+        controls.reset();
+        assert!(controls.find_command("compact").is_none());
+        assert!(controls.find_command("model").is_some());
+        assert!(controls.find_command("permission").is_some());
+    }
+
+    #[test]
+    fn an_unavailable_permission_service_is_explicit() {
+        let mut controls = ControlsModel::new();
+        controls
+            .apply_state(&json!({
+                "address": {"rootSessionId": "root"},
+                "model": {"lastUsed": null, "next": null},
+                "permission": {
+                    "available": false,
+                    "current": null,
+                    "catalog": {"options": [], "defaultOptions": [], "defaultPreset": ""}
+                },
+                "commands": []
+            }))
+            .unwrap();
+        assert!(!controls.permission().loaded);
+        assert_eq!(controls.permission_label(), "服务未组合");
     }
 
     #[test]

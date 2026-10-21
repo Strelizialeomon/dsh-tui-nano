@@ -3,24 +3,23 @@
 //
 // Every fact here is read from an official service. The profile used by this
 // CLI does not compose the Web `sessionController`, so the model path follows
-// the official CLI adapter's approach: validate through `ctx.llm`, install the
-// same request/assembly hooks `installModelSelection` installs, append the
-// durable `model/selection` event, and let `ctx.agentDefaultModel` save the
-// default in the background. When a deployment does compose `sessionController`
-// its `selectModel`/`modelCatalog` are used verbatim.
+// the official primitives: validate through `ctx.llm`, install the official
+// `installModelSelection` hooks, append the durable `model/selection` event,
+// and let `ctx.agentDefaultModel` save the default in the background. When a
+// deployment does compose `sessionController`, its `selectModel` and
+// `modelCatalog` are used verbatim.
 //
 // A permission switch is never `permissionPresets.set()`: it is the official
 // `/permission <preset>` command, which appends the durable identity and
 // injects the changed-by-user notice.
-import { randomUUID } from 'node:crypto'
+import { installModelSelection } from '@deepseek-ai/dsh-agent'
+import { buildModelCatalog as buildOfficialModelCatalog } from '@deepseek-ai/dsh-api-session-controller'
 import { RpcError } from '../runtime/errors.mjs'
 
 /** Durable session events that advance the model-selection fold. */
 const MODEL_EVENTS = new Set(['model/selection', 'request/header'])
 /** Durable session events that advance the permissions projection. */
 const PERMISSION_EVENTS = new Set(['permission/preset', 'sandbox/mode', 'approval/policy'])
-/** Bound copied from the official `boundContextSummary`. */
-const CONTEXT_SUMMARY_MAX_CHARS = 120
 
 /**
  * One controls service per host generation, bound to the root Agent.
@@ -46,11 +45,64 @@ export class ControlsService {
     this.closed = false
     this.modelFold = initialModelFold(session)
     this.selection = {
-      current: this.modelFold.pending ?? undefined,
+      current: this.initialSelection(),
       assembled: undefined,
     }
-    this.disposers.push(...this.installSelectionHooks())
+    this.installSelectionHooks()
     this.listen()
+  }
+
+  /**
+   * The route the next request would use before any user selection: the
+   * durable pending selection, then the last recorded request header, then the
+   * official deployment default. The official session controller uses the same
+   * order; leaving it undefined makes a cold-start request fail on an empty
+   * provider/model seed.
+   */
+  initialSelection() {
+    if (this.modelFold.pending !== null && this.modelFold.pending !== undefined) {
+      return this.modelFold.pending
+    }
+    const header = this.session.requestHeader?.()
+    const fromHeader = selectionOfConfig(header?.config, header?.adapterDefaults)
+    if (fromHeader !== null) return fromHeader
+    const defaults = this.ctx.get('agentDefaultModel')
+    try {
+      const selection = defaults?.currentSelection?.()
+      if (
+        typeof selection?.provider === 'string' &&
+        selection.provider !== '' &&
+        typeof selection?.model === 'string' &&
+        selection.model !== ''
+      ) {
+        return {
+          provider: selection.provider,
+          model: selection.model,
+          ...(selection.reasoningEffort === undefined
+            ? {}
+            : { reasoningEffort: String(selection.reasoningEffort) }),
+        }
+      }
+    } catch {
+      // A deployment without a readable default keeps the request's own route.
+    }
+    return undefined
+  }
+
+  /**
+   * Install the official selection hooks when the Web session controller is
+   * absent. The controller installs its own hooks and owns the same selection
+   * ref, so installing both would duplicate routing and notices.
+   */
+  installSelectionHooks() {
+    if (this.ctx.get('sessionController') !== undefined) return
+    if (this.agent.ctx === undefined || typeof this.agent.ctx.on !== 'function') return
+    try {
+      const dispose = installModelSelection(this.agent.ctx, this.selection)
+      if (typeof dispose === 'function') this.disposers.push(dispose)
+    } catch (error) {
+      this.ctx.logger?.warn?.(`controls: could not install model selection hooks: ${String(error)}`)
+    }
   }
 
   /** Register listeners for the official projections and catalog invalidation. */
@@ -70,73 +122,6 @@ export class ControlsService {
     if (typeof catalogDisposer === 'function') this.disposers.push(catalogDisposer)
   }
 
-  /**
-   * Install the same routing hooks as the official `installModelSelection`:
-   * the selected route overrides prompt variables and the next request, and a
-   * changed route inserts the official model-change notice at the next step.
-   * @returns {Array<() => void>} disposers.
-   */
-  installSelectionHooks() {
-    const disposers = []
-    const own = (disposer) => {
-      if (typeof disposer === 'function') disposers.push(disposer)
-    }
-    const agentCtx = this.agent.ctx
-    if (agentCtx === undefined || typeof agentCtx.on !== 'function') return disposers
-    let assemblyOperation = 0
-    own(agentCtx.on('system-prompt/assemble', async (_assembly, _context, next) => {
-      const operation = ++assemblyOperation
-      const selected = this.selection.current
-      const assembled = await next()
-      if (operation === assemblyOperation) this.selection.assembled = selected
-      if (selected === undefined) return assembled
-      return {
-        ...assembled,
-        variables: {
-          ...assembled.variables,
-          provider: selected.provider,
-          model: selected.model,
-        },
-      }
-    }))
-    own(agentCtx.on('agent/request', async (_payload, next) => {
-      const resolved = await next()
-      const selected = this.selection.assembled
-      if (selected === undefined) return resolved
-      const { reasoningEffort: _inheritedEffort, ...withoutInheritedEffort } = resolved
-      return {
-        ...withoutInheritedEffort,
-        provider: selected.provider,
-        model: selected.model,
-        ...(selected.reasoningEffort === undefined
-          ? {}
-          : { reasoningEffort: selected.reasoningEffort }),
-      }
-    }))
-    own(agentCtx.on('agent/pre-step', async ({ agent, messages, signal, step }, next) => {
-      const decision = await next()
-      if (decision.kind === 'reject' || signal.aborted) return decision
-      if (decision.messages.length === 0 && (step === 1 || messages.length > 0)) return decision
-      const selected = this.selection.assembled
-      const previous = agent.session.requestHeader()?.config
-      if (selected === undefined || previous === undefined) return decision
-      if (selected.provider === previous.provider && selected.model === previous.model) {
-        return decision
-      }
-      const from = selected.provider === previous.provider
-        ? previous.model
-        : `${previous.provider}/${previous.model}`
-      const to = selected.provider === previous.provider
-        ? selected.model
-        : `${selected.provider}/${selected.model}`
-      return {
-        ...decision,
-        messages: [...decision.messages, modelChangeNotice(from, to)],
-      }
-    }, { prepend: true }))
-    return disposers
-  }
-
   /** Stop publishing; official services keep their own state. */
   close() {
     this.closed = true
@@ -152,7 +137,8 @@ export class ControlsService {
   /**
    * Read the current session facts without writing anything: the durable model
    * fold, the permission preset plus process catalog, and the effective
-   * command descriptors for this Agent.
+   * command descriptors for this Agent. A failed projection read is an error,
+   * not an empty success, so the client keeps its last values.
    * @returns {object} one controls snapshot.
    */
   state() {
@@ -184,7 +170,7 @@ export class ControlsService {
       throw new RpcError('nano/controls/unavailable', 'the official model registry is not composed')
     }
     try {
-      return await buildModelCatalog(llm, defaults.currentSelection())
+      return await buildCatalogInjected(this.ctx, defaults.currentSelection())
     } catch (error) {
       throw mapOfficialError(error, 'nano/controls/unavailable')
     }
@@ -211,6 +197,7 @@ export class ControlsService {
           ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
         })
         this.modelFold.pending = result.selected
+        this.selection.current = result.selected
         return { selected: result.selected }
       } catch (error) {
         throw mapOfficialError(error, 'nano/controls/model-unavailable')
@@ -258,16 +245,21 @@ export class ControlsService {
 
   /**
    * Switch the permission preset through the official command path. The result
-   * carries the re-read official preset even when the command reports an error,
-   * because a failed path may have written a preset identity before its knob
-   * write failed.
+   * carries the re-read official preset when that read succeeds; a failed read
+   * is omitted so the client re-reads instead of assuming an empty state.
    * @param {object} params - `preset`.
    * @returns {Promise<object>} command execution plus the actual current preset.
    */
   async setPermission(params) {
     const preset = requireNonEmpty(params?.preset, 'preset')
     const execution = await this.execute(`/permission ${preset}`)
-    return { ...execution, permission: this.permissionState() }
+    let permission
+    try {
+      permission = this.permissionState()
+    } catch {
+      permission = undefined
+    }
+    return { ...execution, ...(permission === undefined ? {} : { permission }) }
   }
 
   /**
@@ -295,7 +287,10 @@ export class ControlsService {
     try {
       execution = await commands.execute(this.agent, line, [], new AbortController().signal)
     } catch (error) {
-      throw mapOfficialError(error, 'nano/controls/permission-rejected')
+      const fallback = line.startsWith('/permission')
+        ? 'nano/controls/permission-rejected'
+        : 'nano/controls/command-failed'
+      throw mapOfficialError(error, fallback)
     }
     if (execution === undefined) return { executed: false }
     return {
@@ -314,29 +309,39 @@ export class ControlsService {
     }
   }
 
-  /** Current permission preset plus the process-level catalog. */
+  /**
+   * Current permission preset plus the process-level catalog. A composed
+   * service whose projection or catalog cannot be read is an error; an absent
+   * service is an explicit `available: false`, distinct from an empty catalog.
+   */
   permissionState() {
     const presets = this.ctx.get('permissionPresets')
     if (presets === undefined) {
       return {
+        available: false,
         current: null,
         catalog: { options: [], defaultOptions: [], defaultPreset: '' },
       }
     }
-    let current = null
+    let current
     try {
-      current = presets.current(this.session)
-    } catch {
-      // A session whose projection is not readable yet has no current fact.
-      current = null
+      current = presets.current(this.session) ?? null
+    } catch (error) {
+      throw new RpcError(
+        'nano/controls/unavailable',
+        `the permission projection is unreadable: ${describe(error)}`,
+      )
     }
     let catalog
     try {
       catalog = withPresetConsequences(presets)
-    } catch {
-      catalog = { options: [], defaultOptions: [], defaultPreset: '' }
+    } catch (error) {
+      throw new RpcError(
+        'nano/controls/unavailable',
+        `the permission catalog is unreadable: ${describe(error)}`,
+      )
     }
-    return { current, catalog }
+    return { available: true, current, catalog }
   }
 
   /** Effective official command descriptors for this Agent. */
@@ -379,6 +384,26 @@ export class ControlsService {
       this.ctx.logger?.warn?.(`controls: permission event failed: ${String(error)}`)
     }
   }
+}
+
+/**
+ * Call the official catalog builder with `llm` injected. Cordis only exposes a
+ * service as a context property inside an injected child, and the official
+ * builder reads `ctx.llm` directly. A plain fake context without `inject`
+ * (unit tests) is called as-is.
+ * @param {object} ctx - host or fake context.
+ * @param {object} defaultSelection - deployment default passed explicitly.
+ * @returns {Promise<object>} provider-grouped catalog.
+ */
+async function buildCatalogInjected(ctx, defaultSelection) {
+  if (typeof ctx.inject !== 'function') {
+    return buildOfficialModelCatalog(ctx, defaultSelection)
+  }
+  return await new Promise((resolve, reject) => {
+    ctx.inject(['llm'], (child) => {
+      buildOfficialModelCatalog(child, defaultSelection).then(resolve, reject)
+    })
+  })
 }
 
 /** A model-availability failure that maps to the official code. */
@@ -455,90 +480,6 @@ function sameSelection(left, right) {
 }
 
 /**
- * The official same-step notice for a route change. Text and source shape are
- * copied from `installModelSelection`; S04 never invents its own wording.
- */
-function modelChangeNotice(from, to) {
-  const summary = `${from} → ${to}`
-  return {
-    id: randomUUID(),
-    role: 'user',
-    content: [
-      {
-        type: 'text',
-        text: `[model changed: assistant turns above this point were generated by ${from}; the session continues with ${to}]`,
-      },
-    ],
-    source: {
-      kind: 'model-selection',
-      form: 'notice',
-      summary:
-        summary.length <= CONTEXT_SUMMARY_MAX_CHARS
-          ? summary
-          : `${summary.slice(0, CONTEXT_SUMMARY_MAX_CHARS - 1)}…`,
-    },
-  }
-}
-
-/** Mirror of the official `buildModelCatalog` for profiles without the controller. */
-async function buildModelCatalog(llm, defaultSelection) {
-  const providers = llm.listProviders()
-  const catalog = await Promise.all(
-    providers.map(async (provider) => {
-      try {
-        const models = await llm.listModels(provider.id)
-        const entries = await Promise.all(
-          models.map(async (model) => {
-            const resolved = await llm.resolveModelInfo(provider.id, model.id)
-            const reasoning =
-              resolved.reasoning === undefined
-                ? undefined
-                : {
-                    efforts: resolved.reasoning.efforts.map((effort) => ({
-                      id: effort.id,
-                      name: effort.name,
-                      ...(effort.description === undefined ? {} : { description: effort.description }),
-                    })),
-                    ...(resolved.reasoning.defaultEffort === undefined
-                      ? {}
-                      : { defaultEffort: resolved.reasoning.defaultEffort }),
-                  }
-            return {
-              id: model.id,
-              name: model.name,
-              ...(model.description === undefined ? {} : { description: model.description }),
-              ...(reasoning === undefined ? {} : { reasoning }),
-            }
-          }),
-        )
-        return {
-          kind: 'group',
-          group: { id: provider.id, name: provider.name, models: entries },
-        }
-      } catch (error) {
-        return {
-          kind: 'failure',
-          failure: {
-            id: provider.id,
-            name: provider.name,
-            message: error instanceof Error ? error.message : String(error),
-          },
-        }
-      }
-    }),
-  )
-  const groups = catalog
-    .flatMap((item) => (item.kind === 'group' ? [item.group] : []))
-    .filter((group) => group.models.length > 0)
-  return {
-    default: { ...defaultSelection },
-    routableProviders: groups.map((group) => group.id),
-    groups,
-    failures: catalog.flatMap((item) => (item.kind === 'failure' ? [item.failure] : [])),
-  }
-}
-
-/**
  * Enrich the official catalog options with the exact sandbox/approval values
  * each preset writes, so a client can state the complete consequence. `custom`
  * and an unregistered `auto` keep their official option untouched.
@@ -584,7 +525,7 @@ function optionalNonEmpty(value, field) {
  * success.
  */
 function mapOfficialError(error, fallbackName) {
-  const message = error instanceof Error ? error.message : String(error)
+  const message = describe(error)
   const code = typeof error?.code === 'string' ? error.code : ''
   if (code.includes('writer-held')) {
     return new RpcError('nano/controls/writer-held', message)
@@ -593,4 +534,9 @@ function mapOfficialError(error, fallbackName) {
     return new RpcError('nano/controls/model-unavailable', message)
   }
   return new RpcError(fallbackName, message)
+}
+
+/** Human-readable error text without leaking non-Error values. */
+function describe(error) {
+  return error instanceof Error ? error.message : String(error)
 }

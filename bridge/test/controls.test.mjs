@@ -14,6 +14,7 @@ const ADDRESS = { rootSessionId: ROOT }
 function fakeContext(services = {}) {
   const handlers = new Map()
   return {
+    ...services,
     handlers,
     get(key) {
       return services[key]
@@ -118,13 +119,102 @@ test('state folds the durable model header and pending selection', () => {
   assert.equal(state.commands[0].inputHint, '<preset>')
 })
 
-test('a missing permission service is reported as unknown, not invented', () => {
+test('a missing permission service is reported as unavailable, not invented', () => {
   const { service } = serviceFor()
   const state = service.state()
   assert.deepEqual(state.model, { lastUsed: null, next: null })
+  assert.equal(state.permission.available, false)
   assert.equal(state.permission.current, null)
   assert.deepEqual(state.permission.catalog.options, [])
   assert.deepEqual(state.commands, [])
+})
+
+test('an unreadable permission projection is an error, not an empty success', () => {
+  const { service } = serviceFor({
+    permissionPresets: {
+      current() {
+        throw new Error('projection is unreadable')
+      },
+      catalog: () => ({ options: [], defaultOptions: [], defaultPreset: '' }),
+      resolve: () => ({}),
+    },
+  })
+  assert.throws(
+    () => service.state(),
+    (error) => error.rpcName === 'nano/controls/unavailable' && /unreadable/.test(error.message),
+  )
+})
+
+test('the initial selection falls back to the recorded header', () => {
+  const { service } = serviceFor(
+    {},
+    { header: { config: { provider: 'p', model: 'm', reasoningEffort: 'low' } } },
+  )
+  assert.deepEqual(service.selection.current, {
+    provider: 'p',
+    model: 'm',
+    reasoningEffort: 'low',
+  })
+})
+
+test('the initial selection falls back to the deployment default', () => {
+  const { service } = serviceFor({
+    agentDefaultModel: {
+      currentSelection: () => ({ provider: 'p', model: 'm', reasoningEffort: 'high' }),
+    },
+  })
+  assert.deepEqual(service.selection.current, {
+    provider: 'p',
+    model: 'm',
+    reasoningEffort: 'high',
+  })
+})
+
+test('a pending durable selection wins over the header and default', () => {
+  const { service } = serviceFor(
+    { agentDefaultModel: { currentSelection: () => ({ provider: 'default', model: 'd' }) } },
+    {
+      header: { config: { provider: 'p', model: 'old' } },
+      events: [{ type: 'model/selection', data: { provider: 'p', model: 'new' } }],
+    },
+  )
+  assert.deepEqual(service.selection.current, { provider: 'p', model: 'new' })
+})
+
+test('a composed session controller installs only its own selection hooks', () => {
+  const { agentContext, service } = serviceFor({
+    sessionController: {
+      async selectModel(request) {
+        return { selected: request }
+      },
+      async modelCatalog() {
+        return { default: { provider: 'p', model: 'm' }, routableProviders: [], groups: [], failures: [] }
+      },
+    },
+  })
+  assert.equal(agentContext.handlers.size, 0)
+  assert.deepEqual(service.selection.current, undefined)
+})
+
+test('command failures keep their own contract code', async () => {
+  const { service } = serviceFor({
+    commands: {
+      list: () => [],
+      async execute() {
+        const error = new Error('command handler exploded')
+        error.code = 'command/internal'
+        throw error
+      },
+    },
+  })
+  await assert.rejects(
+    service.executeCommand({ line: '/compact' }),
+    (error) => error.rpcName === 'nano/controls/command-failed',
+  )
+  await assert.rejects(
+    service.executeCommand({ line: '/permission danger-full-access' }),
+    (error) => error.rpcName === 'nano/controls/permission-rejected',
+  )
 })
 
 test('selectModel uses the official session controller when it is composed', async () => {

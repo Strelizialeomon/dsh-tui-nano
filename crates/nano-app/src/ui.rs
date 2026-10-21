@@ -49,19 +49,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 }
 
 fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
-    let cwd = app
-        .cli
-        .cwd
-        .as_ref()
-        .and_then(|path| path.file_name())
-        .map(|name| name.to_string_lossy().to_string())
-        .or_else(|| {
-            std::env::current_dir().ok().and_then(|path| {
-                path.file_name()
-                    .map(|name| name.to_string_lossy().to_string())
-            })
-        })
-        .unwrap_or_else(|| ".".to_string());
     let status_color = match app.connection {
         Connection::Ready => match app.model.status() {
             nano_conversation::ConversationStatus::Running => Color::Yellow,
@@ -72,8 +59,6 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     };
     let mut spans = vec![
         Span::styled(" nano ", Style::default().fg(Color::Black).bg(Color::Cyan)),
-        Span::raw(format!(" {cwd} ")),
-        Span::raw("· "),
         Span::styled(app.connection.label(), Style::default().fg(status_color)),
         Span::raw(" · "),
         Span::styled(
@@ -285,7 +270,7 @@ fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
         .collect();
     frame.render_widget(block, area);
     frame.render_widget(Paragraph::new(Text::from(visible)), inner);
-    if app.scene.focus().input_focused() && viewport > 0 {
+    if app.scene.focus().input_focused() && !app.panel.is_open() && viewport > 0 {
         let row = cursor_row
             .saturating_sub(offset)
             .min(viewport.saturating_sub(1));
@@ -384,9 +369,11 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
 /// One-line header describing the current official value for this pane.
 fn panel_header(app: &App) -> String {
     match app.panel.mode() {
-        PanelMode::Models => {
+        PanelMode::Models | PanelMode::Efforts { .. } => {
             let stale = if app.controls.catalog_stale() {
                 " · 目录可能过期"
+            } else if app.controls.state_error().is_some() {
+                " · 状态可能过期"
             } else {
                 ""
             };
@@ -396,11 +383,6 @@ fn panel_header(app: &App) -> String {
                 app.controls.effort_label()
             )
         }
-        PanelMode::Efforts { .. } => format!(
-            "当前：{} · 强度 {}",
-            app.controls.model_label(),
-            app.controls.effort_label()
-        ),
         PanelMode::Permissions => {
             let permission = app.controls.permission();
             let default = if permission.catalog.default_preset.is_empty() {
@@ -408,7 +390,12 @@ fn panel_header(app: &App) -> String {
             } else {
                 format!(" · 新会话默认 {}", permission.catalog.default_preset)
             };
-            format!("当前：{}{default}", app.controls.permission_label())
+            let stale = if app.controls.state_error().is_some() {
+                " · 状态可能过期"
+            } else {
+                ""
+            };
+            format!("当前：{}{default}{stale}", app.controls.permission_label())
         }
         PanelMode::Commands => "官方命令优先于同名技能；不可用命令显示原因".to_string(),
     }
@@ -439,10 +426,16 @@ fn empty_panel_reason(app: &App) -> String {
         }
         PanelMode::Efforts { .. } => "该模型没有可用的强度目录（目录可能未加载）".to_string(),
         PanelMode::Permissions => {
-            if !app.controls.permission().loaded {
+            if let Some(error) = app.controls.state_error() {
+                format!("控制状态读取失败：{error}（保留上次值，可能过期）")
+            } else if app.controls.permission().available == Some(false) {
+                "官方权限服务未组合".to_string()
+            } else if !app.controls.permission().loaded {
                 "权限状态尚未读取".to_string()
+            } else if app.panel.query().is_empty() {
+                "官方权限预设为空".to_string()
             } else {
-                "官方权限预设为空或服务未组合".to_string()
+                format!("没有匹配「{}」的权限预设", app.panel.query())
             }
         }
     }
@@ -638,10 +631,26 @@ fn wrap_block(
 }
 
 fn truncate(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
+    // `max` is a display-cell budget, not a character count: CJK labels must
+    // not overflow or lose their tail because each glyph takes two cells.
+    let total: usize = text.chars().map(display_width).sum();
+    if total <= max {
         return text.to_string();
     }
-    let mut value: String = text.chars().take(max.saturating_sub(1)).collect();
+    if max == 0 {
+        return String::new();
+    }
+    let budget = max.saturating_sub(1);
+    let mut value = String::new();
+    let mut width = 0;
+    for character in text.chars() {
+        let character_width = display_width(character);
+        if width + character_width > budget {
+            break;
+        }
+        value.push(character);
+        width += character_width;
+    }
     value.push('…');
     value
 }
@@ -671,6 +680,15 @@ mod tests {
             assert!(line.is_char_boundary(segment.end));
             assert_eq!(&line[segment.start..segment.end], segment.text);
         }
+    }
+
+    #[test]
+    fn truncation_uses_display_cells_not_character_count() {
+        let truncated = truncate("你好世界", 5);
+        assert_eq!(truncated, "你好…");
+        let width: usize = truncated.chars().map(display_width).sum();
+        assert!(width <= 5);
+        assert_eq!(truncate("abc", 3), "abc");
     }
 
     #[test]

@@ -108,7 +108,7 @@ pub const ERROR_CODE_NAMES: [(&str, i64); 28] = [
     ("nano/controls/writer-held", 1019),
     ("nano/controls/model-unavailable", 1020),
     ("nano/controls/permission-rejected", 1021),
-    ("nano/controls/command-unknown", 1022),
+    ("nano/controls/command-failed", 1022),
     ("nano/controls/unavailable", 1023),
 ];
 
