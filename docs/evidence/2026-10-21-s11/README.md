@@ -2,7 +2,7 @@
 
 ## 已执行
 
-- `cargo test --workspace`：11 个测试目标全绿；nano-schedule 25 项（表单、CAS、无改动 update、历史标志、折叠分组、失败夹具）、nano-app 27 项、nano-conversation 51+5 项、nano-runtime 18+10+2 项，15 项真实宿主回归仍为 ignored。原始输出见 `rust-tests.txt`。
+- `cargo test --workspace`：11 个测试目标全绿；nano-schedule 25 项（表单、CAS、无改动 update、历史标志、折叠分组、失败夹具）、nano-app 29 项、nano-conversation 51+5 项、nano-runtime 18+10+2 项，15 项真实宿主回归仍为 ignored。原始输出见 `rust-tests.txt`。
 - `node --test bridge/test/*.test.mjs`：79 项通过。调度 13 项见 `bridge/test/schedule.test.mjs`：0600/0700 租约、同 pid 幂等、活锁拒绝且不删锁、死 pid 回收、损坏锁 30 秒门槛、只释放自己的锁、原子发布无临时文件、**两进程并发回收同一死锁只有一个 owner**、RPC 委托、跨根地址拒绝、官方错误码透传、history 游标、写失败夹具。见 `bridge-tests.txt`。
 - `NANO_E2E=1 node --test bridge/test/integration/host.test.mjs`：2 项通过，确认新增调度启动没有破坏 S01/S02 的真实宿主、订阅回放和干净关停。见 `host-e2e.txt`。
 - `NANO_E2E=1 node --test bridge/test/integration/schedule.test.mjs`：6 项真实宿主用例全部通过，见 `e2e-schedule.txt`：
