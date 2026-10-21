@@ -168,6 +168,26 @@ export function validateHello(params) {
   if (session.header !== undefined && !isPlainObject(session.header)) {
     throw new ProtocolViolation('hello.session.header must be an object when present')
   }
+  if (params.attachmentLimits !== undefined) {
+    const limits = params.attachmentLimits
+    if (!isPlainObject(limits)) throw new ProtocolViolation('hello.attachmentLimits must be an object')
+    for (const key of [
+      'maxImageBytes',
+      'maxImagesPerMessage',
+      'maxMessageImageBytes',
+      'maxImagePixels',
+      'maxImageDimension',
+      'maxChunkBytes',
+    ]) {
+      requirePositiveInteger(limits[key], `hello.attachmentLimits.${key}`)
+    }
+    if (!Array.isArray(limits.mediaTypes) || limits.mediaTypes.some((type) => typeof type !== 'string')) {
+      throw new ProtocolViolation('hello.attachmentLimits.mediaTypes must be an array of strings')
+    }
+    if (limits.fileAdmission !== 'verbatim' && limits.fileAdmission !== 'unsupported') {
+      throw new ProtocolViolation('hello.attachmentLimits.fileAdmission must be verbatim or unsupported')
+    }
+  }
   if (!isPlainObject(capabilities)) throw new ProtocolViolation('hello.capabilities must be an object')
   for (const [name, entry] of Object.entries(capabilities)) {
     if (!isPlainObject(entry)) throw new ProtocolViolation(`capability ${name} must be an object`)

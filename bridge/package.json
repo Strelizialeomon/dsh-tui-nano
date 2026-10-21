@@ -8,20 +8,32 @@
     ".": "./runtime/index.mjs",
     "./runtime": "./runtime/index.mjs",
     "./conversation": "./conversation/service.mjs",
+    "./attachments": "./attachments/service.mjs",
+    "./sessions": "./sessions/service.mjs",
+    "./shell": "./shell/service.mjs",
+    "./jobs": "./jobs/service.mjs",
     "./profile/install": "./profile/install.mjs",
     "./cordis.patch.yml": "./cordis.patch.yml",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./controls": "./controls/service.mjs"
   },
   "files": [
     "runtime/**/*.mjs",
     "conversation/**/*.mjs",
+    "attachments/**/*.mjs",
+    "shell/**/*.mjs",
+    "jobs/**/*.mjs",
+    "controls/**/*.mjs",
     "skills/**/*.mjs",
+    "sessions/**/*.mjs",
     "profile/**/*.mjs",
     "cordis.patch.yml",
     "README.md"
   ],
   "dependencies": {
-    "@dsh-tui-nano/protocol": "file:../protocol"
+    "@dsh-tui-nano/protocol": "file:../protocol",
+    "@deepseek-ai/dsh-agent": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-api-session-controller": "0.2.1-rc.2"
   },
   "dsh": {
     "bundle": {

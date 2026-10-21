@@ -335,7 +335,7 @@ impl ConversationModel {
                 bytes: content.text_bytes(),
             });
         }
-        let blocks = content.to_wire_text_blocks().map_err(|error| match error {
+        let blocks = content.to_wire_blocks().map_err(|error| match error {
             crate::ContentError::Empty => SubmitError::Empty,
             crate::ContentError::AttachmentNotReady => SubmitError::AttachmentNotReady,
         })?;

@@ -1,7 +1,7 @@
 # [2026-10-20-nano-v1/S08] Shell 与任务
 
 - 组标识：`2026-10-20-nano-v1`；角色：子件 S08，单交付为人工命令、后台任务观察与停止。
-- 状态：草案，未批准实施；Issue：待规格合入后创建。
+- 状态：已批准实施；执行单 #11。
 - 总纲：[共享约定与依据](README.md)。上游：S02 操作入口，S01 执行服务，D08 发布闸（S03/S04 → S08/S10）。下游：S10（D05）、S13（D09）。
 - 合入前提：S01 官方执行与进程所有权可用；本份用真实前台/后台命令验证输出、停止和通知。发布由 S13 承担。
 
@@ -65,18 +65,18 @@
 
 ## 6. 验收
 
-- [ ] `!` 命令以用户权限执行，输出本窗口可见并以 `<bash-input>/<bash-stdout>/<bash-stderr>` 合成 user 上下文注入；不立即触发模型请求，下一条消息能看到；`!` 不分配 job ID、不进入 `job_list`。
-- [ ] `!!` 只是原样交给 shell 的普通文本；`bash -c` 非交互、没有 history expansion，也不触发任何特殊「入模」路径。
-- [ ] 非零退出、被信号终止、缺失退出码分别显示正确；输出被 ring 裁剪时标「已裁剪」，有 spill 时显示路径。
+- [x] `!` 命令以用户权限执行，输出本窗口可见并以 `<bash-input>/<bash-stdout>/<bash-stderr>` 合成 user 上下文注入；不立即触发模型请求，下一条消息能看到；`!` 不分配 job ID、不进入 `job_list`。
+- [x] `!!` 只是原样交给 shell 的普通文本；`bash -c` 非交互、没有 history expansion，也不触发任何特殊「入模」路径。
+- [x] 非零退出、被信号终止、缺失退出码分别显示正确；输出被 ring 裁剪时标「已裁剪」，有 spill 时显示路径。
 - [ ] 前台命令启动时就是 job；超时后仍是同一个 job ID、同一份输出 ring；promotion 失败时按 deadline kill 处理并分别验收。
-- [ ] 后台任务列表、状态、进度与官方投影一致；所属调用按 `job/registered` 关联，不从 `JobView` 找。
-- [ ] 打开、滚动、重开任务详情不改变模型 `job_output` 的读取位置和完成通知。
-- [ ] 停止返回「已请求」或「已经结束」，终态到达后才显示终止；自然完成显示 completed；人类停止只走一个通知渠道（awaited 工具结果或后台通知）。
+- [x] 后台任务列表、状态、进度与官方投影一致；所属调用按 `job/registered` 关联，不从 `JobView` 找。
+- [x] 打开、滚动、重开任务详情不改变模型 `job_output` 的读取位置和完成通知。
+- [x] 停止返回「已请求」或「已经结束」，终态到达后才显示终止；自然完成显示 completed；人类停止只走一个通知渠道（awaited 工具结果或后台通知）。
 - [ ] `!` 输出不能作为审批授权：负向夹具证明 Agent 不能凭 `!` 输出跳过审批或改变沙箱（D08 发布闸）。
-- [ ] 看不到的任务、重复停止、其他会话任务分别按官方错误处理，不越权。
-- [ ] 输出缺口/淘汰显示 `gapBefore`；慢消费者不阻塞任务执行，也不无限缓存。
-- [ ] 关闭窗口或宿主退出后本进程任务结束；不显示成跨重启仍在运行。
-- [ ] 本份的真实前台/后台/停止证据与失败夹具随交付提供；未测的逃逸进程范围明确标注。
+- [x] 看不到的任务、重复停止、其他会话任务分别按官方错误处理，不越权。
+- [x] 输出缺口/淘汰显示 `gapBefore`；慢消费者不阻塞任务执行，也不无限缓存。
+- [x] 关闭窗口或宿主退出后本进程任务结束；不显示成跨重启仍在运行。
+- [x] 本份的真实前台/后台/停止证据与失败夹具随交付提供；未测的逃逸进程范围明确标注。
 
 ## 7. 机制清单
 
@@ -104,4 +104,31 @@
 
 ## 9. 审核修订记录
 
-待本稿逐份过闸；上述验收均未执行。
+实施 PR #20 重审（规格符合性 + 对抗找 bug，2026-10-21）。完整发现见 PR 评论 6318238191 / 6318339357；下表记录处置。
+
+| # | 严重度 | 发现 | 处置 |
+| --- | --- | --- | --- |
+| 1 | blocker | `!` 输出窗口取头部 2,000 字符，官方截断/spill 提示被截掉 | 改为尾部渲染（4,000 字符）并显式标「显示已截断」；官方提示在尾部保留 |
+| 2 | blocker | 任务详情取 tail buffer 的头部 200,000 字符，最新输出被静默丢掉 | 改为尾部渲染（200,000 字符）并显式标截断；与 §8「渲染尾部上限」一致 |
+| 3 | major | 前台超时转后台（promotion）成功路径未执行 | 真实 TUI 会话补齐：tool result 出现同一 job id 的 `moved to background job`，面板/详情/停止均覆盖；三条失败路径仍未执行（见下） |
+| 4 | major | 真实终端证据没覆盖 jobs UI 本身 | 真实 TUI 会话打开任务面板、详情、跟随 `s08-promo`、k 停止并看到官方 `被终止` |
+| 5 | major | 宿主退出后面板仍可能显示「运行中」 | `TransportClosed`/`Fatal`/`ProtocolFailure`/`StartupError` 清空任务投影，运行中的本地 `!` 记录标未知；面板显示宿主已断开 |
+| 6 | major | 每请求一线程让所有请求失去写出顺序 | 普通请求恢复串行写入/等待；只有带 deadline 的 `nano.shell.exec` 走独立并发 lane |
+| 7 | major | 所有 registry 异常都被映射成 `job/not-found` | 只把官方 `unknown job`/foreign 映射 not-found；producer 取消抛错等保持 `jsonrpc/internal-error` |
+| 8 | major | follow 在飞时到达的输出事件被静默丢弃 | `follow_dirty` + 读完按 `total` 补读；运行中与终态都补 |
+| 9 | major | 订阅重建后不刷新 jobs，gap 内事件丢失 | `Ready`/`Resubscribe` 成功后重读 jobs snapshot；jobs 事件 live-only 的事实写入注释 |
+| 10 | major | 任务列表超过一屏时选中项不可见、前面任务不可达 | 列表按 selected 计算 offset，Up/Down 滚动视口；tail+scroll 只用于详情 |
+| 11 | minor | D08 负向闸未执行 | 保持未勾；S08 夹具只证明 source 为 `bash-mode` 且不触碰 approval，真实审批负向夹具归 S03/S04 发布闸 |
+| 12 | minor | 证据声称真实宿主验证 danger-full-access，但测试没断言 | 真实宿主 E2E 增加 `result.policy.mode === 'danger-full-access'` 断言 |
+| 13 | minor | 官方事件不可解析时静默、`last_error` 是死代码 | 面板/状态行显示 `jobs.last_error`；解析失败不再静默 |
+| 14 | minor | 详情 ring 总量/最早保留字节陈旧 | `jobs.output` 事件与 follow 都更新投影 `output.total` |
+| 15 | minor | `attachController('nano-jobs')` 是清单外机制，会改变缺 controller 的组合行为 | 移除；S08 只观察，不改变官方「无 controller 退回 deadline kill」 |
+| 16 | minor | not-found 提示用 message 匹配，永远不命中 | `RequestError` 保留 JSON-RPC code，按 1028 判定；Unknown 单独显示「结果未知」 |
+| 17 | minor | 75s 等待上限与可配置 executor deadline 脱钩 | 桥在请求上显式 `timeoutMs: 60000`，Rust 75s 等待对应这个 deadline |
+| 18 | minor | S02 契约测试被放宽；跨 owner 改动未说明 | 契约测试恢复精确事件集合；跨 owner 改动仅限协议/runtime/app 接入，未实现 S03/S04/S10 |
+| 19 | minor | 使用已废弃的 `session.snapshotEvents()` | 移除初始历史索引；job/registered 只走 live `session/event`，桥在握手前已挂载 |
+| 20 | minor | 证据声称 progress/200 条有夹具，实际没有；通知计数口径弱 | 补 progress/spill/200 条测试；真实证据改为按 notice message id 去重计数 |
+| 21 | minor | `!!` 是否注入的规格歧义 | `nano.shell.exec` 增加 `inject: false`；`!!` 仍执行并显示，但不进入上下文；协议与 README 写明 |
+| 22 | minor | 详情滚动无上限，移除后泄漏到列表 | 滚动按渲染行数封顶；详情关闭/任务移除时归零 |
+
+修复后 `cargo test --workspace`、`npm run test:bridge`、`NANO_E2E=1 node --test bridge/test/integration/host.test.mjs` 全绿；真实模型会话与真实 TUI 证据见 `docs/evidence/2026-10-21-s08/`。未再派第二轮重审（用户未点）；promotion 三条失败路径与 D08 负向闸仍未执行，对应验收保持未勾。

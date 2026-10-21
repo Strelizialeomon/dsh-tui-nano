@@ -10,11 +10,15 @@ const SERVICE_CAPABILITIES = Object.freeze({
   sessionPersistence: 'sessionPersistence',
   sessionQuery: 'sessionQuery',
   attachments: 'attachments',
+  fileReferences: 'fileReferences',
   userQuestions: 'userQuestions',
   approval: 'approval',
   jobs: 'jobs',
+  shell: 'shell',
   subagents: 'subagents',
   terminal: 'terminalController',
+  permissionPresets: 'permissionPresets',
+  commands: 'commands',
 })
 
 /**
@@ -32,6 +36,24 @@ export function buildCapabilities(ctx, config) {
       : { status: 'unsupported', detail: `${serviceKey} is not composed in this profile` }
   }
 
+  // `!` also needs the per-call policy service; without it the executor cannot
+  // be asked for the user-permission policy and the command must not run.
+  if (ctx.get('shell') !== undefined && ctx.get('sandboxPolicy') === undefined) {
+    capabilities.shell = {
+      status: 'unsupported',
+      detail: 'sandboxPolicy is not composed; the user-permission policy cannot be resolved',
+    }
+  }
+
+  // Model selection is served either by the Web session controller or by the
+  // official CLI primitives (llm registry + agentDefaultModel + selection hooks).
+  const modelSelection =
+    ctx.get('sessionController') !== undefined ||
+    (ctx.get('llm') !== undefined && ctx.get('agentDefaultModel') !== undefined)
+  capabilities.modelSelection = modelSelection
+    ? { status: 'supported' }
+    : { status: 'unsupported', detail: 'the official model registry is not composed' }
+
   // The seams are composed, but S01 registers no answerer. Reporting them as
   // supported would claim an interaction path that cannot answer; S03 owns the
   // single answerer for each seam.
@@ -42,6 +64,19 @@ export function buildCapabilities(ctx, config) {
   capabilities.userQuestions = {
     status: 'unavailable',
     detail: 'the question answerer belongs to S03',
+  }
+  if (capabilities.attachments?.status === 'supported') {
+    capabilities.attachments = {
+      status: 'supported',
+      mode: 'images+files',
+      detail: 'images are admitted at submit time; generic files use session-bound receipts',
+    }
+  }
+  if (capabilities.fileReferences?.status === 'supported') {
+    capabilities.fileReferences = {
+      status: 'supported',
+      detail: 'path-only @file candidates from the official provider',
+    }
   }
   capabilities['tool-ask-user'] = {
     status: ctx.get('userQuestions') === undefined ? 'unsupported' : 'unavailable',

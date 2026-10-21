@@ -11,17 +11,21 @@ use std::time::Duration;
 use nano_runtime::paths::new_runtime_id;
 use nano_runtime::protocol::Address;
 use nano_runtime::{
-    Hello, Host, HostError, HostEvent, HostOptions, SessionMode, MAX_REPLAY_EVENTS,
+    CapabilityStatus, Hello, Host, HostError, HostEvent, HostOptions, SessionMode,
+    MAX_REPLAY_EVENTS,
 };
 use serde_json::Value;
 
 /// Every event kind this window subscribes to, in one place so the initial
 /// subscription and a later rebuild cannot drift apart.
-pub const SUBSCRIPTION_KINDS: [&str; 6] = [
+pub const SUBSCRIPTION_KINDS: [&str; 9] = [
     "session.event",
     "conversation.status",
     "conversation.inbox",
     "conversation.stream",
+    "controls.model",
+    "controls.permission",
+    "sessions.context",
     "skills.changed",
     "instructions.changed",
 ];
@@ -44,12 +48,13 @@ pub enum RequestErrorKind {
 pub struct RequestError {
     /// Classification used by the submission state machine.
     pub kind: RequestErrorKind,
+    /// JSON-RPC error code, when the host answered with one.
+    pub code: Option<i64>,
     /// Sanitized description.
     pub message: String,
 }
 
 /// One message from the background link.
-#[derive(Debug)]
 pub enum LinkEvent {
     /// Handshake and subscription succeeded.
     Ready {
@@ -69,14 +74,51 @@ pub enum LinkEvent {
     },
     /// The link cannot continue.
     Fatal(String),
+    /// The host exited before the handshake with a structured startup error.
+    StartupFailed {
+        /// Contract startup code (`occupied`, `startup-failed`, ...).
+        code: String,
+        /// Sanitized message from the host.
+        message: String,
+        /// Holder pid for a ledger `occupied` rejection.
+        holder_pid: Option<u32>,
+        /// Repair path for a damaged ledger.
+        repair_path: Option<String>,
+    },
+    /// A controlled restart spawned a new host; its handshake is still pending.
+    Switched {
+        /// The new generation's link.
+        link: HostLink,
+    },
+    /// A controlled restart could not spawn the new host.
+    SwitchFailed {
+        /// Sanitized diagnostic.
+        message: String,
+        /// Startup code when the failure came from the new host.
+        code: Option<String>,
+        /// Holder pid for an `occupied` rejection.
+        holder_pid: Option<u32>,
+    },
 }
 
+/// One locally tracked request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestHandle {
+    /// Local id used in `RequestDone`.
+    pub id: u64,
+    /// Protocol request id, usable with `nano.cancelRequest`.
+    pub protocol_id: String,
+}
+
+/// Wait bound for `nano.shell.exec`: the executor deadline (60s) plus room for
+/// preparation and termination.
+pub const SHELL_REQUEST_TIMEOUT: Duration = Duration::from_secs(75);
 /// Shared handle to the host worker threads.
 pub struct HostLink {
     /// Incoming link events.
     pub events: Receiver<LinkEvent>,
-    /// Outgoing request channel.
-    commands: Sender<(u64, String, Value)>,
+    /// Sender cloned by per-request waiter threads.
+    event_tx: Sender<LinkEvent>,
     /// The owning host handle, used for the final ordered shutdown.
     host: Host,
     /// Stops the event loop thread.
@@ -94,7 +136,6 @@ impl HostLink {
         let host = Host::spawn(new_runtime_id(), 1, root_session_id, mode, options)
             .map_err(|error| format!("could not spawn the host: {error}"))?;
         let (event_tx, event_rx) = channel();
-        let (command_tx, command_rx) = channel::<(u64, String, Value)>();
         let stop = Arc::new(AtomicBool::new(false));
 
         let startup_host = host.clone();
@@ -104,7 +145,7 @@ impl HostLink {
             let hello = match startup_host.handshake(None) {
                 Ok(hello) => hello,
                 Err(error) => {
-                    let _ = startup_events.send(LinkEvent::Fatal(describe_host_error(&error)));
+                    let _ = startup_events.send(startup_failure_event(&error));
                     return;
                 }
             };
@@ -119,9 +160,9 @@ impl HostLink {
                 root_session_id: hello.root_session_id.clone(),
                 child_session_id: None,
             };
-            let kinds = SUBSCRIPTION_KINDS
-                .iter()
-                .map(|kind| kind.to_string())
+            let kinds = subscription_kinds(&hello)
+                .into_iter()
+                .map(str::to_string)
                 .collect();
             let _subscription = match startup_host.subscribe(address, Some(kinds), Some(from_seq)) {
                 Ok(subscription) => subscription,
@@ -154,25 +195,9 @@ impl HostLink {
             }
         });
 
-        let command_host = host.clone();
-        let command_events = event_tx;
-        std::thread::spawn(move || {
-            while let Ok((id, method, params)) = command_rx.recv() {
-                let result = command_host
-                    .request(&method, params)
-                    .map_err(classify_request_error);
-                if command_events
-                    .send(LinkEvent::RequestDone { id, result })
-                    .is_err()
-                {
-                    return;
-                }
-            }
-        });
-
         Ok(Self {
             events: event_rx,
-            commands: command_tx,
+            event_tx,
             host,
             stop,
             counter: AtomicU64::new(1),
@@ -181,11 +206,67 @@ impl HostLink {
 
     /// Send one request; returns the local id used in `RequestDone`.
     pub fn request(&self, method: &str, params: Value) -> Result<u64, String> {
+        self.request_handle(method, params).map(|handle| handle.id)
+    }
+
+    /// Send one request and keep its protocol id for cancellation.
+    pub fn request_handle(&self, method: &str, params: Value) -> Result<RequestHandle, String> {
         let id = self.counter.fetch_add(1, Ordering::SeqCst);
-        self.commands
-            .send((id, method.to_string(), params))
-            .map_err(|_| "the host request worker is gone".to_string())?;
+        let pending = self
+            .host
+            .start_request(method, params)
+            .map_err(|error| format!("{error}"))?;
+        let protocol_id = pending.id().to_string();
+        let timeout = self.host.request_timeout();
+        let events = self.event_tx.clone();
+        std::thread::spawn(move || {
+            let result = pending.wait(timeout).map_err(classify_request_error);
+            let _ = events.send(LinkEvent::RequestDone { id, result });
+        });
+        Ok(RequestHandle { id, protocol_id })
+    }
+
+    /// Send one request with a caller-chosen wait bound. Used by the manual
+    /// shell lane, whose executor deadline is longer than the ordinary request
+    /// timeout.
+    pub fn request_with_timeout(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<u64, String> {
+        let id = self.counter.fetch_add(1, Ordering::SeqCst);
+        let host = self.host.clone();
+        let events = self.event_tx.clone();
+        let method = method.to_string();
+        std::thread::spawn(move || {
+            let result = host
+                .request_with_timeout(&method, params, timeout)
+                .map_err(classify_request_error);
+            let _ = events.send(LinkEvent::RequestDone { id, result });
+        });
         Ok(id)
+    }
+
+    /// Ask the host to cancel one in-flight request by protocol id.
+    pub fn cancel_request(&self, protocol_id: &str) -> Result<u64, String> {
+        self.request(
+            "nano.cancelRequest",
+            serde_json::json!({ "id": protocol_id }),
+        )
+    }
+
+    /// Send one request on the long-action worker with an explicit budget.
+    /// Manual compaction waits here so ordinary requests stay responsive.
+    pub fn request_long(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<u64, String> {
+        // Timed requests run on their own thread in the command worker, so a
+        // compaction wait cannot block ordinary prompts or shell requests.
+        self.request_with_timeout(method, params, timeout)
     }
 
     /// Run the one ordered shutdown after the terminal is restored.
@@ -204,6 +285,46 @@ fn describe_host_error(error: &HostError) -> String {
     format!("{error}")
 }
 
+/// Keep the structured startup facts the UI needs (holder pid, repair path)
+/// instead of flattening every pre-hello failure into a diagnostic string.
+fn startup_failure_event(error: &HostError) -> LinkEvent {
+    match error {
+        HostError::Startup {
+            code,
+            message,
+            holder_pid,
+            repair_path,
+        } => LinkEvent::StartupFailed {
+            code: code.clone(),
+            message: message.clone(),
+            holder_pid: *holder_pid,
+            repair_path: repair_path.clone(),
+        },
+        other => LinkEvent::Fatal(describe_host_error(other)),
+    }
+}
+
+/// Whether the composed host reports the official job registry as usable.
+pub fn jobs_supported(hello: &Hello) -> bool {
+    hello
+        .capabilities
+        .get("jobs")
+        .is_some_and(|capability| capability.status == CapabilityStatus::Supported)
+}
+
+/// The subscription used at handshake and after a rebuild. The stable kinds
+/// come from the shared list; job events are only requested when the composed
+/// host reports the capability, so an older bridge fails soft instead of
+/// refusing the whole subscription.
+pub fn subscription_kinds(hello: &Hello) -> Vec<&'static str> {
+    let mut kinds = SUBSCRIPTION_KINDS.to_vec();
+    if jobs_supported(hello) {
+        kinds.push("jobs.event");
+        kinds.push("jobs.output");
+    }
+    kinds
+}
+
 /// Classify a request failure without losing the fact that it may have been
 /// delivered. The app must not restore the draft or claim failure for Unknown.
 fn classify_request_error(error: HostError) -> RequestError {
@@ -220,8 +341,13 @@ fn classify_request_error(error: HostError) -> RequestError {
         }
         HostError::Io(_) | HostError::Spawn(_) => RequestErrorKind::Unknown,
     };
+    let code = match &error {
+        HostError::Rpc(body) => Some(body.code),
+        _ => None,
+    };
     RequestError {
         kind,
+        code,
         message: describe_host_error(&error),
     }
 }

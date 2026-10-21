@@ -103,6 +103,28 @@ pub struct Limits {
     pub max_attachment_chunk_bytes: u64,
 }
 
+/// Deployment image limits reported when the attachment service is composed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentLimits {
+    /// Maximum encoded source bytes per image.
+    pub max_image_bytes: u64,
+    /// Maximum images in one submitted message.
+    pub max_images_per_message: u64,
+    /// Maximum aggregate encoded source bytes in one message.
+    pub max_message_image_bytes: u64,
+    /// Maximum source width multiplied by height.
+    pub max_image_pixels: u64,
+    /// Maximum source width or height.
+    pub max_image_dimension: u64,
+    /// Accepted source media types.
+    pub media_types: Vec<String>,
+    /// Maximum raw bytes in one `nano.attachment.chunk`.
+    pub max_chunk_bytes: u64,
+    /// Whether generic files are stored verbatim (`verbatim`) or not at all.
+    pub file_admission: String,
+}
+
 /// Parsed `nano.hello` payload.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -125,6 +147,9 @@ pub struct Hello {
     pub capabilities: BTreeMap<String, Capability>,
     /// Capacity limits.
     pub limits: Limits,
+    /// Optional deployment attachment limits (S06 minor addition).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachment_limits: Option<AttachmentLimits>,
 }
 
 impl Hello {
@@ -486,20 +511,25 @@ pub fn encode_value(value: &Value) -> Result<Vec<u8>, ProtocolError> {
 }
 
 /// Capability names this build understands.
-pub const KNOWN_CAPABILITIES: [&str; 14] = [
+pub const KNOWN_CAPABILITIES: [&str; 19] = [
     "agent",
     "sessionPersistence",
     "sessionQuery",
     "attachments",
+    "fileReferences",
     "userQuestions",
     "approval",
     "jobs",
+    "shell",
     "subagents",
     "schedule",
     "monitor",
     "terminal",
     "tool-ask-user",
     "networkListener",
+    "modelSelection",
+    "permissionPresets",
+    "commands",
     "skills",
 ];
 
@@ -559,6 +589,7 @@ mod tests {
                 max_pending_requests: MAX_PENDING_REQUESTS as u64,
                 max_attachment_chunk_bytes: MAX_ATTACHMENT_CHUNK_BYTES as u64,
             },
+            attachment_limits: None,
         }
     }
 
