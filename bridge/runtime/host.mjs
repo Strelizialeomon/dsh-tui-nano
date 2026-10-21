@@ -16,6 +16,7 @@ import { claimMount, releaseMount } from './ledger.mjs'
 import { SubscriptionHub } from './events.mjs'
 import { ConversationService } from '../conversation/service.mjs'
 import { SessionsService } from '../sessions/service.mjs'
+import { ControlsService } from '../controls/service.mjs'
 import { SkillsService } from '../skills/service.mjs'
 import { buildCapabilities } from './capabilities.mjs'
 import { IMPLEMENTED_REQUEST_METHODS } from './methods.mjs'
@@ -41,6 +42,7 @@ export function startHost(ctx, config) {
     hub: undefined,
     conversation: undefined,
     sessions: undefined,
+    controls: undefined,
     skills: undefined,
     agentHandle: undefined,
     session: undefined,
@@ -218,6 +220,13 @@ async function runStartup(state, config) {
     rootSessionId: state.config.rootSessionId,
   })
   state.sessions = new SessionsService({
+    ctx,
+    hub: state.hub,
+    agent: state.agentHandle.agent,
+    session,
+    rootSessionId: state.config.rootSessionId,
+  })
+  state.controls = new ControlsService({
     ctx,
     hub: state.hub,
     agent: state.agentHandle.agent,
@@ -543,6 +552,26 @@ async function dispatchRequest(state, frame) {
       await sendResult(state, id, state.sessions.cancelCompact())
       return undefined
     }
+    case 'nano.controls.state': {
+      await sendResult(state, id, state.controls.state())
+      return undefined
+    }
+    case 'nano.controls.modelCatalog': {
+      await sendResult(state, id, await state.controls.modelCatalog())
+      return undefined
+    }
+    case 'nano.controls.selectModel': {
+      await sendResult(state, id, await state.controls.selectModel(params))
+      return undefined
+    }
+    case 'nano.controls.setPermission': {
+      await sendResult(state, id, await state.controls.setPermission(params))
+      return undefined
+    }
+    case 'nano.controls.executeCommand': {
+      await sendResult(state, id, await state.controls.executeCommand(params))
+      return undefined
+    }
     case 'nano.skills.list': {
       await sendResult(state, id, await state.skills.list(params))
       return undefined
@@ -633,6 +662,8 @@ async function runShutdown(state, reason) {
   steps.push({ name: 'accepting', status: 'stopped' })
 
   steps.push(await runStep('subscriptions', deadline, () => {
+    state.controls?.close()
+    state.controls = undefined
     state.conversation?.close()
     state.conversation = undefined
     state.sessions?.close()
@@ -748,6 +779,14 @@ async function failStartup(state, error) {
   let code = startupError.code
   let message = startupError.message
   const cleanupFailures = []
+  if (state.controls !== undefined) {
+    try {
+      state.controls.close()
+      state.controls = undefined
+    } catch (cleanupError) {
+      cleanupFailures.push(`controls: ${describe(cleanupError)}`)
+    }
+  }
   if (state.conversation !== undefined) {
     try {
       state.conversation.close()

@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 nano-runtime = { path = "../nano-runtime" }
 nano-conversation = { path = "../nano-conversation" }
+nano-controls = { path = "../nano-controls" }
 nano-sessions = { path = "../nano-sessions" }
 nano-skills = { path = "../nano-skills" }
 serde_json = "1"

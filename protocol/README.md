@@ -2,8 +2,8 @@
 
 `nano-protocol.json` 是 Rust 运行时与 TypeScript 桥接之间唯一的机器可校验契约。两边的测试都读取它，核对：
 
-- 方法名、方向、实现状态（`implemented` / `reserved`）；S02 的对话方法为 `nano.conversation.submit|editQueued|deleteQueued|steerQueued|cancel|snapshot`；S05 的方法：`nano.skills.list`（用户可调用技能目录 + 官方命令名）、`nano.skills.preview`（有界只读预览）、`nano.instructions.snapshot`（规矩来源投影）；S07 的会话方法为 `nano.sessions.list|rename|context|compact|compactCancel`；`session.event` 载荷可带官方 `time`、`surfaceOp`、`sourceEventSeqs`；
-- 事件 kind：`conversation.status`、`conversation.inbox`（完整投影；超帧上限时降级为有界预览，带 `truncated`/`total`/`omitted`）、`conversation.stream`（start/chunk/end 帧）、`skills.changed`（仅刷新信号）、`instructions.changed`（完整投影）、`sessions.context`（上下文占用参考值）；
+- 方法名、方向、实现状态（`implemented` / `reserved`）；S02 的对话方法为 `nano.conversation.submit|editQueued|deleteQueued|steerQueued|cancel|snapshot`；S04 的控制方法为 `nano.controls.state|modelCatalog|selectModel|setPermission|executeCommand`；S05 的方法：`nano.skills.list`（用户可调用技能目录 + 官方命令名）、`nano.skills.preview`（有界只读预览）、`nano.instructions.snapshot`（规矩来源投影）；S07 的会话方法为 `nano.sessions.list|rename|context|compact|compactCancel`；`session.event` 载荷可带官方 `time`、`surfaceOp`、`sourceEventSeqs`；
+- 事件 kind：`conversation.status`、`conversation.inbox`（完整投影；超帧上限时降级为有界预览，带 `truncated`/`total`/`omitted`）、`conversation.stream`（start/chunk/end 帧）、`controls.model`（持久模型投影的绝对替换）、`controls.permission`（官方当前预设与进程目录的绝对替换）、`skills.changed`（仅刷新信号）、`instructions.changed`（完整投影）、`sessions.context`（上下文占用参考值）；
 - 帧必需字段、错误码、生命周期边、事件 kind；
 - 容量上限（frame、pending、chunk、背压队列、退出预算、单次提交 32 KiB）；
 - `fixtures` 里的样本必须能被双方解析，包括 `conversationSubmit`、`conversationEvent`、`skillsListResult`、`skillPreviewResult` 与 `instructionsEvent`。

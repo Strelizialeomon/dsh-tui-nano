@@ -205,7 +205,7 @@ test(
       sessionId: 'session-not-current',
       title: 'x',
     })
-    assert.equal(cold.error.code, 1023, 'cold rename is refused')
+    assert.equal(cold.error.code, 1028, 'cold rename is refused')
 
     const context = await host.call('nano.sessions.context', {})
     assert.equal(context.result.sessionId, sessionId)
@@ -327,7 +327,7 @@ test(
       sessionId: otherId,
       title: '不能改',
     })
-    assert.equal(coldRename.error.code, 1023)
+    assert.equal(coldRename.error.code, 1028)
     const resumedShutdown = await resumed.call('nano.shutdown', {})
     assert.equal(resumedShutdown.result.clean, true)
     assert.equal(await resumed.exit(), 0, resumed.stderr().slice(-2000))

@@ -32,7 +32,7 @@ import {
 test('implemented methods match the contract', () => {
   assert.deepEqual([...IMPLEMENTED_METHODS].sort(), [...CONTRACT_IMPLEMENTED.keys()].sort())
   for (const [name, method] of CONTRACT_IMPLEMENTED) {
-    assert.ok(['S01', 'S02', 'S05', 'S07'].includes(method.owner), `${name} owner`)
+    assert.ok(['S01', 'S02', 'S04', 'S05', 'S07'].includes(method.owner), `${name} owner`)
     if (method.kind === 'request') {
       assert.ok(IMPLEMENTED_REQUEST_METHODS.includes(name), `${name} must be dispatched as a request`)
     } else {
@@ -64,11 +64,16 @@ test('limits and error codes match the contract', () => {
   assert.equal(ERROR_CODES.get('nano/skills/not-found'), 1019)
   assert.equal(ERROR_CODES.get('nano/skills/no-preview'), 1020)
   assert.equal(ERROR_CODES.get('nano/skills/preview-failed'), 1021)
-  assert.equal(ERROR_CODES.get('nano/sessions/unavailable'), 1022)
-  assert.equal(ERROR_CODES.get('nano/sessions/not-active'), 1023)
-  assert.equal(ERROR_CODES.get('nano/sessions/title-invalid'), 1024)
-  assert.equal(ERROR_CODES.get('nano/sessions/compact-unavailable'), 1025)
-  assert.equal(ERROR_CODES.get('nano/sessions/rejected'), 1026)
+  assert.equal(ERROR_CODES.get('nano/controls/writer-held'), 1022)
+  assert.equal(ERROR_CODES.get('nano/controls/model-unavailable'), 1023)
+  assert.equal(ERROR_CODES.get('nano/controls/permission-rejected'), 1024)
+  assert.equal(ERROR_CODES.get('nano/controls/command-failed'), 1025)
+  assert.equal(ERROR_CODES.get('nano/controls/unavailable'), 1026)
+  assert.equal(ERROR_CODES.get('nano/sessions/unavailable'), 1027)
+  assert.equal(ERROR_CODES.get('nano/sessions/not-active'), 1028)
+  assert.equal(ERROR_CODES.get('nano/sessions/title-invalid'), 1029)
+  assert.equal(ERROR_CODES.get('nano/sessions/compact-unavailable'), 1030)
+  assert.equal(ERROR_CODES.get('nano/sessions/rejected'), 1031)
 })
 
 test('lifecycle edges are exactly the contract table', () => {
@@ -84,6 +89,8 @@ test('event kinds match', () => {
     'conversation.status',
     'conversation.inbox',
     'conversation.stream',
+    'controls.model',
+    'controls.permission',
     'sessions.context',
     'skills.changed',
     'instructions.changed',

@@ -224,24 +224,44 @@
       "name": "nano/skills/preview-failed"
     },
     {
-      "code": 1022,
+      "code": 1027,
       "name": "nano/sessions/unavailable"
     },
     {
-      "code": 1023,
+      "code": 1028,
       "name": "nano/sessions/not-active"
     },
     {
-      "code": 1024,
+      "code": 1029,
       "name": "nano/sessions/title-invalid"
     },
     {
-      "code": 1025,
+      "code": 1030,
       "name": "nano/sessions/compact-unavailable"
     },
     {
-      "code": 1026,
+      "code": 1031,
       "name": "nano/sessions/rejected"
+    },
+    {
+      "code": 1022,
+      "name": "nano/controls/writer-held"
+    },
+    {
+      "code": 1023,
+      "name": "nano/controls/model-unavailable"
+    },
+    {
+      "code": 1024,
+      "name": "nano/controls/permission-rejected"
+    },
+    {
+      "code": 1025,
+      "name": "nano/controls/command-failed"
+    },
+    {
+      "code": 1026,
+      "name": "nano/controls/unavailable"
     }
   ],
   "shapes": {
@@ -428,6 +448,82 @@
       "kind": "enum:success|error",
       "text": "string?",
       "sourceEventSeq": "integer?"
+    },
+    "controlsSelection": {
+      "provider": "string",
+      "model": "string",
+      "reasoningEffort": "string?"
+    },
+    "controlsModelState": {
+      "lastUsed": "controlsSelection?",
+      "next": "controlsSelection?"
+    },
+    "controlsEffort": {
+      "id": "string",
+      "name": "string",
+      "description": "string?"
+    },
+    "controlsReasoning": {
+      "efforts": "array:controlsEffort",
+      "defaultEffort": "string?"
+    },
+    "controlsCatalogModel": {
+      "id": "string",
+      "name": "string",
+      "description": "string?",
+      "reasoning": "controlsReasoning?"
+    },
+    "controlsProviderGroup": {
+      "id": "string",
+      "name": "string",
+      "models": "array:controlsCatalogModel"
+    },
+    "controlsCatalogFailure": {
+      "id": "string",
+      "name": "string",
+      "message": "string"
+    },
+    "controlsModelCatalog": {
+      "default": "controlsSelection",
+      "routableProviders": "array:string",
+      "groups": "array:controlsProviderGroup",
+      "failures": "array:controlsCatalogFailure"
+    },
+    "controlsPresetOption": {
+      "value": "string",
+      "name": "string",
+      "description": "string?",
+      "sandbox": "string?",
+      "approval": "string?"
+    },
+    "controlsPermissionCatalog": {
+      "options": "array:controlsPresetOption",
+      "defaultOptions": "array:controlsPresetOption",
+      "defaultPreset": "string"
+    },
+    "controlsPermissionState": {
+      "available": "boolean?",
+      "current": "string?",
+      "catalog": "controlsPermissionCatalog"
+    },
+    "controlsCommand": {
+      "name": "string",
+      "description": "string",
+      "inputHint": "string?",
+      "definitionId": "string?"
+    },
+    "controlsState": {
+      "address": "address",
+      "model": "controlsModelState",
+      "permission": "controlsPermissionState",
+      "commands": "array:controlsCommand"
+    },
+    "controlsCommandExecution": {
+      "executed": "boolean",
+      "commandId": "string?",
+      "kind": "enum:success|error?",
+      "text": "string?",
+      "permission": "controlsPermissionState?"
     }
   },
   "methods": [
@@ -1030,6 +1126,121 @@
         ],
         "optional": []
       }
+    },
+    {
+      "name": "nano.controls.state",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S04",
+      "status": "implemented",
+      "params": {
+        "required": [],
+        "optional": []
+      },
+      "result": {
+        "shape": "controlsState",
+        "required": [
+          "address",
+          "model",
+          "permission",
+          "commands"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.controls.modelCatalog",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S04",
+      "status": "implemented",
+      "params": {
+        "required": [],
+        "optional": []
+      },
+      "result": {
+        "shape": "controlsModelCatalog",
+        "required": [
+          "default",
+          "routableProviders",
+          "groups",
+          "failures"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.controls.selectModel",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S04",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "provider",
+          "model"
+        ],
+        "optional": [
+          "reasoningEffort"
+        ]
+      },
+      "result": {
+        "required": [
+          "selected"
+        ],
+        "optional": [],
+        "shape": "controlsSelection"
+      }
+    },
+    {
+      "name": "nano.controls.setPermission",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S04",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "preset"
+        ],
+        "optional": []
+      },
+      "result": {
+        "shape": "controlsCommandExecution",
+        "required": [
+          "executed"
+        ],
+        "optional": [
+          "commandId",
+          "kind",
+          "text",
+          "permission"
+        ]
+      }
+    },
+    {
+      "name": "nano.controls.executeCommand",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S04",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "line"
+        ],
+        "optional": []
+      },
+      "result": {
+        "shape": "controlsCommandExecution",
+        "required": [
+          "executed"
+        ],
+        "optional": [
+          "commandId",
+          "kind",
+          "text",
+          "permission"
+        ]
+      }
     }
   ],
   "eventKinds": [
@@ -1072,6 +1283,24 @@
       "payload": {
         "address": "address",
         "frame": "conversationStreamFrame"
+      }
+    },
+    {
+      "kind": "controls.model",
+      "owner": "S04",
+      "status": "implemented",
+      "payload": {
+        "address": "address",
+        "model": "controlsModelState"
+      }
+    },
+    {
+      "kind": "controls.permission",
+      "owner": "S04",
+      "status": "implemented",
+      "payload": {
+        "address": "address",
+        "permission": "controlsPermissionState"
       }
     },
     {
@@ -1419,6 +1648,109 @@
           }
         }
       }
+    },
+    "controlsState": {
+      "jsonrpc": "2.0",
+      "id": "req-5",
+      "method": "nano.controls.state",
+      "result": {
+        "address": {
+          "rootSessionId": "session-fixture"
+        },
+        "model": {
+          "lastUsed": {
+            "provider": "deepseek-official",
+            "model": "deepseek-flash"
+          },
+          "next": {
+            "provider": "deepseek-official",
+            "model": "deepseek-flash",
+            "reasoningEffort": "high"
+          }
+        },
+        "permission": {
+          "available": true,
+          "current": "workspace-write",
+          "catalog": {
+            "options": [
+              {
+                "value": "workspace-write",
+                "name": "workspace-write",
+                "sandbox": "workspace-write",
+                "approval": "ask"
+              },
+              {
+                "value": "danger-full-access",
+                "name": "danger-full-access",
+                "sandbox": "danger-full-access",
+                "approval": "never"
+              }
+            ],
+            "defaultOptions": [
+              {
+                "value": "workspace-write",
+                "name": "workspace-write",
+                "sandbox": "workspace-write",
+                "approval": "ask"
+              }
+            ],
+            "defaultPreset": "workspace-write"
+          }
+        },
+        "commands": [
+          {
+            "name": "permission",
+            "description": "Switch the permission preset",
+            "inputHint": "<preset>"
+          }
+        ]
+      }
+    },
+    "controlsCatalog": {
+      "jsonrpc": "2.0",
+      "id": "req-6",
+      "method": "nano.controls.modelCatalog",
+      "result": {
+        "default": {
+          "provider": "deepseek-official",
+          "model": "deepseek-flash"
+        },
+        "routableProviders": [
+          "deepseek-official"
+        ],
+        "groups": [
+          {
+            "id": "deepseek-official",
+            "name": "DeepSeek",
+            "models": [
+              {
+                "id": "deepseek-flash",
+                "name": "DeepSeek-V4.1-Flash",
+                "reasoning": {
+                  "efforts": [
+                    {
+                      "id": "low",
+                      "name": "Low"
+                    },
+                    {
+                      "id": "high",
+                      "name": "High"
+                    }
+                  ],
+                  "defaultEffort": "high"
+                }
+              }
+            ]
+          }
+        ],
+        "failures": [
+          {
+            "id": "third-party",
+            "name": "Third Party",
+            "message": "no credentials"
+          }
+        ]
+      }
     }
   },
   "capabilityNames": [
@@ -1435,7 +1767,10 @@
     "terminal",
     "tool-ask-user",
     "networkListener",
-    "skills"
+    "skills",
+    "modelSelection",
+    "permissionPresets",
+    "commands"
   ],
   "shutdownSteps": [
     "accepting",

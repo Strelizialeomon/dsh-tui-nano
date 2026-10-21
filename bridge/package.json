@@ -11,11 +11,13 @@
     "./sessions": "./sessions/service.mjs",
     "./profile/install": "./profile/install.mjs",
     "./cordis.patch.yml": "./cordis.patch.yml",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./controls": "./controls/service.mjs"
   },
   "files": [
     "runtime/**/*.mjs",
     "conversation/**/*.mjs",
+    "controls/**/*.mjs",
     "skills/**/*.mjs",
     "sessions/**/*.mjs",
     "profile/**/*.mjs",
@@ -23,7 +25,9 @@
     "README.md"
   ],
   "dependencies": {
-    "@dsh-tui-nano/protocol": "file:../protocol"
+    "@dsh-tui-nano/protocol": "file:../protocol",
+    "@deepseek-ai/dsh-agent": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-api-session-controller": "0.2.1-rc.2"
   },
   "dsh": {
     "bundle": {
