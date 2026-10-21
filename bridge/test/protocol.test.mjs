@@ -32,7 +32,7 @@ import {
 test('implemented methods match the contract', () => {
   assert.deepEqual([...IMPLEMENTED_METHODS].sort(), [...CONTRACT_IMPLEMENTED.keys()].sort())
   for (const [name, method] of CONTRACT_IMPLEMENTED) {
-    assert.equal(method.owner, 'S01', `${name} owner`)
+    assert.ok(['S01', 'S02'].includes(method.owner), `${name} owner`)
     if (method.kind === 'request') {
       assert.ok(IMPLEMENTED_REQUEST_METHODS.includes(name), `${name} must be dispatched as a request`)
     } else {
@@ -68,7 +68,12 @@ test('lifecycle edges are exactly the contract table', () => {
 })
 
 test('event kinds match', () => {
-  assert.deepEqual([...EVENT_KINDS.keys()], ['session.event'])
+  assert.deepEqual([...EVENT_KINDS.keys()], [
+    'session.event',
+    'conversation.status',
+    'conversation.inbox',
+    'conversation.stream',
+  ])
 })
 
 test('request fixture parses as a request', () => {
@@ -115,6 +120,19 @@ test('shutdown report fixture has the four facts', () => {
     assert.ok(names.includes(name), `missing ${name}`)
   }
   assert.ok(report.steps.every((step) => step.status === 'stopped'))
+})
+
+test('conversation fixtures parse on the bridge side', () => {
+  const submit = parseFrameLine(JSON.stringify(CONTRACT.fixtures.conversationSubmit))
+  assert.equal(submit.type, 'request')
+  assert.equal(submit.method, 'nano.conversation.submit')
+  assert.equal(submit.params.delivery, 'queue')
+  assert.equal(submit.params.content[0].type, 'text')
+  const event = parseFrameLine(JSON.stringify(CONTRACT.fixtures.conversationEvent))
+  assert.equal(event.type, 'notification')
+  const validated = validateEvent(event.params, { runtimeId: 'rt-fixture', generation: 1 })
+  assert.equal(validated.kind, 'conversation.status')
+  assert.equal(validated.payload.status, 'running')
 })
 
 test('encodeFrame produces one newline-terminated frame', () => {

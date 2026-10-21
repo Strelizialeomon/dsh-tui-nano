@@ -73,6 +73,12 @@ pub struct HostOptions {
     pub test_faults: Option<Value>,
     /// Test-only: force the stdin/stdout nonce fallback transport.
     pub force_fallback: bool,
+    /// Optional initial provider route for the root Agent.
+    pub provider: Option<String>,
+    /// Optional initial model for the root Agent.
+    pub model: Option<String>,
+    /// Optional initial reasoning effort for the root Agent.
+    pub reasoning_effort: Option<String>,
 }
 
 /// Events surfaced to the app.
@@ -217,6 +223,11 @@ impl Host {
         if runtime_id.is_empty() || root_session_id.is_empty() {
             return Err(HostError::Spawn("runtimeId and rootSessionId must be non-empty".into()));
         }
+        if options.provider.is_some() != options.model.is_some() {
+            return Err(HostError::Spawn(
+                "provider and model must be supplied together, or neither".into(),
+            ));
+        }
         let preflight = Self::preflight(options)?;
         let nonce = new_nonce();
         let patch_path = write_runtime_patch(
@@ -228,6 +239,9 @@ impl Host {
             &nonce,
             &preflight.official_version,
             options.test_faults.as_ref(),
+            options.provider.as_deref(),
+            options.model.as_deref(),
+            options.reasoning_effort.as_deref(),
         )?;
 
         let spawned = if options.force_fallback {

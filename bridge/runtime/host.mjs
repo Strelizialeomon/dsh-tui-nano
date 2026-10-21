@@ -14,6 +14,7 @@ import { openTransport } from './transport.mjs'
 import { BoundedWriter } from './writer.mjs'
 import { claimMount, releaseMount } from './ledger.mjs'
 import { SubscriptionHub } from './events.mjs'
+import { ConversationService } from '../conversation/service.mjs'
 import { buildCapabilities } from './capabilities.mjs'
 import { IMPLEMENTED_REQUEST_METHODS } from './methods.mjs'
 
@@ -36,6 +37,7 @@ export function startHost(ctx, config) {
     transport: undefined,
     writer: undefined,
     hub: undefined,
+    conversation: undefined,
     agentHandle: undefined,
     session: undefined,
     claim: undefined,
@@ -120,11 +122,19 @@ async function runStartup(state, config) {
     throw new StartupError('startup-failed', 'the official agent or session service is not composed')
   }
 
+  const route = agentRoute(state.config)
   try {
     state.agentHandle =
       state.config.sessionMode === 'create'
-        ? await agents.create({ sessionId: state.config.rootSessionId, meta: { cwd } })
-        : await agents.resume({ resumeSessionId: state.config.rootSessionId })
+        ? await agents.create({
+            sessionId: state.config.rootSessionId,
+            meta: { cwd },
+            ...(route === undefined ? {} : { agentOptions: route }),
+          })
+        : await agents.resume({
+            resumeSessionId: state.config.rootSessionId,
+            ...(route === undefined ? {} : { agentOptions: route }),
+          })
     if (state.startupFailed) {
       await state.agentHandle.dispose().catch(() => {})
       throw new StartupError('startup-failed', 'startup was aborted')
@@ -186,6 +196,13 @@ async function runStartup(state, config) {
     nonce: state.config.nonce,
     nonceRequired: state.transport.nonceRequired,
   })
+  state.conversation = new ConversationService({
+    ctx,
+    hub: state.hub,
+    agent: state.agentHandle.agent,
+    session,
+    rootSessionId: state.config.rootSessionId,
+  })
 
   const hello = {
     jsonrpc: '2.0',
@@ -243,7 +260,23 @@ function validateConfig(config) {
   if (!path.isAbsolute(config.dataRoot)) {
     throw new StartupError('startup-failed', 'nano-bridge config.dataRoot must be absolute')
   }
+  if ((config.provider === undefined) !== (config.model === undefined)) {
+    throw new StartupError('startup-failed', 'nano-bridge config.provider and config.model must be supplied together')
+  }
+  for (const field of ['provider', 'model', 'reasoningEffort']) {
+    if (config[field] !== undefined && (typeof config[field] !== 'string' || config[field] === '')) {
+      throw new StartupError('startup-failed', `nano-bridge config.${field} must be a non-empty string when present`)
+    }
+  }
   return { ...config }
+}
+
+/** Build the optional initial Agent route from the runtime patch. */
+function agentRoute(config) {
+  if (config.provider === undefined) return undefined
+  const route = { provider: config.provider, model: config.model }
+  if (config.reasoningEffort !== undefined) route.reasoningEffort = config.reasoningEffort
+  return route
 }
 
 function prepareDataRoots(dataRoot, rootSessionId) {
@@ -400,6 +433,30 @@ async function dispatchRequest(state, frame) {
       await sendResult(state, id, { cancelled: true })
       return undefined
     }
+    case 'nano.conversation.submit': {
+      await sendResult(state, id, state.conversation.submit(params))
+      return undefined
+    }
+    case 'nano.conversation.editQueued': {
+      await sendResult(state, id, state.conversation.editQueued(params))
+      return undefined
+    }
+    case 'nano.conversation.deleteQueued': {
+      await sendResult(state, id, state.conversation.deleteQueued(params))
+      return undefined
+    }
+    case 'nano.conversation.steerQueued': {
+      await sendResult(state, id, state.conversation.steerQueued(params))
+      return undefined
+    }
+    case 'nano.conversation.cancel': {
+      await sendResult(state, id, state.conversation.cancel(params))
+      return undefined
+    }
+    case 'nano.conversation.snapshot': {
+      await sendResult(state, id, state.conversation.snapshot(params))
+      return undefined
+    }
     default: {
       const reserved = RESERVED_METHODS.get(method)
       if (reserved !== undefined) {
@@ -478,6 +535,8 @@ async function runShutdown(state, reason) {
   steps.push({ name: 'accepting', status: 'stopped' })
 
   steps.push(await runStep('subscriptions', deadline, () => {
+    state.conversation?.close()
+    state.conversation = undefined
     state.hub?.closeAll(reason)
   }, faults))
 
@@ -587,6 +646,14 @@ async function failStartup(state, error) {
   let code = startupError.code
   let message = startupError.message
   const cleanupFailures = []
+  if (state.conversation !== undefined) {
+    try {
+      state.conversation.close()
+      state.conversation = undefined
+    } catch (cleanupError) {
+      cleanupFailures.push(`conversation: ${describe(cleanupError)}`)
+    }
+  }
   if (state.hub !== undefined) {
     try {
       state.hub.closeAll('startup failed')
