@@ -15,6 +15,9 @@ import { BoundedWriter } from './writer.mjs'
 import { claimMount, releaseMount } from './ledger.mjs'
 import { SubscriptionHub } from './events.mjs'
 import { ConversationService } from '../conversation/service.mjs'
+import { ScheduleBridge } from '../schedule/service.mjs'
+import { acquireScheduleLease, releaseScheduleLease, ScheduleLeaseError } from '../schedule/lease.mjs'
+import { installScheduleBackend, mountScheduleService, verifyScheduleStorage } from '../schedule/backend.mjs'
 import { buildCapabilities } from './capabilities.mjs'
 import { IMPLEMENTED_REQUEST_METHODS } from './methods.mjs'
 
@@ -22,6 +25,13 @@ const BRIDGE_PACKAGE = JSON.parse(fs.readFileSync(new URL('../package.json', imp
 export const BRIDGE_VERSION = BRIDGE_PACKAGE.version
 const SUPPORTED_OFFICIAL_VERSION = '0.2.1-rc.2'
 export const SHUTDOWN_STEP_NAMES = CONTRACT.shutdownSteps
+
+/**
+ * Requests whose underlying operation checks an AbortSignal. Conversation
+ * mutations are intentionally absent: the official inbox operations do not
+ * accept cancellation and must run to their own receipt.
+ */
+const CANCELLABLE_REQUEST_METHODS = new Set(['nano.subscribe', 'nano.schedule.create', 'nano.schedule.update', 'nano.schedule.delete'])
 
 /**
  * Mount the host for one profile boot.
@@ -38,6 +48,10 @@ export function startHost(ctx, config) {
     writer: undefined,
     hub: undefined,
     conversation: undefined,
+    scheduleBridge: undefined,
+    scheduleFiber: undefined,
+    scheduleLease: undefined,
+    scheduleService: undefined,
     agentHandle: undefined,
     session: undefined,
     claim: undefined,
@@ -86,6 +100,18 @@ async function runStartup(state, config) {
       `official dsh ${String(state.config.officialVersion)} is not in the verified matrix; expected ${SUPPORTED_OFFICIAL_VERSION}`,
     )
   }
+
+  // Register the schedule backend before the loader settles. storage-domain
+  // injects the service key for every routed backend, so deferring this to the
+  // post-handshake path would leave other storage-domain consumers pending
+  // past the loader's activation report. No task table is touched here.
+  const scheduleRoot = path.join(
+    state.config.dataRoot,
+    'runtime-data',
+    state.config.rootSessionId,
+    'storage',
+  )
+  await installScheduleBackend(ctx, scheduleRoot)
 
   prepareDataRoots(state.config.dataRoot, state.config.rootSessionId)
 
@@ -204,6 +230,11 @@ async function runStartup(state, config) {
     rootSessionId: state.config.rootSessionId,
   })
 
+  // Both ownership gates (mount ledger above, schedule lease inside) must be
+  // held before the official scheduler is mounted. A storage or route failure
+  // ends startup with `unsupported` instead of running without a task table.
+  state.scheduleFiber = await startScheduleHost(state)
+
   const hello = {
     jsonrpc: '2.0',
     method: 'nano.hello',
@@ -223,7 +254,9 @@ async function runStartup(state, config) {
         seq: session.seq,
         header: session.header,
       },
-      capabilities: buildCapabilities(ctx, state.config),
+      capabilities: buildCapabilities(ctx, state.config, {
+        schedule: state.scheduleService !== undefined,
+      }),
       limits: {
         maxFrameBytes: LIMITS.maxFrameBytes,
         maxPendingRequests: LIMITS.maxPendingRequests,
@@ -305,6 +338,70 @@ async function resolveCwd(ctx, configuredCwd) {
   }
 }
 
+/**
+ * Acquire the schedule lease, route the schedule domain to the per-session
+ * backend, prove the route, and mount the official scheduler. Any failure is a
+ * startup failure: the host never keeps running without the table it claims to
+ * own, and it never falls back to the shared `storages` root.
+ * @param {object} state - host state with the root Agent and hub already live.
+ * @returns {Promise<object>} the mounted schedule fiber.
+ */
+async function startScheduleHost(state) {
+  const { dataRoot, rootSessionId } = state.config
+  const root = path.join(dataRoot, 'runtime-data', rootSessionId, 'storage')
+  let lease
+  try {
+    lease = acquireScheduleLease({ dataRoot, rootSessionId })
+  } catch (error) {
+    if (error instanceof ScheduleLeaseError && error.code === 'held') {
+      throw new StartupError('occupied', error.message, { holderPid: error.holderPid, cause: error })
+    }
+    throw new StartupError('unsupported', error instanceof Error ? error.message : String(error), { cause: error })
+  }
+  state.scheduleLease = lease
+  try {
+    provideSessionController(state)
+    await verifyScheduleStorage(state.ctx, { root })
+    const { fiber, service } = await mountScheduleService(state.ctx)
+    state.scheduleService = service
+    state.scheduleBridge = new ScheduleBridge({
+      ctx: state.ctx,
+      hub: state.hub,
+      schedule: service,
+      rootSessionId,
+    })
+    return fiber
+  } catch (error) {
+    releaseScheduleLease(lease)
+    state.scheduleLease = undefined
+    throw error instanceof StartupError ? error : new StartupError('unsupported', describe(error), { cause: error })
+  }
+}
+
+/**
+ * Provide the single official-controller method the scheduler calls.
+ *
+ * The Nano profile composes dsh-base, not the Web session controller, so
+ * `ctx.sessionController` would otherwise be absent and dsh-schedule would stay
+ * pending forever. This adapter resolves only the root Agent this host already
+ * owns; it creates, resumes, and configures nothing.
+ * @param {object} state - host state.
+ */
+function provideSessionController(state) {
+  if (state.ctx.get('sessionController') !== undefined) return
+  state.ctx.provide('sessionController', {
+    resolveAgent: async (sessionId) => {
+      if (sessionId !== state.config.rootSessionId) {
+        return { error: new Error(`session ${String(sessionId)} is not served by this host`) }
+      }
+      if (state.agentHandle === undefined) {
+        return { error: new Error('the root Agent is no longer live') }
+      }
+      return { agent: state.agentHandle.agent }
+    },
+  })
+}
+
 function startReadLoop(state) {
   void (async () => {
     const splitter = new FrameSplitter()
@@ -379,7 +476,7 @@ function handleLine(state, line) {
   }
   const entry = {
     method: frame.method,
-    cancellable: frame.method === 'nano.subscribe',
+    cancellable: CANCELLABLE_REQUEST_METHODS.has(frame.method),
     controller: new AbortController(),
   }
   state.inFlight.set(frame.id, entry)
@@ -455,6 +552,33 @@ async function dispatchRequest(state, frame) {
     }
     case 'nano.conversation.snapshot': {
       await sendResult(state, id, state.conversation.snapshot(params))
+      return undefined
+    }
+    case 'nano.schedule.catalog': {
+      await sendResult(state, id, await state.scheduleBridge.catalog(params))
+      return undefined
+    }
+    case 'nano.schedule.list': {
+      await sendResult(state, id, await state.scheduleBridge.list(params))
+      return undefined
+    }
+    case 'nano.schedule.create': {
+      const signal = state.inFlight.get(id)?.controller.signal
+      await sendResult(state, id, await state.scheduleBridge.create(params, signal))
+      return undefined
+    }
+    case 'nano.schedule.update': {
+      const signal = state.inFlight.get(id)?.controller.signal
+      await sendResult(state, id, await state.scheduleBridge.update(params, signal))
+      return undefined
+    }
+    case 'nano.schedule.delete': {
+      const signal = state.inFlight.get(id)?.controller.signal
+      await sendResult(state, id, await state.scheduleBridge.delete(params, signal))
+      return undefined
+    }
+    case 'nano.schedule.history': {
+      await sendResult(state, id, await state.scheduleBridge.history(params))
       return undefined
     }
     default: {
@@ -541,6 +665,15 @@ async function runShutdown(state, reason) {
   }, faults))
 
   steps.push(await runStep('agents', deadline, async () => {
+    // Stop the scheduler before the Agent it delivers to. Disposing the fiber
+    // drains an accepted delivery and closes the schedule domain.
+    if (state.scheduleFiber !== undefined) {
+      const fiber = state.scheduleFiber
+      state.scheduleFiber = undefined
+      state.scheduleBridge?.close()
+      state.scheduleBridge = undefined
+      await fiber.dispose()
+    }
     if (state.agentHandle === undefined) return
     // Cancel the main Agent subtree without unregistering the Session yet; the
     // persistence flush below still needs a live Session in the store.
@@ -570,6 +703,12 @@ async function runShutdown(state, reason) {
   } else {
     state.claimReleasable = true
     steps.push(await runStep('ledger', deadline, async () => {
+      // Release the schedule lease only after the scheduler stopped and the
+      // session flushed; a failed earlier step keeps both ownership facts.
+      if (state.scheduleLease !== undefined) {
+        releaseScheduleLease(state.scheduleLease)
+        state.scheduleLease = undefined
+      }
       if (state.claim === undefined) return
       await releaseMount(state.claim)
       state.claim = undefined
@@ -659,6 +798,24 @@ async function failStartup(state, error) {
       state.hub.closeAll('startup failed')
     } catch (cleanupError) {
       cleanupFailures.push(`subscriptions: ${describe(cleanupError)}`)
+    }
+  }
+  if (state.scheduleFiber !== undefined) {
+    try {
+      state.scheduleBridge?.close()
+      state.scheduleBridge = undefined
+      await withTimeout(state.scheduleFiber.dispose(), 3000, 'schedule dispose')
+      state.scheduleFiber = undefined
+    } catch (cleanupError) {
+      cleanupFailures.push(`schedule: ${describe(cleanupError)}`)
+    }
+  }
+  if (state.scheduleLease !== undefined) {
+    try {
+      releaseScheduleLease(state.scheduleLease)
+      state.scheduleLease = undefined
+    } catch (cleanupError) {
+      cleanupFailures.push(`schedule lease: ${describe(cleanupError)}`)
     }
   }
   if (state.agentHandle !== undefined) {

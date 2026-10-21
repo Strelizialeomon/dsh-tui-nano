@@ -13,6 +13,8 @@ S01「宿主与通信」已实施（执行单 [#4](https://github.com/Strelizial
 
 S02「对话与输入」实施中（执行单 [#5](https://github.com/Strelizialeomon/dsh-tui-nano/issues/5)）：`nano` 终端应用可编辑多行输入、按地址保存草稿、提交/排队/插话/停止、同步官方 inbox、合并流式预览与持久消息；`bridge/conversation/` 提供 submit、queue 编辑/删除/插话、cancel、snapshot 与三类实时事件。transcript 的阅读层级与样式属 S03，模型选择属 S04；当前可用 `--provider/--model` 传入初始路由。
 
+S11「调度」已实施（执行单 [#14](https://github.com/Strelizialeomon/dsh-tui-nano/issues/14)）：Ctrl+G 打开官方定时任务列表，六种时间选择器经真实 `ctx.schedule` 创建/修改/删除，展示最近回执与有界投递历史；`bridge/schedule/` 注册 `nano-schedule-json` 后端、`nano_probe` 路由探针和 `schedule.lock` 租约，按根会话隔离任务表。首版无暂停，投递会唤醒模型并可能产生费用。
+
 ## 结构
 
 | 路径 | 内容 |
@@ -20,8 +22,10 @@ S02「对话与输入」实施中（执行单 [#5](https://github.com/Strelizial
 | `protocol/` | `nano-protocol.json` 机器可校验契约；Rust 与 TypeScript 测试都读取它 |
 | `bridge/runtime/` | Cordis 插件、fd 3/4 传输、会话挂载账本、订阅、关停；profile 安装器 |
 | `bridge/conversation/` | 对话宿主：提交、官方 inbox、队列编辑/删除/插话、停止、快照、实时流 |
+| `bridge/schedule/` | 调度宿主：`nano-schedule-json` 后端、路由探针、`schedule.lock` 租约、官方 schedule RPC |
 | `crates/nano-runtime/` | Rust 侧：preflight、启动、握手、请求/事件、生命周期、关停四事实 |
 | `crates/nano-conversation/` | 输入缓冲、按地址草稿、提交状态机、队列投影、流式预览、消息历史、场景/焦点 |
+| `crates/nano-schedule/` | 定时任务目录、六种时间选择器表单、比较并交换修改、投递历史与调度覆盖层状态 |
 | `crates/nano-app/` | `nano` 终端应用：键位、渲染、宿主连接与退出 |
 | `docs/specs/2026-10-20-nano-v1/` | 已合并的规格 |
 
@@ -46,7 +50,10 @@ NANO_E2E_SLOW=1 cargo test -p nano-runtime --test integration -- --ignored --exa
 # 桥接侧真实宿主测试（错误 JSON 后连接仍可用；对话 submit/去重/resume 重放）
 NANO_E2E=1 node --test bridge/test/integration/host.test.mjs
 
-# 真实 PTY 证据（输入、粘贴、提交、失败可见、干净退出）
+# 调度真实宿主测试（官方 CRUD/冲突/投递/65 秒冷补投/租约/路由拒绝/跨会话隔离）
+NANO_E2E=1 node --test bridge/test/integration/schedule.test.mjs
+
+# 真实 PTY 证据（输入、粘贴、提交、失败可见、干净退出；NANO_SCHEDULE=1 走调度覆盖层）
 python3 scripts/pty-evidence.py
 ```
 
@@ -56,7 +63,7 @@ python3 scripts/pty-evidence.py
 
 - 首版只宣称 macOS + Ghostty 全屏；其他环境不宣称可用。
 - S01 不打开 HTTP/WebSocket 监听端口，不接入浏览器或 Web 页面。
-- 调度（S11）、Monitor（S10）、PTY（S09）在 hello 里报 `unsupported`；审批与问卷的官方 seam 已组合，但 S01 不注册回答者，因此报 `unavailable`（回答者属 S03）。不是静默缺省。
+- 调度（S11）只复用官方服务：没有暂停/恢复 API，停止任务只能删除；投递非严格一次，界面常驻提示。Monitor（S10）、PTY（S09）在 hello 里报 `unsupported`；审批与问卷的官方 seam 已组合，但 S01 不注册回答者，因此报 `unavailable`（回答者属 S03）。不是静默缺省。
 - 官方升级不在验证矩阵内时启动直接拒绝；不猜字段、不降级。
 - 当前没有模型选择界面（S04）；`--provider/--model` 只是启动时的初始路由，是用户批准的最小范围例外（S04 仍拥有模型选择业务与切换）。没有路由或凭据时，官方回合会明确失败，界面不会伪造回答。
 - 对话区的纯文本 feed 是 S02 的可运行占位，不是 S03 的阅读层级；样式、折叠、差异与问卷/审批由 S03 接替。

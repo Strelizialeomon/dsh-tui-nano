@@ -209,6 +209,14 @@
     {
       "code": 1018,
       "name": "nano/conversation/too-large"
+    },
+    {
+      "code": 1019,
+      "name": "nano/schedule/unavailable"
+    },
+    {
+      "code": 1020,
+      "name": "nano/schedule/error"
     }
   ],
   "shapes": {
@@ -733,6 +741,135 @@
         ],
         "optional": []
       }
+    },
+    {
+      "name": "nano.schedule.catalog",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S11",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "address",
+          "entries"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.schedule.list",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S11",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "address",
+          "records"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.schedule.create",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S11",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address",
+          "request"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "address",
+          "record"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.schedule.update",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S11",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address",
+          "id",
+          "expected"
+        ],
+        "optional": [
+          "title",
+          "prompt",
+          "change"
+        ]
+      },
+      "result": {
+        "required": [
+          "result"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.schedule.delete",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S11",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address",
+          "id"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "result"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.schedule.history",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S11",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address",
+          "id",
+          "limit"
+        ],
+        "optional": [
+          "before"
+        ]
+      },
+      "result": {
+        "required": [
+          "result"
+        ],
+        "optional": []
+      }
     }
   ],
   "eventKinds": [
@@ -775,6 +912,14 @@
       "payload": {
         "address": "address",
         "frame": "conversationStreamFrame"
+      }
+    },
+    {
+      "kind": "schedule.changed",
+      "owner": "S11",
+      "status": "implemented",
+      "payload": {
+        "address": "address"
       }
     }
   ],

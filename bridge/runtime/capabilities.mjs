@@ -21,9 +21,10 @@ const SERVICE_CAPABILITIES = Object.freeze({
  * Build the capability map for this host generation.
  * @param {object} ctx - Cordis context carrying official services.
  * @param {Record<string, unknown>} config - nano-bridge config from the runtime patch.
+ * @param {{schedule?: boolean}} [facts] - startup facts not visible as plain services.
  * @returns {Record<string, {status: 'supported'|'unavailable'|'unsupported', mode?: string, detail?: string}>}
  */
-export function buildCapabilities(ctx, config) {
+export function buildCapabilities(ctx, config, facts = {}) {
   const capabilities = {}
   for (const [name, serviceKey] of Object.entries(SERVICE_CAPABILITIES)) {
     const present = ctx.get(serviceKey) !== undefined
@@ -49,11 +50,11 @@ export function buildCapabilities(ctx, config) {
     detail: 'the tool is mounted, but no answerer is registered until S03',
   }
 
-  // S11 and S10 own the schedule and Monitor backends; neither is composed by S01.
-  capabilities.schedule = {
-    status: 'unsupported',
-    detail: 'the schedule backend belongs to S11',
-  }
+  // S11 mounts the official scheduler only after its storage route and lease
+  // both passed; startup fails instead of reporting a degraded schedule.
+  capabilities.schedule = facts.schedule === true
+    ? { status: 'supported', detail: '官方 schedule 服务已按根会话隔离挂载' }
+    : { status: 'unsupported', detail: 'the schedule backend is not mounted' }
   capabilities.monitor = {
     status: 'unsupported',
     detail: 'the Monitor backend belongs to S10',

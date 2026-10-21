@@ -1,0 +1,13 @@
+✔ official CRUD, delivery, cold catch-up, lease, and route refusal (72561.026041ms)
+✔ a live schedule lease refuses startup before the scheduler mounts (1196.646833ms)
+✔ a wrong schedule route refuses startup instead of falling back to json (1121.299375ms)
+✔ a missing backend service key times out as unsupported and never mounts the scheduler (11199.728ms)
+✔ two root sessions keep separate schedule tables (3014.178917ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 89134.255125
