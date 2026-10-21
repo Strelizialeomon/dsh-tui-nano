@@ -17,12 +17,12 @@ Current runtime context. This snapshot supersedes earlier runtime-context snapsh
 <system-reminder>
   … 还有 346 行 · 点击展开
 
-思考 1.4s · 收起
+思考 1.4s · 展开
 
 问卷 已回答 · 1 题 · 点击查看[23;3H  验
       证方式选哪个？ → 聚焦回归（推荐）
 
-思考 258ms · 收起
+思考 258ms · 展开
 
 文件 /private/tmp/nano-s03-evidence/work-1/proof.txt  +2
   已应用
@@ -33,7 +33,7 @@ Current runtime context. This snapshot supersedes earlier runtime-context snapsh
 已按你选的「聚焦回归（推荐）」完成，proof.txt 已在当前工作目录创建，内容为两行 `nano s03`、`diff pro
 of`。
 
-下一步：等你确认或给[3指令。
+下一步：等你确认[3给新指令。
 
 
 

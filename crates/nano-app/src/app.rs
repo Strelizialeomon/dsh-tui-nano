@@ -965,8 +965,33 @@ impl App {
                 }
             },
             Pending::Decision { action, label } => match result {
-                Ok(_) => {
-                    // The bridge publishes the settled/cancelled event.
+                Ok(value) => {
+                    let accepted = value
+                        .get("accepted")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(true);
+                    let mode = value.get("mode").and_then(Value::as_str);
+                    let reason = value.get("reason").and_then(Value::as_str);
+                    let not_accepted = !accepted
+                        || matches!(
+                            reason,
+                            Some("not-continued")
+                                | Some("already-continued")
+                                | Some("no-live-wait")
+                        );
+                    if not_accepted {
+                        let detail = reason.unwrap_or("请求已失效");
+                        self.decisions
+                            .answer_not_accepted(&action, format!("{label}未被接受：{detail}"));
+                        self.error = Some(format!("{label}未被接受：{detail}"));
+                        if reason == Some("no-live-wait") {
+                            self.refresh_decisions();
+                        }
+                    } else if mode == Some("continued")
+                        && matches!(action, DecisionAction::QuestionExpire { .. })
+                    {
+                        self.decisions.mark_question_continued(&action);
+                    }
                 }
                 Err(error) => {
                     self.decisions
@@ -1433,6 +1458,11 @@ impl App {
         if !self.model.previews().is_empty() {
             self.transcript_dirty = true;
             dirty = true;
+        }
+        // Do not let a background subscription rebuild compete with an active
+        // wheel gesture in the same tick.
+        if self.view.scroll().recent_wheel(now) {
+            return dirty;
         }
         if self.resubscribing {
             return dirty;

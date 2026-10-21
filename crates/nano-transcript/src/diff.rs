@@ -50,6 +50,9 @@ pub struct DiffLine {
     pub new_no: Option<u64>,
     /// Line text without its trailing newline.
     pub text: String,
+    /// Character range of the changed fragment inside `text`, when a paired
+    /// delete/add line gives a local word-level emphasis.
+    pub emphasis: Option<(usize, usize)>,
 }
 
 /// One line's role in a diff.
@@ -242,6 +245,7 @@ pub fn single_text_diff(
                     old_no: None,
                     new_no: None,
                     text: (*line).to_string(),
+                    emphasis: None,
                 })
                 .collect::<Vec<_>>();
             let total_lines = lines.len();
@@ -274,12 +278,14 @@ pub fn single_text_diff(
                     old_no: None,
                     new_no: None,
                     text: (*line).to_string(),
+                    emphasis: None,
                 }));
                 lines.extend(new_lines.iter().map(|line| DiffLine {
                     kind: DiffLineKind::Add,
                     old_no: None,
                     new_no: None,
                     text: (*line).to_string(),
+                    emphasis: None,
                 }));
                 added = new_lines.len() as u64;
                 deleted = old_lines.len() as u64;
@@ -292,6 +298,7 @@ pub fn single_text_diff(
                             old_no: None,
                             new_no: None,
                             text,
+                            emphasis: None,
                         }),
                         Operation::Delete(text) => {
                             deleted += 1;
@@ -300,6 +307,7 @@ pub fn single_text_diff(
                                 old_no: None,
                                 new_no: None,
                                 text,
+                                emphasis: None,
                             });
                         }
                         Operation::Add(text) => {
@@ -309,11 +317,13 @@ pub fn single_text_diff(
                                 old_no: None,
                                 new_no: None,
                                 text,
+                                emphasis: None,
                             });
                         }
                     }
                 }
             }
+            mark_emphasis(&mut lines);
             let total_lines = lines.len();
             DiffView {
                 path,
@@ -332,7 +342,66 @@ pub fn single_text_diff(
     }
 }
 
+/// Pair delete/add runs and mark the changed middle of each paired line.
+fn mark_emphasis(lines: &mut [DiffLine]) {
+    let mut index = 0usize;
+    while index < lines.len() {
+        if lines[index].kind != DiffLineKind::Delete {
+            index += 1;
+            continue;
+        }
+        let delete_start = index;
+        while index < lines.len() && lines[index].kind == DiffLineKind::Delete {
+            index += 1;
+        }
+        let add_start = index;
+        while index < lines.len() && lines[index].kind == DiffLineKind::Add {
+            index += 1;
+        }
+        let delete_count = add_start - delete_start;
+        let add_count = index - add_start;
+        for offset in 0..delete_count.min(add_count) {
+            let old = lines[delete_start + offset].text.clone();
+            let new = lines[add_start + offset].text.clone();
+            let (prefix, suffix) = common_prefix_suffix(&old, &new);
+            let old_chars = old.chars().count();
+            let new_chars = new.chars().count();
+            let old_end = old_chars.saturating_sub(suffix);
+            let new_end = new_chars.saturating_sub(suffix);
+            if prefix < old_end {
+                lines[delete_start + offset].emphasis = Some((prefix, old_end));
+            }
+            if prefix < new_end {
+                lines[add_start + offset].emphasis = Some((prefix, new_end));
+            }
+        }
+    }
+}
+
+fn common_prefix_suffix(old: &str, new: &str) -> (usize, usize) {
+    let old_chars: Vec<char> = old.chars().collect();
+    let new_chars: Vec<char> = new.chars().collect();
+    let mut prefix = 0usize;
+    while prefix < old_chars.len()
+        && prefix < new_chars.len()
+        && old_chars[prefix] == new_chars[prefix]
+    {
+        prefix += 1;
+    }
+    let mut suffix = 0usize;
+    while suffix < old_chars.len().saturating_sub(prefix)
+        && suffix < new_chars.len().saturating_sub(prefix)
+        && old_chars[old_chars.len() - 1 - suffix] == new_chars[new_chars.len() - 1 - suffix]
+    {
+        suffix += 1;
+    }
+    (prefix, suffix)
+}
+
 fn source_lines(text: &str) -> Vec<&str> {
+    if text.is_empty() {
+        return Vec::new();
+    }
     let mut lines: Vec<&str> = text.split('\n').collect();
     if text.ends_with('\n') {
         lines.pop();
@@ -505,6 +574,40 @@ mod tests {
         assert!(diff.coarse);
         assert_eq!(diff.added, Some((MAX_DIFF_LINES + 10) as u64));
         assert_eq!(diff.deleted, Some((MAX_DIFF_LINES + 10) as u64));
+    }
+
+    #[test]
+    fn an_empty_write_has_no_added_line() {
+        let diff = single_text_diff(
+            Some("empty.txt".into()),
+            None,
+            Some(String::new()),
+            DiffState::Applied,
+        );
+        assert_eq!(diff.added, Some(0));
+        assert_eq!(diff.deleted, None);
+        assert_eq!(diff.total_lines, 0);
+    }
+
+    #[test]
+    fn an_edited_pair_marks_the_changed_fragment() {
+        let diff = single_text_diff(
+            None,
+            Some("hello world".into()),
+            Some("hello there".into()),
+            DiffState::Pending,
+        );
+        let lines = &diff.hunks[0].lines;
+        let delete = lines
+            .iter()
+            .find(|line| line.kind == DiffLineKind::Delete)
+            .unwrap();
+        let add = lines
+            .iter()
+            .find(|line| line.kind == DiffLineKind::Add)
+            .unwrap();
+        assert_eq!(delete.emphasis, Some((6, 11)));
+        assert_eq!(add.emphasis, Some((6, 11)));
     }
 
     #[test]

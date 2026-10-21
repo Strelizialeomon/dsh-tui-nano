@@ -26,6 +26,9 @@ function fakeContext({ userQuestions, projections } = {}) {
     get(key) {
       return services[key]
     },
+    emit(event, payload) {
+      for (const handler of [...(handlers.get(event) ?? [])]) handler(payload)
+    },
   }
 }
 
@@ -123,7 +126,7 @@ test('an approval without a callId never shows a guessed command', async () => {
   assert.equal(await answer, 'rejected')
 })
 
-test('an aborted approval settles as cancelled and cannot be answered later', async () => {
+test('an aborted approval is withdrawn, not auto-answered', async () => {
   const { published, service } = serviceFor()
   const controller = new AbortController()
   const answer = service.onApproval(
@@ -132,7 +135,12 @@ test('an aborted approval settles as cancelled and cannot be answered later', as
   )
   const pending = pendingOf(published, 'decisions.approval')
   controller.abort()
-  assert.equal(await answer, 'cancelled')
+  await new Promise((resolve) => setImmediate(resolve))
+  const withdrawn = published.find(
+    (entry) => entry.kind === 'decisions.approval' && entry.payload.state === 'withdrawn',
+  )
+  assert.equal(withdrawn.payload.requestId, pending.payload.requestId)
+  assert.equal(service.pendingApprovals.size, 0)
   assert.throws(
     () =>
       service.answerApproval({
@@ -142,6 +150,9 @@ test('an aborted approval settles as cancelled and cannot be answered later', as
       }),
     (error) => error.code === 1019,
   )
+  // The answerer promise is intentionally left unsettled; the official
+  // waterfall settles from the cancelled turn, and exit never answers for it.
+  void answer
 })
 
 test('approval requests for another agent delegate to the next answerer', async () => {
@@ -181,6 +192,57 @@ test('a live question resolves with the exact answer batch', async () => {
     (entry) => entry.kind === 'decisions.question' && entry.payload.state === 'settled',
   )
   assert.deepEqual(settled.payload.answers, answers)
+})
+
+test('shutdown never answers a pending request', async () => {
+  const userQuestions = fakeUserQuestions()
+  const { published, service } = serviceFor({ userQuestions })
+  const controller = new AbortController()
+  const approval = service.onApproval(
+    { agent: { id: ROOT }, toolName: 'bash', signal: controller.signal },
+    () => Promise.resolve('unavailable'),
+  )
+  const question = service.onQuestion(
+    {
+      agent: { id: ROOT },
+      questions: [{ id: 'q1', question: 'Pick', options: [{ label: 'A' }] }],
+      signal: new AbortController().signal,
+    },
+    () => Promise.resolve({ answers: [] }),
+  )
+  service.close()
+  assert.equal(service.pendingApprovals.size, 0)
+  assert.equal(service.pendingQuestions.size, 0)
+  assert.equal(
+    published.some((entry) => entry.payload.state === 'settled'),
+    false,
+  )
+  void approval
+  void question
+})
+
+test('a discarded queued reply makes the continued question answerable again', async () => {
+  const { ctx, published, service } = serviceFor()
+  service.onQuestion(
+    {
+      agent: { id: ROOT },
+      questions: [{ id: 'q1', question: 'Pick', options: [{ label: 'A' }] }],
+      wait: { callId: 'c-9' },
+      signal: new AbortController().signal,
+    },
+    () => Promise.resolve({ answers: [] }),
+  )
+  ctx.emit('agent/inbox/discarded', {
+    agent: { id: ROOT },
+    message: { source: { kind: 'user-question-reply', callId: 'c-9' } },
+  })
+  const continued = published.find(
+    (entry) =>
+      entry.kind === 'decisions.question' &&
+      entry.payload.state === 'continued' &&
+      entry.payload.callId === 'c-9',
+  )
+  assert.ok(continued !== undefined)
 })
 
 test('a timed question claims the wait and publishes the remaining duration', async () => {

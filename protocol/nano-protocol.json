@@ -862,7 +862,7 @@
       "status": "implemented",
       "payload": {
         "address": "address",
-        "state": "enum:pending|settled",
+        "state": "enum:pending|settled|withdrawn",
         "requestId": "string",
         "toolName": "string",
         "reason": "string?",
@@ -878,7 +878,7 @@
       "status": "implemented",
       "payload": {
         "address": "address",
-        "state": "enum:pending|settled|expired|cancelled|submitted",
+        "state": "enum:pending|settled|expired|cancelled|submitted|withdrawn|continued",
         "requestId": "string?",
         "callId": "string?",
         "timed": "boolean?",

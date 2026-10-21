@@ -50,7 +50,13 @@ impl TranscriptView {
 
     /// Rebuild entries from the conversation projection.
     pub fn sync(&mut self, conversation: &ConversationModel, now: Instant) -> bool {
-        self.model.sync(conversation, now)
+        let changed = self.model.sync(conversation, now);
+        if let Some(anchor) = self.scroll.anchor().cloned() {
+            if let Some(new) = self.model.alias(&anchor.identity) {
+                self.scroll.rewrite_anchor(&anchor.identity, new);
+            }
+        }
+        changed
     }
 
     /// Render the visible window.

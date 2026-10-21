@@ -406,6 +406,7 @@ impl DecisionsModel {
         self.approval = approvals.next();
         self.approval_queue.extend(approvals);
 
+        let mut previous = std::mem::take(&mut self.questions);
         let mut live_questions = Vec::new();
         if let Some(items) = value.get("questions").and_then(Value::as_array) {
             for item in items {
@@ -417,12 +418,12 @@ impl DecisionsModel {
                     .get("callId")
                     .and_then(Value::as_str)
                     .map(str::to_string);
-                let existing = self.questions.iter().position(|card| {
+                let existing = previous.iter().position(|card| {
                     (request_id.is_some() && card.request_id() == request_id.as_deref())
                         || (call_id.is_some() && card.call_id() == call_id.as_deref())
                 });
                 if let Some(index) = existing {
-                    let mut card = self.questions.remove(index);
+                    let mut card = previous.remove(index);
                     card.reveal();
                     if let Some(remaining) = item.get("remainingMs").and_then(Value::as_u64) {
                         card.set_remaining_ms(remaining, Instant::now());
@@ -439,6 +440,50 @@ impl DecisionsModel {
                     .and_then(Value::as_u64)
                     .map(|remaining| TimedState::start(remaining, Instant::now()));
                 live_questions.push(QuestionCard::new(request_id, call_id, questions, timed));
+            }
+        }
+        // Continued questions live only in the projection after their
+        // foreground wait ended. Keep their cards and typed drafts across a
+        // resubscribe; create one from the projection when the UI had none.
+        if let Some(active) = value
+            .get("projection")
+            .and_then(|projection| projection.get("active"))
+            .and_then(Value::as_array)
+        {
+            for entry in active {
+                let Some(call_id) = entry.get("callId").and_then(Value::as_str) else {
+                    continue;
+                };
+                if let Some(card) = live_questions
+                    .iter_mut()
+                    .find(|card| card.call_id() == Some(call_id))
+                {
+                    if entry.get("state").and_then(Value::as_str) == Some("continued") {
+                        card.mark_continued();
+                    }
+                    continue;
+                }
+                if let Some(index) = previous
+                    .iter()
+                    .position(|card| card.call_id() == Some(call_id))
+                {
+                    let mut card = previous.remove(index);
+                    card.reveal();
+                    if entry.get("state").and_then(Value::as_str) == Some("continued") {
+                        card.mark_continued();
+                    }
+                    live_questions.push(card);
+                    continue;
+                }
+                let questions = parse_questions(entry.get("questions"));
+                if questions.is_empty() {
+                    continue;
+                }
+                let mut card = QuestionCard::new(None, Some(call_id.to_string()), questions, None);
+                if entry.get("state").and_then(Value::as_str) == Some("continued") {
+                    card.mark_continued();
+                }
+                live_questions.push(card);
             }
         }
         self.questions = live_questions;
@@ -506,6 +551,9 @@ impl DecisionsModel {
 
     /// Paste text into an active question's Other field.
     pub fn paste(&mut self, text: &str) -> bool {
+        if self.approval.is_some() || self.read_only.is_some() {
+            return false;
+        }
         let Some(index) = self.active_question else {
             return false;
         };
@@ -558,11 +606,17 @@ impl DecisionsModel {
                 request_id,
                 call_id,
             } => {
-                if let Some(card) = self.questions.iter_mut().find(|card| {
+                if let Some(index) = self.questions.iter().position(|card| {
                     (request_id.is_some() && card.request_id() == request_id.as_deref())
                         || (call_id.is_some() && card.call_id() == call_id.as_deref())
                 }) {
-                    card.answer_failed(message.clone());
+                    if let Some(card) = self.questions.get_mut(index) {
+                        card.answer_failed(message.clone());
+                        if call_id.is_some() {
+                            card.mark_continued();
+                        }
+                    }
+                    self.active_question = Some(index);
                 }
             }
             DecisionAction::QuestionCancel { request_id } => {
@@ -576,6 +630,39 @@ impl DecisionsModel {
             }
         }
         self.error = Some(message);
+    }
+
+    /// A bridge receipt said the answer was not accepted (for example a stale
+    /// continued question). Roll the card back and re-seat it.
+    pub fn answer_not_accepted(&mut self, action: &DecisionAction, message: impl Into<String>) {
+        let message = message.into();
+        self.action_failed(action, message.clone());
+        self.notice = Some(message);
+    }
+
+    /// A foreground wait was already continued when the UI asked to expire it.
+    pub fn mark_question_continued(&mut self, action: &DecisionAction) {
+        let (request_id, call_id) = match action {
+            DecisionAction::QuestionExpire {
+                request_id,
+                call_id,
+            }
+            | DecisionAction::QuestionAnswer {
+                request_id,
+                call_id,
+                ..
+            } => (request_id.as_deref(), call_id.as_deref()),
+            _ => return,
+        };
+        if let Some(index) = self.questions.iter().position(|card| {
+            (request_id.is_some() && card.request_id() == request_id)
+                || (call_id.is_some() && card.call_id() == call_id)
+        }) {
+            if let Some(card) = self.questions.get_mut(index) {
+                card.mark_continued();
+            }
+            self.active_question = Some(index);
+        }
     }
 
     /// Bind a different conversation address, dropping every old card.
@@ -612,6 +699,30 @@ impl DecisionsModel {
             .to_string();
         if request_id.is_empty() {
             return false;
+        }
+        if state == "withdrawn" {
+            let mut changed = false;
+            if self
+                .approval
+                .as_ref()
+                .is_some_and(|card| card.request_id() == request_id)
+            {
+                self.approval = None;
+                changed = true;
+            }
+            if let Some(position) = self
+                .approval_queue
+                .iter()
+                .position(|card| card.request_id() == request_id)
+            {
+                self.approval_queue.remove(position);
+                changed = true;
+            }
+            if changed {
+                self.promote_approval();
+                self.notice = Some("审批请求已撤回；结果以官方记录为准".to_string());
+            }
+            return changed;
         }
         if state == "settled" {
             let outcome = payload
@@ -760,6 +871,34 @@ impl DecisionsModel {
                     }
                     self.ensure_active_question();
                     self.notice = Some("答卷已提交".to_string());
+                    return true;
+                }
+                false
+            }
+            "continued" => {
+                let index = self.questions.iter().position(|card| {
+                    card.request_id() == request_id.as_deref() && request_id.is_some()
+                        || call_id.is_some() && card.call_id() == call_id.as_deref()
+                });
+                if let Some(index) = index {
+                    if let Some(card) = self.questions.get_mut(index) {
+                        card.mark_continued();
+                    }
+                    self.active_question = Some(index);
+                    self.notice = Some("答复已退出队列，问题仍可回答".to_string());
+                    return true;
+                }
+                false
+            }
+            "withdrawn" => {
+                let index = self.questions.iter().position(|card| {
+                    card.request_id() == request_id.as_deref() && request_id.is_some()
+                        || call_id.is_some() && card.call_id() == call_id.as_deref()
+                });
+                if let Some(index) = index {
+                    self.questions.remove(index);
+                    self.ensure_active_question();
+                    self.notice = Some("问卷请求已撤回；结果以官方记录为准".to_string());
                     return true;
                 }
                 false
@@ -966,21 +1105,12 @@ impl DecisionsModel {
 
     fn ensure_active_question(&mut self) {
         let Some(index) = self.active_question else {
-            self.active_question = self
-                .questions
-                .iter()
-                .position(|card| !card.hidden() && card.state().interactive());
+            self.active_question = self.questions.iter().position(holds_seat);
             return;
         };
-        let still_active = self
-            .questions
-            .get(index)
-            .is_some_and(|card| !card.hidden() && card.state().interactive());
+        let still_active = self.questions.get(index).is_some_and(holds_seat);
         if !still_active {
-            self.active_question = self
-                .questions
-                .iter()
-                .position(|card| !card.hidden() && card.state().interactive());
+            self.active_question = self.questions.iter().position(holds_seat);
         }
     }
 }
@@ -1026,6 +1156,12 @@ impl<'a> DecisionTop<'a> {
     pub fn is_approval(&self) -> bool {
         matches!(self, Self::Approval(_))
     }
+}
+
+fn holds_seat(card: &QuestionCard) -> bool {
+    !card.hidden()
+        && (card.state().interactive()
+            || card.state() == crate::question::QuestionCardState::Submitting)
 }
 
 fn matches_address(payload: &Value, address: &SessionAddress) -> bool {
@@ -1130,7 +1266,17 @@ mod tests {
         assert_eq!(active.request_id(), Some("r-1"));
         model.handle_key(DecisionKey::Enter);
         model.take_actions();
-        // The first card was submitted; the second becomes active.
+        // Sent-not-confirmed: the first card keeps the seat until it settles.
+        assert_eq!(model.question().unwrap().request_id(), Some("r-1"));
+        model.apply_event(
+            "decisions.question",
+            &json!({
+                "address": {"rootSessionId": "root"},
+                "state": "settled",
+                "requestId": "r-1",
+                "answers": [{"id": "q1", "selected": ["A"]}]
+            }),
+        );
         assert_eq!(model.question().unwrap().request_id(), Some("r-2"));
     }
 
@@ -1147,6 +1293,26 @@ mod tests {
             }),
         );
         assert!(model.question().is_none());
+    }
+
+    #[test]
+    fn paste_never_mutates_a_question_hidden_behind_an_approval() {
+        let mut model = model();
+        model.apply_event("decisions.question", &question_event("r-1", None));
+        model.handle_key(DecisionKey::Down);
+        model.handle_key(DecisionKey::Down);
+        model.apply_event(
+            "decisions.approval",
+            &json!({
+                "address": {"rootSessionId": "root"},
+                "state": "pending",
+                "requestId": "a-1",
+                "toolName": "bash"
+            }),
+        );
+        assert!(!model.paste("should not land"));
+        let card = model.questions.first().unwrap();
+        assert!(card.draft(0).unwrap().custom.is_empty());
     }
 
     #[test]
@@ -1175,6 +1341,93 @@ mod tests {
         let card = model.question().unwrap();
         assert_eq!(card.draft(0).unwrap().custom, "x");
         assert!(card.timed().remaining_ms.is_some());
+    }
+
+    #[test]
+    fn a_rejected_continued_answer_re_seats_the_card() {
+        let mut model = model();
+        model.apply_event("decisions.question", &question_event("r-1", Some("c-1")));
+        model.handle_key(DecisionKey::Enter);
+        let actions = model.take_actions();
+        assert_eq!(
+            model.question().unwrap().state(),
+            crate::question::QuestionCardState::Submitting
+        );
+        model.answer_not_accepted(&actions[0], "not-continued");
+        let card = model.question().unwrap();
+        assert_eq!(card.state(), crate::question::QuestionCardState::Continued);
+        assert_eq!(card.draft(0).unwrap().selected, vec!["A"]);
+    }
+
+    #[test]
+    fn withdrawn_requests_close_without_an_outcome() {
+        let mut model = model();
+        model.apply_event(
+            "decisions.approval",
+            &json!({
+                "address": {"rootSessionId": "root"},
+                "state": "pending",
+                "requestId": "a-1",
+                "toolName": "bash"
+            }),
+        );
+        model.apply_event(
+            "decisions.approval",
+            &json!({
+                "address": {"rootSessionId": "root"},
+                "state": "withdrawn",
+                "requestId": "a-1",
+                "toolName": "bash"
+            }),
+        );
+        assert!(model.approval().is_none());
+        assert!(model.notice().unwrap().contains("撤回"));
+        model.apply_event("decisions.question", &question_event("r-1", Some("c-1")));
+        model.handle_key(DecisionKey::Enter);
+        model.take_actions();
+        model.apply_event(
+            "decisions.question",
+            &json!({
+                "address": {"rootSessionId": "root"},
+                "state": "continued",
+                "requestId": "r-1",
+                "callId": "c-1"
+            }),
+        );
+        assert_eq!(
+            model.question().unwrap().state(),
+            crate::question::QuestionCardState::Continued
+        );
+    }
+
+    #[test]
+    fn a_projection_only_continued_question_keeps_its_draft_on_reconnect() {
+        let mut model = model();
+        model.apply_event("decisions.question", &question_event("r-1", Some("c-1")));
+        model.handle_key(DecisionKey::Down);
+        model.handle_key(DecisionKey::Down);
+        model.handle_key(DecisionKey::Char('x'));
+        let snapshot = json!({
+            "address": {"rootSessionId": "root"},
+            "approvals": [],
+            "questions": [],
+            "projection": {
+                "active": [{
+                    "callId": "c-1",
+                    "state": "continued",
+                    "questions": [{
+                        "id": "q1", "question": "Pick",
+                        "options": [{"label": "A"}, {"label": "B"}]
+                    }]
+                }],
+                "settled": []
+            }
+        });
+        assert!(model.apply_snapshot(&snapshot));
+        let card = model.question().unwrap();
+        assert_eq!(card.call_id(), Some("c-1"));
+        assert_eq!(card.state(), crate::question::QuestionCardState::Continued);
+        assert_eq!(card.draft(0).unwrap().custom, "x");
     }
 
     #[test]

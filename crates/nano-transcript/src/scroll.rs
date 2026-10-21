@@ -169,6 +169,24 @@ impl ScrollState {
         self.anchor.as_ref()
     }
 
+    /// Jump to an entry by identity. The next render resolves the actual row.
+    pub fn set_anchor(&mut self, identity: impl Into<String>, offset: usize) {
+        self.sticky = false;
+        self.anchor = Some(Anchor {
+            identity: identity.into(),
+            offset,
+        });
+    }
+
+    /// Rewrite an anchor after a preview is replaced by a durable message.
+    pub fn rewrite_anchor(&mut self, old: &str, new: &str) {
+        if let Some(anchor) = &mut self.anchor {
+            if anchor.identity == old {
+                anchor.identity = new.to_string();
+            }
+        }
+    }
+
     /// Wheel profile in use.
     pub fn profile(&self) -> WheelProfile {
         self.profile

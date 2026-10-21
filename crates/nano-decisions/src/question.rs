@@ -439,7 +439,10 @@ impl QuestionCard {
     pub fn mark_continued(&mut self) {
         self.timed.continued = true;
         self.timed.deadline = None;
-        if self.state == QuestionCardState::Draft {
+        if matches!(
+            self.state,
+            QuestionCardState::Draft | QuestionCardState::Submitting
+        ) {
             self.state = QuestionCardState::Continued;
         }
     }
@@ -507,24 +510,26 @@ impl QuestionCard {
                 return None;
             }
             DecisionKey::Space => {
-                if self.page < self.questions.len() && self.questions[self.page].multi_select {
+                if self.page < self.questions.len()
+                    && self.focus == self.questions[self.page].options.len()
+                {
+                    self.insert_char(' ');
+                } else if self.page < self.questions.len() && self.questions[self.page].multi_select
+                {
                     self.toggle_focus();
                 }
                 return None;
             }
             DecisionKey::Char(' ') => {
-                if self.page < self.questions.len()
-                    && self.questions[self.page].multi_select
-                    && self.focus < self.questions[self.page].options.len()
-                {
-                    self.toggle_focus();
-                } else {
-                    self.insert_char(' ');
-                }
+                self.insert_char(' ');
                 return None;
             }
             DecisionKey::Char(character) => {
-                if character.is_ascii_digit() && character != '0' {
+                let option_count = self
+                    .current_question()
+                    .map(|question| question.options.len())
+                    .unwrap_or(0);
+                if character.is_ascii_digit() && character != '0' && self.focus < option_count {
                     let index = character as usize - '1' as usize;
                     return self.direct_select(index);
                 }
@@ -1151,6 +1156,26 @@ mod tests {
     }
 
     #[test]
+    fn other_accepts_digits_and_spaces() {
+        let mut card = single();
+        card.handle_key(DecisionKey::Down);
+        card.handle_key(DecisionKey::Down);
+        for character in "3".chars() {
+            card.handle_key(DecisionKey::Char(character));
+        }
+        card.handle_key(DecisionKey::Space);
+        for character in "apples".chars() {
+            card.handle_key(DecisionKey::Char(character));
+        }
+        let action = card.handle_key(DecisionKey::Enter).unwrap();
+        let QuestionAction::Answer { answers, .. } = action else {
+            panic!("expected answer");
+        };
+        assert!(answers[0].selected.is_empty());
+        assert_eq!(answers[0].custom.as_deref(), Some("3 apples"));
+    }
+
+    #[test]
     fn a_batch_goes_through_a_submit_page_and_blocks_missing_answers() {
         let mut card = batch();
         // Reach the submit page without answering either question.
@@ -1225,6 +1250,16 @@ mod tests {
             panic!("expected answer");
         };
         assert_eq!(call_id.as_deref(), Some("c"));
+    }
+
+    #[test]
+    fn mark_continued_rearms_a_submitting_card() {
+        let mut card = single();
+        card.mark_submitting();
+        card.mark_continued();
+        assert_eq!(card.state(), QuestionCardState::Continued);
+        let action = card.handle_key(DecisionKey::Enter).unwrap();
+        assert!(matches!(action, QuestionAction::Answer { .. }));
     }
 
     #[test]

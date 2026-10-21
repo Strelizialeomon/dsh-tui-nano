@@ -183,8 +183,16 @@ pub fn render(
     }
     let total = start;
     let top = scroll.top(total, viewport, &entries);
-    let window_start = top.saturating_sub(OVERSCAN_ROWS);
-    let window_end = (top + viewport + OVERSCAN_ROWS).min(total);
+    let limit = MAX_MOUNTED_ROWS.max(viewport);
+    let mut window_start = top.saturating_sub(OVERSCAN_ROWS);
+    let mut window_end = (top + viewport + OVERSCAN_ROWS).min(total);
+    if window_end.saturating_sub(window_start) > limit {
+        window_start = window_end.saturating_sub(limit);
+        if window_start > top {
+            window_start = top;
+            window_end = (top + limit).min(total);
+        }
+    }
     let mut lines = Vec::new();
     let mut hits = Vec::new();
     let mut base = None;
@@ -206,11 +214,6 @@ pub fn render(
         }
         lines.extend(rendered.lines[first..last].iter().cloned());
         hits.extend(rendered.hits[first..last].iter().cloned());
-        if lines.len() > MAX_MOUNTED_ROWS {
-            lines.truncate(MAX_MOUNTED_ROWS);
-            hits.truncate(MAX_MOUNTED_ROWS);
-            break;
-        }
     }
     let base = base.unwrap_or(0);
     let local_top = top.saturating_sub(base).min(lines.len());
@@ -261,7 +264,7 @@ fn render_entry(entry: &Entry, width: usize, expanded: bool) -> RenderedEntry {
                 let duration = reasoning_ms
                     .map(format_duration)
                     .unwrap_or_else(|| "用时未知".to_string());
-                let toggle = if expanded { "展开" } else { "收起" };
+                let toggle = if expanded { "收起" } else { "展开" };
                 output.lines.push(Line::from(vec![
                     Span::styled("思考 ", Style::default().fg(Color::DarkGray)),
                     Span::styled(duration, Style::default().fg(Color::DarkGray)),
@@ -628,6 +631,7 @@ fn render_diff_body(
                 line.old_no,
                 line.new_no,
                 line.text.clone(),
+                line.emphasis,
             ));
         }
     }
@@ -642,23 +646,51 @@ fn render_diff_body(
                 )));
                 output.hits.push(toggle_hit(record));
             }
-            DiffRow::Line(kind, old_no, new_no, text) => {
+            DiffRow::Line(kind, old_no, new_no, text, emphasis) => {
                 let number = (*old_no).or(*new_no);
                 let number = number
                     .map(|number| format!("{number:>4}"))
                     .unwrap_or_else(|| "    ".to_string());
-                let (marker, style) = match kind {
-                    DiffLineKind::Add => ("+", Style::default().fg(Color::Green)),
-                    DiffLineKind::Delete => ("-", Style::default().fg(Color::Red)),
-                    DiffLineKind::Context => (" ", Style::default().fg(Color::DarkGray)),
+                let (marker, base, highlighted) = match kind {
+                    DiffLineKind::Add => (
+                        "+",
+                        Style::default().fg(Color::Green).bg(Color::Rgb(0, 42, 0)),
+                        Style::default()
+                            .fg(Color::LightGreen)
+                            .bg(Color::Rgb(0, 88, 0))
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    DiffLineKind::Delete => (
+                        "-",
+                        Style::default().fg(Color::Red).bg(Color::Rgb(48, 0, 0)),
+                        Style::default()
+                            .fg(Color::LightRed)
+                            .bg(Color::Rgb(96, 0, 0))
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    DiffLineKind::Context => {
+                        (" ", Style::default().fg(Color::DarkGray), Style::default())
+                    }
                 };
                 let rendered = format!(
                     "{number} {} {text}",
                     if marker == " " { " " } else { marker }
                 );
+                let mut char_start = 0usize;
                 for wrapped in wrap_line(&rendered, width) {
+                    let row_chars = wrapped.chars().count();
+                    let overlap = emphasis
+                        .map(|(start, end)| {
+                            // 4ch number + space + marker + space.
+                            let start = 7 + start;
+                            let end = 7 + end;
+                            char_start < end && char_start + row_chars > start
+                        })
+                        .unwrap_or(false);
+                    let style = if overlap { highlighted } else { base };
                     output.lines.push(Line::from(Span::styled(wrapped, style)));
                     output.hits.push(toggle_hit(record));
+                    char_start += row_chars;
                 }
             }
         }
@@ -673,7 +705,13 @@ fn render_diff_body(
 }
 
 enum DiffRow {
-    Line(DiffLineKind, Option<u64>, Option<u64>, String),
+    Line(
+        DiffLineKind,
+        Option<u64>,
+        Option<u64>,
+        String,
+        Option<(usize, usize)>,
+    ),
     Separator(String),
 }
 
@@ -979,6 +1017,29 @@ mod tests {
     }
 
     #[test]
+    fn a_viewport_taller_than_the_mount_cap_still_reaches_the_bottom() {
+        let mut model = model(
+            (0..100)
+                .map(|index| Entry {
+                    identity: format!("seq-{index}"),
+                    fingerprint: index as u64 + 1,
+                    kind: EntryKind::Context {
+                        text: "line one\nline two\nline three".into(),
+                        bash: false,
+                    },
+                })
+                .collect(),
+        );
+        let mut cache = RenderCache::new();
+        let mut scroll = ScrollState::default();
+        let viewport = 250;
+        let rendered = render(&model, &mut cache, &mut scroll, 80, viewport);
+        assert_eq!(rendered.lines.len(), viewport);
+        assert_eq!(rendered.top + rendered.lines.len(), rendered.total_height);
+        model.revision += 1;
+    }
+
+    #[test]
     fn a_wide_character_never_gets_split_by_the_renderer() {
         let mut model = model(vec![Entry {
             identity: "m-1".into(),
@@ -1044,6 +1105,47 @@ mod tests {
             .lines
             .iter()
             .any(|line| line.to_string().contains("还有")));
+    }
+
+    #[test]
+    fn diff_rows_have_a_background_and_emphasis_style() {
+        let diff = crate::diff::single_text_diff(
+            Some("a.txt".into()),
+            Some("hello world".into()),
+            Some("hello there".into()),
+            DiffState::Applied,
+        );
+        let entry = Entry {
+            identity: "call-c".into(),
+            fingerprint: 1,
+            kind: EntryKind::Tool(ToolRecord {
+                call_id: "c".into(),
+                name: "edit".into(),
+                status: ToolStatus::Succeeded,
+                display_status: DisplayStatus::Succeeded,
+                turn: None,
+                step: None,
+                arguments: "{}".into(),
+                result: None,
+                result_fact: None,
+                approval: None,
+                display: ToolDisplay::File {
+                    path: Some("a.txt".into()),
+                    diff: Some(diff),
+                },
+            }),
+        };
+        let rendered = render_one(entry, true, 80);
+        assert!(rendered
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .any(|span| span.style.bg.is_some()));
+        assert!(rendered
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .any(|span| span.style.add_modifier.contains(Modifier::BOLD)));
     }
 
     #[test]

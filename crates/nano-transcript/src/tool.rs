@@ -362,6 +362,7 @@ fn build_display(
                 });
             let state = match display_status {
                 DisplayStatus::Pending => DiffState::Pending,
+                DisplayStatus::Unknown => DiffState::Unknown,
                 DisplayStatus::Failed | DisplayStatus::Interrupted => DiffState::NotApplied,
                 _ => DiffState::Applied,
             };
@@ -694,6 +695,36 @@ mod tests {
         };
         assert_eq!(record.state, RecordedQuestionState::Settled);
         assert_eq!(record.answers[0].selected, vec!["A"]);
+    }
+
+    #[test]
+    fn an_unknown_outcome_does_not_claim_the_diff_was_applied() {
+        let fact = ToolResultFact {
+            call_id: "c-1".into(),
+            meta: None,
+            error: Some(ToolErrorFact {
+                name: "ToolError".into(),
+                code: "TOOL_OUTCOME_UNKNOWN".into(),
+                reason: None,
+            }),
+            text: Some("outcome unknown".into()),
+        };
+        let record = ToolRecord::build(
+            &call(
+                "edit",
+                r#"{"file_path":"a.rs","old_string":"a","new_string":"b"}"#,
+                Some("outcome unknown"),
+                true,
+            ),
+            Some(&fact),
+            None,
+            None,
+        );
+        let ToolDisplay::File { diff, .. } = &record.display else {
+            panic!("expected file");
+        };
+        assert_eq!(diff.as_ref().unwrap().state, DiffState::Unknown);
+        assert_ne!(diff.as_ref().unwrap().state.label(), "已应用");
     }
 
     #[test]

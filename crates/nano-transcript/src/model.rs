@@ -105,6 +105,10 @@ pub enum EntryKind {
 pub struct PreviewEntry {
     /// Attempt identity.
     pub attempt_id: String,
+    /// Owning turn.
+    pub turn: u64,
+    /// Owning step.
+    pub step: u64,
     /// Visible text.
     pub text: String,
     /// Reasoning text.
@@ -171,6 +175,7 @@ pub struct TranscriptModel {
     expansion: HashSet<String>,
     preview_started: HashMap<String, Instant>,
     pub(crate) revision: u64,
+    aliases: HashMap<String, String>,
     last_error: Option<String>,
 }
 
@@ -185,6 +190,7 @@ impl TranscriptModel {
             expansion: HashSet::new(),
             preview_started: HashMap::new(),
             revision: 0,
+            aliases: HashMap::new(),
             last_error: None,
         }
     }
@@ -212,6 +218,12 @@ impl TranscriptModel {
     /// Last wire-parsing error worth showing.
     pub fn last_error(&self) -> Option<&str> {
         self.last_error.as_deref()
+    }
+
+    /// Resolve a retired preview identity to the durable message that replaced
+    /// it, so a reading anchor survives the preview-to-message handoff.
+    pub fn alias(&self, identity: &str) -> Option<&str> {
+        self.aliases.get(identity).map(String::as_str)
     }
 
     /// Whether one entry is expanded.
@@ -295,6 +307,8 @@ impl TranscriptModel {
                 fingerprint: 0,
                 kind: EntryKind::Preview(PreviewEntry {
                     attempt_id: preview.attempt_id,
+                    turn: preview.turn,
+                    step: preview.step,
                     text: preview.text,
                     reasoning: preview.reasoning,
                     reasoning_ms,
@@ -444,13 +458,21 @@ impl TranscriptModel {
                 .iter()
                 .any(|entry| entry.call_id == call.call_id && entry.state == "continued");
         let cancelled = self.enrichment.question_cancelled.contains(&call.call_id);
-        let state = if cancelled {
+        let mut state = if continued {
+            // A queued reply can still be discarded; the projection says the
+            // question is answerable, so the row must stay clickable.
+            RecordedQuestionState::Continued
+        } else if cancelled {
             RecordedQuestionState::Cancelled
-        } else if self.enrichment.question_submitted.contains(&call.call_id) && settled.is_none() {
-            RecordedQuestionState::Submitted
         } else {
-            derive_question_state(call, settled.map(Vec::as_slice), Some(continued))
+            derive_question_state(call, settled.map(Vec::as_slice), Some(false))
         };
+        if state == RecordedQuestionState::Open
+            && self.enrichment.question_submitted.contains(&call.call_id)
+            && settled.is_none()
+        {
+            state = RecordedQuestionState::Submitted;
+        }
         Some(QuestionRecord {
             questions,
             timed: self.enrichment.question_timed.contains(&call.call_id)
@@ -480,6 +502,38 @@ impl TranscriptModel {
             "assistant/message" => {
                 let fact = assistant_fact(&event.data);
                 insert_bounded(&mut self.enrichment.assistant, event.seq, fact);
+                if let (Some(message_id), Some(turn), Some(step)) = (
+                    event
+                        .data
+                        .get("message")
+                        .and_then(|message| message.get("id"))
+                        .and_then(Value::as_str),
+                    event.data.get("turn").and_then(Value::as_u64),
+                    event.data.get("step").and_then(Value::as_u64),
+                ) {
+                    let replaced: Vec<String> = self
+                        .entries
+                        .iter()
+                        .filter_map(|entry| match &entry.kind {
+                            EntryKind::Preview(preview)
+                                if preview.turn == turn && preview.step == step =>
+                            {
+                                Some(entry.identity.clone())
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    for identity in replaced {
+                        self.aliases.insert(identity, message_id.to_string());
+                    }
+                    while self.aliases.len() > MAX_ENRICHMENT {
+                        if let Some(key) = self.aliases.keys().next().cloned() {
+                            self.aliases.remove(&key);
+                        } else {
+                            break;
+                        }
+                    }
+                }
                 changed = true;
             }
             "tool/result" => {
@@ -610,6 +664,25 @@ impl TranscriptModel {
             .get("state")
             .and_then(Value::as_str)
             .unwrap_or("pending");
+        if state == "withdrawn" {
+            if let Some(id) = self
+                .enrichment
+                .approval_by_call
+                .get(&request_id)
+                .cloned()
+                .or_else(|| {
+                    call_id
+                        .as_deref()
+                        .and_then(|call_id| self.enrichment.approval_by_call.get(call_id).cloned())
+                })
+            {
+                if let Some(fact) = self.enrichment.approvals.get_mut(&id) {
+                    fact.pending = false;
+                }
+                return true;
+            }
+            return false;
+        }
         if state == "settled" {
             let outcome = payload
                 .get("outcome")
@@ -719,11 +792,17 @@ impl TranscriptModel {
                 self.enrichment.question_submitted.remove(&call_id);
                 true
             }
+            "continued" => {
+                self.enrichment.question_continued.insert(call_id.clone());
+                self.enrichment.question_cancelled.remove(&call_id);
+                self.enrichment.question_submitted.remove(&call_id);
+                true
+            }
             "expired" => {
                 self.enrichment.question_continued.insert(call_id);
                 true
             }
-            "cancelled" => {
+            "cancelled" | "withdrawn" => {
                 self.enrichment.question_cancelled.insert(call_id);
                 true
             }
@@ -756,6 +835,8 @@ impl TranscriptModel {
                     self.enrichment
                         .question_continued
                         .insert(call_id.to_string());
+                    self.enrichment.question_cancelled.remove(call_id);
+                    self.enrichment.question_submitted.remove(call_id);
                 }
             }
         }

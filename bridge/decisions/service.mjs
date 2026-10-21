@@ -66,6 +66,21 @@ export class DecisionService {
           if (event?.type === 'tool/call') this.indexCall(event.data)
         }),
       )
+      add(
+        ctx.on('agent/inbox/discarded', (payload) => {
+          if (this.closed || payload?.agent?.id !== this.rootSessionId) return
+          const source = payload?.message?.source
+          if (source?.kind === 'user-question-reply' && typeof source.callId === 'string') {
+            // A queued reply was discarded before admission: the question is
+            // answerable again, and the card must re-arm.
+            this.hub.publish('decisions.question', {
+              address: this.address,
+              state: 'continued',
+              callId: source.callId,
+            })
+          }
+        }),
+      )
     }
     const projections = ctx.get?.('sessionProjections')
     if (projections?.onChanged !== undefined) {
@@ -89,12 +104,17 @@ export class DecisionService {
         // listener disposal is best-effort during teardown
       }
     }
-    for (const [requestId, pending] of [...this.pendingQuestions]) {
-      this.settleQuestion(requestId, pending, { kind: 'cancelled', notify: false })
+    // Exit must not answer pending requests. Mark them done, release claims,
+    // and leave the official waterfall to the turn/shutdown cancellation.
+    for (const pending of this.pendingQuestions.values()) {
+      pending.done = true
+      pending.claimController?.abort()
     }
-    for (const [requestId, pending] of [...this.pendingApprovals]) {
-      this.settleApproval(requestId, pending, 'cancelled', false)
+    this.pendingQuestions.clear()
+    for (const pending of this.pendingApprovals.values()) {
+      pending.done = true
     }
+    this.pendingApprovals.clear()
   }
 
   /** One approval answerer. */
@@ -109,7 +129,7 @@ export class DecisionService {
       const pending = { request, resolve, done: false, onAbort: undefined }
       pending.onAbort = () => {
         if (pending.done) return
-        this.settleApproval(requestId, pending, 'cancelled', true)
+        this.withdrawApproval(requestId, pending)
       }
       request.signal?.addEventListener('abort', pending.onAbort, { once: true })
       this.pendingApprovals.set(requestId, pending)
@@ -149,11 +169,7 @@ export class DecisionService {
       pending.onAbort = () => {
         if (pending.done) return
         const reason = request.signal?.reason
-        if (reason?.code === 'ASK_TIMED_OUT') {
-          this.settleQuestion(requestId, pending, { kind: 'expired' })
-        } else {
-          this.settleQuestion(requestId, pending, { kind: 'cancelled' })
-        }
+        this.withdrawQuestion(requestId, pending, reason?.code === 'ASK_TIMED_OUT')
       }
       request.signal?.addEventListener('abort', pending.onAbort, { once: true })
       this.pendingQuestions.set(requestId, pending)
@@ -385,6 +401,35 @@ export class DecisionService {
     this.hub.publish('decisions.projection', {
       address: this.address,
       ...projection,
+    })
+  }
+
+  withdrawApproval(requestId, pending) {
+    if (pending.done) return
+    pending.done = true
+    pending.request.signal?.removeEventListener('abort', pending.onAbort)
+    this.pendingApprovals.delete(requestId)
+    if (!this.closed) {
+      this.hub.publish('decisions.approval', {
+        address: this.address,
+        state: 'withdrawn',
+        ...this.approvalCard(requestId, pending.request),
+      })
+    }
+  }
+
+  withdrawQuestion(requestId, pending, timedOut) {
+    if (pending.done) return
+    pending.done = true
+    pending.request.signal?.removeEventListener('abort', pending.onAbort)
+    this.pendingQuestions.delete(requestId)
+    pending.claimController?.abort()
+    if (this.closed) return
+    this.hub.publish('decisions.question', {
+      address: this.address,
+      state: timedOut ? 'expired' : 'withdrawn',
+      requestId,
+      ...(typeof pending.callId === 'string' ? { callId: pending.callId } : {}),
     })
   }
 

@@ -274,3 +274,55 @@ fn a_submission_echo_is_display_only_and_does_not_become_history() {
     assert!(matches!(entry.kind, EntryKind::Echo { .. }));
     assert!(model.history().is_empty());
 }
+
+#[test]
+fn the_reading_anchor_survives_preview_to_message_handoff() {
+    let mut model = ConversationModel::new(root());
+    let mut view = nano_transcript::TranscriptView::new(root(), TranscriptSource::Interactive);
+    model.apply_event(
+        "conversation.stream",
+        &json!({
+            "address": {"rootSessionId": "root"},
+            "frame": {"type": "start", "attemptId": "a-1", "revision": 1, "turn": 1, "step": 1}
+        }),
+    );
+    model.apply_event(
+        "conversation.stream",
+        &json!({
+            "address": {"rootSessionId": "root"},
+            "frame": {
+                "type": "chunk", "attemptId": "a-1", "revision": 1, "index": 0,
+                "chunk": {"type": "text-delta", "index": 0, "text": "partial"}
+            }
+        }),
+    );
+    view.sync(&model, Instant::now());
+    assert!(view
+        .entries()
+        .iter()
+        .any(|entry| entry.identity == "preview-a-1"));
+    view.scroll_mut().set_anchor("preview-a-1", 0);
+    let event = payload(
+        2,
+        "assistant/message",
+        json!({
+            "turn": 1,
+            "step": 1,
+            "message": {
+                "id": "m-1",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "final"}]
+            },
+            "stream": []
+        }),
+    );
+    model.apply_event("session.event", &event);
+    view.apply_event("session.event", &event);
+    view.sync(&model, Instant::now());
+    assert_eq!(
+        view.scroll()
+            .anchor()
+            .map(|anchor| anchor.identity.as_str()),
+        Some("m-1")
+    );
+}

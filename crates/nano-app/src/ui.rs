@@ -216,19 +216,29 @@ fn draw_decision(frame: &mut Frame, app: &mut App, area: Rect) {
     };
     let block = Block::default().borders(Borders::ALL).title(title);
     let inner = block.inner(area);
-    let mut mapped = Vec::with_capacity(inner.height as usize + 2);
-    mapped.push(None);
-    mapped.extend(hits);
-    while mapped.len() < area.height as usize {
-        mapped.push(None);
-    }
-    mapped.truncate(area.height as usize);
-    app.decision_hits = mapped;
+    let visible: Vec<Line<'static>> = lines.iter().take(inner.height as usize).cloned().collect();
+    app.decision_hits = map_decision_hits(&hits, inner.height, area.height);
     frame.render_widget(block, area);
-    let visible: Vec<Line<'static>> = lines.into_iter().take(inner.height as usize).collect();
     frame.render_widget(Paragraph::new(Text::from(visible)), inner);
 }
 
+/// Map content-row hits onto the full card area. Row 0 is the top border and
+/// the last row is the bottom border; hits past the inner height are clipped
+/// with the text and must never answer a hidden option.
+fn map_decision_hits(
+    hits: &[Option<DecisionClick>],
+    inner_height: u16,
+    area_height: u16,
+) -> Vec<Option<DecisionClick>> {
+    let mut mapped = Vec::with_capacity(area_height as usize);
+    mapped.push(None);
+    mapped.extend(hits.iter().take(inner_height as usize).cloned());
+    while mapped.len() < area_height as usize {
+        mapped.push(None);
+    }
+    mapped.truncate(area_height as usize);
+    mapped
+}
 fn render_approval(
     card: &nano_decisions::ApprovalCard,
     area: Rect,
@@ -1027,6 +1037,23 @@ mod tests {
     #[test]
     fn display_rows_count_wide_cells() {
         assert_eq!(display_rows("你好世界", 4), vec!["你好", "世界"]);
+    }
+
+    #[test]
+    fn the_bottom_border_never_answers_a_clipped_decision_row() {
+        let hits = vec![
+            Some(DecisionClick::ApprovalAllow),
+            Some(DecisionClick::ApprovalReject),
+            Some(DecisionClick::ApprovalAllow),
+            Some(DecisionClick::ApprovalReject),
+            Some(DecisionClick::ApprovalAllow),
+            Some(DecisionClick::ApprovalReject),
+        ];
+        let mapped = map_decision_hits(&hits, 5, 7);
+        assert_eq!(mapped.len(), 7);
+        assert_eq!(mapped[0], None);
+        assert_eq!(mapped[6], None);
+        assert_eq!(mapped[5], Some(DecisionClick::ApprovalAllow));
     }
 
     #[test]
