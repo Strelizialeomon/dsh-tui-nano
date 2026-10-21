@@ -100,7 +100,7 @@
 ┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+Backspace 移除附件 ───────────────────────────────────┐
 │@mai                                                                                                                  │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-Enter 发送 · Alt+Enter 插话 · @ 引用文件 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除附件 · Ctrl+J 换行 · Esc 停止 ·
+Enter 发送 · Alt+Enter 插话 · @ 引用文件 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除附件 · Alt+K 技能 · Alt+R 规矩 ·
 --- SCREEN attachment ---
  nano  work · 已连接 · 空闲 · seq 3 · 队列 0
 输入消息后按 Enter 发送。
@@ -145,7 +145,7 @@ Enter 发送 · Alt+Enter 插话 · @ 引用文件 · Alt+A 附加 · Alt+←→
 --- SCREEN submitted ---
  nano  work · 已连接 · 空闲 · seq 8 · 队列 0
 回合 （失败）
-agent "session-5cbd7f23-9b90-4ae0-9689-798789fa0248" has no provider/model: set AgentOptions.provider and AgentOptions.m
+agent "session-f35fb5d1-e224-4fb2-bf20-b063886aec14" has no provider/model: set AgentOptions.provider and AgentOptions.m
 odel or supply both via the agent/request waterfall
 你（未确认）
 @src/main.rs[文件 notes.txt][图片 pixel.png] look
