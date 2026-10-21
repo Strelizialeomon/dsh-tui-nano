@@ -233,8 +233,10 @@ def main():
     pump(1.0)
     now = snapshot()
     snapshots["command"] = now
-    checks.append(("command wins over skill routing", "命令优先" in now))
-    checks.append(("blocked draft kept", "/compact" in now))
+    # After S04, an official command with the same name executes instead of
+    # being reported as a command-wins skill collision; the draft is consumed.
+    checks.append(("command wins over skill routing", "命令 compact" in now or "Compacted" in now))
+    checks.append(("official command took the draft", "/compact" not in now.split("输入")[-1]))
 
     send("\x03")
     pump(2)

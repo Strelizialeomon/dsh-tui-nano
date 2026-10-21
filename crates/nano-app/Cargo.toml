@@ -15,6 +15,7 @@ nano-runtime = { path = "../nano-runtime" }
 nano-conversation = { path = "../nano-conversation" }
 nano-jobs = { path = "../nano-jobs" }
 nano-controls = { path = "../nano-controls" }
+nano-sessions = { path = "../nano-sessions" }
 nano-skills = { path = "../nano-skills" }
 serde_json = "1"
 crossterm = "0.28"

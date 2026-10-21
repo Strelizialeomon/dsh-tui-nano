@@ -351,6 +351,7 @@ mod tests {
                 mode: None,
             },
             seq: 1,
+            time: None,
             event_type: "user/message".into(),
             data: json!({
                 "id": "m-1",
@@ -358,6 +359,8 @@ mod tests {
                 "content": [{"type": "text", "text": "hi"}],
                 "source": {"kind": "user", "rpcId": "r-1"}
             }),
+            surface_op: None,
+            source_event_seqs: None,
         });
         tracker.reconcile(&InboxView::default(), &history);
         assert!(tracker.unknowns().is_empty());
