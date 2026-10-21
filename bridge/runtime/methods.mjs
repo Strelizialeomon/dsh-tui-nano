@@ -14,6 +14,10 @@ export const IMPLEMENTED_REQUEST_METHODS = Object.freeze([
   'nano.conversation.steerQueued',
   'nano.conversation.cancel',
   'nano.conversation.snapshot',
+  'nano.shell.exec',
+  'nano.jobs.snapshot',
+  'nano.jobs.follow',
+  'nano.jobs.kill',
 ])
 
 /** Notifications this host can emit. */

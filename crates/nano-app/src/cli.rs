@@ -164,5 +164,7 @@ nano — 极简 DeepSeek Harness 终端界面
   Enter 发送/排队；Alt+Enter 插话；Ctrl+J 换行（Shift+Enter 需终端支持键盘增强）
   Esc 停止当前回合（保留队列）；Ctrl+Y 复制草稿原文（OSC 52）；Ctrl+C 退出
   Alt+↑/↓ 选择队列项；Alt+E 编辑；Alt+D 删除；Alt+S 转为插话；Alt+X 清空并停止
+  !命令 人工命令：以你的用户权限运行，不是 Agent 授权；输出作为合成上下文注入，不唤醒模型
+  Ctrl+T 任务面板：↑↓ 选择，Enter 查看输出（非消费跟随），k 停止，r 刷新
   PageUp/PageDown 翻阅记录；Ctrl+End 回到底部
 ";

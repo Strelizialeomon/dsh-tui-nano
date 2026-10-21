@@ -15,6 +15,8 @@ import { BoundedWriter } from './writer.mjs'
 import { claimMount, releaseMount } from './ledger.mjs'
 import { SubscriptionHub } from './events.mjs'
 import { ConversationService } from '../conversation/service.mjs'
+import { ShellService } from '../shell/service.mjs'
+import { JobsService } from '../jobs/service.mjs'
 import { buildCapabilities } from './capabilities.mjs'
 import { IMPLEMENTED_REQUEST_METHODS } from './methods.mjs'
 
@@ -38,6 +40,8 @@ export function startHost(ctx, config) {
     writer: undefined,
     hub: undefined,
     conversation: undefined,
+    shell: undefined,
+    jobs: undefined,
     agentHandle: undefined,
     session: undefined,
     claim: undefined,
@@ -200,6 +204,18 @@ async function runStartup(state, config) {
     ctx,
     hub: state.hub,
     agent: state.agentHandle.agent,
+    session,
+    rootSessionId: state.config.rootSessionId,
+  })
+  state.shell = new ShellService({
+    ctx,
+    agent: state.agentHandle.agent,
+    session,
+    rootSessionId: state.config.rootSessionId,
+  })
+  state.jobs = new JobsService({
+    ctx,
+    hub: state.hub,
     session,
     rootSessionId: state.config.rootSessionId,
   })
@@ -457,6 +473,22 @@ async function dispatchRequest(state, frame) {
       await sendResult(state, id, state.conversation.snapshot(params))
       return undefined
     }
+    case 'nano.shell.exec': {
+      await sendResult(state, id, await state.shell.exec(params))
+      return undefined
+    }
+    case 'nano.jobs.snapshot': {
+      await sendResult(state, id, state.jobs.snapshot(params))
+      return undefined
+    }
+    case 'nano.jobs.follow': {
+      await sendResult(state, id, state.jobs.follow(params))
+      return undefined
+    }
+    case 'nano.jobs.kill': {
+      await sendResult(state, id, state.jobs.kill(params))
+      return undefined
+    }
     default: {
       const reserved = RESERVED_METHODS.get(method)
       if (reserved !== undefined) {
@@ -537,6 +569,10 @@ async function runShutdown(state, reason) {
   steps.push(await runStep('subscriptions', deadline, () => {
     state.conversation?.close()
     state.conversation = undefined
+    state.shell?.close()
+    state.shell = undefined
+    state.jobs?.close()
+    state.jobs = undefined
     state.hub?.closeAll(reason)
   }, faults))
 
@@ -652,6 +688,22 @@ async function failStartup(state, error) {
       state.conversation = undefined
     } catch (cleanupError) {
       cleanupFailures.push(`conversation: ${describe(cleanupError)}`)
+    }
+  }
+  if (state.shell !== undefined) {
+    try {
+      state.shell.close()
+      state.shell = undefined
+    } catch (cleanupError) {
+      cleanupFailures.push(`shell: ${describe(cleanupError)}`)
+    }
+  }
+  if (state.jobs !== undefined) {
+    try {
+      state.jobs.close()
+      state.jobs = undefined
+    } catch (cleanupError) {
+      cleanupFailures.push(`jobs: ${describe(cleanupError)}`)
     }
   }
   if (state.hub !== undefined) {

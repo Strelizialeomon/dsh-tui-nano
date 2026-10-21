@@ -279,6 +279,7 @@ version = "0.1.0"
 dependencies = [
  "crossterm",
  "nano-conversation",
+ "nano-jobs",
  "nano-runtime",
  "ratatui",
  "serde_json",
@@ -292,6 +293,14 @@ dependencies = [
  "serde",
  "serde_json",
  "unicode-width 0.2.0",
+]
+
+[[package]]
+name = "nano-jobs"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

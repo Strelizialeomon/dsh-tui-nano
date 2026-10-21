@@ -2,8 +2,9 @@
 
 `nano-protocol.json` 是 Rust 运行时与 TypeScript 桥接之间唯一的机器可校验契约。两边的测试都读取它，核对：
 
-- 方法名、方向、实现状态（`implemented` / `reserved`）；S02 的对话方法为 `nano.conversation.submit|editQueued|deleteQueued|steerQueued|cancel|snapshot`；
+- 方法名、方向、实现状态（`implemented` / `reserved`）；S02 的对话方法为 `nano.conversation.submit|editQueued|deleteQueued|steerQueued|cancel|snapshot`；S08 为 `nano.shell.exec` 与 `nano.jobs.snapshot|follow|kill`；
 - S02 的事件 kind：`conversation.status`、`conversation.inbox`（完整投影；超帧上限时降级为有界预览，带 `truncated`/`total`/`omitted`）、`conversation.stream`（start/chunk/end 帧）；
+- S08 的事件 kind：`jobs.event`（官方任务投影的 registered/progress/stopping/settled/removed）与 `jobs.output`（只通告绝对偏移，不推输出内容）；`nano.jobs.follow` 用 `readAt` 按绝对字节偏移非消费读取；
 - 帧必需字段、错误码、生命周期边、事件 kind；
 - 容量上限（frame、pending、chunk、背压队列、退出预算、单次提交 32 KiB）；
 - `fixtures` 里的样本必须能被双方解析，包括 `conversationSubmit` 与 `conversationEvent`。

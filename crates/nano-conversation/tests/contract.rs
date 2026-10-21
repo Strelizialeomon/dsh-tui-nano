@@ -68,17 +68,18 @@ fn every_event_kind_is_covered_by_the_contract_shape() {
         .iter()
         .map(|entry| entry["kind"].as_str().unwrap())
         .collect();
-    for kind in &kinds {
-        assert!(
-            [
-                "session.event",
-                "conversation.status",
-                "conversation.inbox",
-                "conversation.stream"
-            ]
-            .contains(kind),
-            "unexpected event kind {kind}"
-        );
-    }
-    assert_eq!(kinds.len(), 4);
+    assert!(kinds.contains(&"session.event"));
+    let conversation: Vec<&str> = kinds
+        .iter()
+        .copied()
+        .filter(|kind| kind.starts_with("conversation."))
+        .collect();
+    assert_eq!(
+        conversation,
+        vec![
+            "conversation.status",
+            "conversation.inbox",
+            "conversation.stream"
+        ]
+    );
 }

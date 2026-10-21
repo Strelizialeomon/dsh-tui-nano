@@ -1,0 +1,144 @@
+
+===== 启动：已连接 =====
+ nano  issue-11 · 已连接 · 空闲 · seq 3 · 队列 0
+输入消息后按 Enter 发送。
+
+┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行 · Ctrl+T 任务 ───────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                                                                    │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+已连接官方会话
+
+===== 首次人工命令：用户权限提示（Enter 执行，Esc 取消） =====
+ nano  issue-11 · 已连接 · 空闲 · seq 3 · 队列 0
+输入消息后按 Enter 发送。
+
+┌ 人工命令（用户权限，不是 Agent 授权）· Enter 执行，Esc 取消 ───────────────────────────────────────────────────────────────────────────────────────┐
+│!printf 'hello\n'                                                                                                                                   │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+人工命令以你的用户权限运行，不是 Agent 授权；输出会作为合成上下文注入会话。 Enter 执行，Esc 取消
+
+===== 执行后：退出码 0，本窗口显示输出，官方 inbox 出现合成上下文 =====
+ nano  issue-11 · 已连接 · 空闲 · seq 3 · 队列 1
+bash !printf 'hello\n' · 退出码 0
+hello
+
+ 队列 · 官方 inbox · 1 项（Alt+↑↓ 选择，Alt+E 编辑，Alt+D 删除，Alt+S 插话，Alt+X 清空并停止） ───────────────────────────────────────────────────────
+▶ [待下一步] <bash-input>printf 'hello\n'</bash-input> <bash-stdout>hello </bash-stdout> <bash-stderr></bash-stderr>
+┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行 · Ctrl+T 任务 ───────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                                                                    │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+人工命令：退出码 0
+
+===== 第二条命令：不再提示；非零退出与 stderr 分开显示 =====
+ nano  issue-11 · 已连接 · 空闲 · seq 4 · 队列 2
+bash !printf 'hello\n' · 退出码 0
+hello
+
+bash !sh -c 'echo out; echo err >&2; exit 7' · 退出码 7
+out
+
+[stderr]
+err
+
+ 队列 · 官方 inbox · 2 项（Alt+↑↓ 选择，Alt+E 编辑，Alt+D 删除，Alt+S 插话，Alt+X 清空并停止） ───────────────────────────────────────────────────────
+▶ [待下一步] <bash-input>printf 'hello\n'</bash-input> <bash-stdout>hello </bash-stdout> <bash-stderr></bash-stderr>
+  [待下一步] <bash-input>sh -c 'echo out; echo err >&2; exit 7'</bash-input> <bash-stdout>out </bash-stdout> <bash-stderr>err </bash…
+┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行 · Ctrl+T 任务 ───────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                                                                    │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+人工命令：退出码 7
+
+===== 运行中的命令：状态为运行中 =====
+ nano  issue-11 · 已连接 · 空闲 · seq 4 · 队列 2
+bash !printf 'hello\n' · 退出码 0
+hello
+
+bash !sh -c 'echo out; echo err >&2; exit 7' · 退出码 7
+out
+
+[stderr]
+err
+
+bash !sleep 3 · 运行中
+
+ 队列 · 官方 inbox · 2 项（Alt+↑↓ 选择，Alt+E 编辑，Alt+D 删除，Alt+S 插话，Alt+X 清空并停止） ───────────────────────────────────────────────────────
+▶ [待下一步] <bash-input>printf 'hello\n'</bash-input> <bash-stdout>hello </bash-stdout> <bash-stderr></bash-stderr>
+  [待下一步] <bash-input>sh -c 'echo out; echo err >&2; exit 7'</bash-input> <bash-stdout>out </bash-stdout> <bash-stderr>err </bash…
+┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行 · Ctrl+T 任务 ───────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                                                                    │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+已以用户权限运行：!sleep 3
+
+===== 命令结束：退出码 0 =====
+ nano  issue-11 · 已连接 · 空闲 · seq 5 · 队列 3
+bash !printf 'hello\n' · 退出码 0
+hello
+
+bash !sh -c 'echo out; echo err >&2; exit 7' · 退出码 7
+out
+
+[stderr]
+err
+
+bash !sleep 3 · 退出码 0
+
+ 队列 · 官方 inbox · 3 项（Alt+↑↓ 选择，Alt+E 编辑，Alt+D 删除，Alt+S 插话，Alt+X 清空并停止） ───────────────────────────────────────────────────────
+▶ [待下一步] <bash-input>printf 'hello\n'</bash-input> <bash-stdout>hello </bash-stdout> <bash-stderr></bash-stderr>
+  [待下一步] <bash-input>sh -c 'echo out; echo err >&2; exit 7'</bash-input> <bash-stdout>out </bash-stdout> <bash-stderr>err </bash…
+  [待下一步] <bash-input>sleep 3</bash-input> <bash-stdout></bash-stdout> <bash-stderr></bash-stderr>
+┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行 · Ctrl+T 任务 ───────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                                                                    │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+人工命令：退出码 0
+
+===== 任务面板：官方 jobs 列表（此会话没有 Agent 后台任务） =====
+ nano  issue-11 · 已连接 · 空闲 · seq 5 · 队列 3 · 任务面板
+┌ 任务 · 官方 jobs · 0 个（0 运行中） · ↑↓ 选择，Enter 详情，k 停止，r 刷新，Esc 关闭 ───────────────────────────────────────────────────────────────┐
+│（没有可见任务。Agent 的前台命令在运行期间也会出现在这里。）                                                                                        │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+│                                                                                                                                                    │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ 队列 · 官方 inbox · 3 项（Alt+↑↓ 选择，Alt+E 编辑，Alt+D 删除，Alt+S 插话，Alt+X 清空并停止） ───────────────────────────────────────────────────────
+▶ [待下一步] <bash-input>printf 'hello\n'</bash-input> <bash-stdout>hello </bash-stdout> <bash-stderr></bash-stderr>
+  [待下一步] <bash-input>sh -c 'echo out; echo err >&2; exit 7'</bash-input> <bash-stdout>out </bash-stdout> <bash-stderr>err </bash…
+  [待下一步] <bash-input>sleep 3</bash-input> <bash-stdout></bash-stdout> <bash-stderr></bash-stderr>
+┌ 输入 · Enter 发送/排队 · Alt+Enter 插话 · Ctrl+J 换行 · Ctrl+T 任务 ───────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                                                                    │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+任务面板 · ↑↓ 选择 · Enter 详情 · k 停止 · r 刷新 · Esc 关闭
+
+===== 已发送 Ctrl+C，退出后的 pane =====
+nano: installing the dsh-tui-nano profile (first launch or --install)
+nano: profile ready at /var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s08-evidence.LKzmqz/dsh/profiles/dsh-tui-nano (installed: true)
+EXIT:0

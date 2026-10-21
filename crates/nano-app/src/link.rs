@@ -60,12 +60,25 @@ pub enum LinkEvent {
     Fatal(String),
 }
 
+/// One queued request. A per-request wait bound lets a manual shell command
+/// outlive the ordinary 30s request timeout without blocking other requests.
+struct Command {
+    id: u64,
+    method: String,
+    params: Value,
+    timeout: Option<Duration>,
+}
+
+/// Wait bound for `nano.shell.exec`: the executor deadline (60s) plus room for
+/// preparation and termination.
+pub const SHELL_REQUEST_TIMEOUT: Duration = Duration::from_secs(75);
+
 /// Shared handle to the host worker threads.
 pub struct HostLink {
     /// Incoming link events.
     pub events: Receiver<LinkEvent>,
     /// Outgoing request channel.
-    commands: Sender<(u64, String, Value)>,
+    commands: Sender<Command>,
     /// The owning host handle, used for the final ordered shutdown.
     host: Host,
     /// Stops the event loop thread.
@@ -83,7 +96,7 @@ impl HostLink {
         let host = Host::spawn(new_runtime_id(), 1, root_session_id, mode, options)
             .map_err(|error| format!("could not spawn the host: {error}"))?;
         let (event_tx, event_rx) = channel();
-        let (command_tx, command_rx) = channel::<(u64, String, Value)>();
+        let (command_tx, command_rx) = channel::<Command>();
         let stop = Arc::new(AtomicBool::new(false));
 
         let startup_host = host.clone();
@@ -113,6 +126,8 @@ impl HostLink {
                 "conversation.status".to_string(),
                 "conversation.inbox".to_string(),
                 "conversation.stream".to_string(),
+                "jobs.event".to_string(),
+                "jobs.output".to_string(),
             ];
             let _subscription = match startup_host.subscribe(address, Some(kinds), Some(from_seq)) {
                 Ok(subscription) => subscription,
@@ -148,16 +163,24 @@ impl HostLink {
         let command_host = host.clone();
         let command_events = event_tx;
         std::thread::spawn(move || {
-            while let Ok((id, method, params)) = command_rx.recv() {
-                let result = command_host
-                    .request(&method, params)
+            while let Ok(command) = command_rx.recv() {
+                let host = command_host.clone();
+                let events = command_events.clone();
+                // Requests run concurrently: a long manual shell command must
+                // not delay sends, stops, or job observation.
+                std::thread::spawn(move || {
+                    let result = match command.timeout {
+                        Some(timeout) => {
+                            host.request_with_timeout(&command.method, command.params, timeout)
+                        }
+                        None => host.request(&command.method, command.params),
+                    }
                     .map_err(classify_request_error);
-                if command_events
-                    .send(LinkEvent::RequestDone { id, result })
-                    .is_err()
-                {
-                    return;
-                }
+                    let _ = events.send(LinkEvent::RequestDone {
+                        id: command.id,
+                        result,
+                    });
+                });
             }
         });
 
@@ -172,9 +195,33 @@ impl HostLink {
 
     /// Send one request; returns the local id used in `RequestDone`.
     pub fn request(&self, method: &str, params: Value) -> Result<u64, String> {
+        self.enqueue(method, params, None)
+    }
+
+    /// Send one request with a caller-chosen wait bound.
+    pub fn request_with_timeout(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<u64, String> {
+        self.enqueue(method, params, Some(timeout))
+    }
+
+    fn enqueue(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Option<Duration>,
+    ) -> Result<u64, String> {
         let id = self.counter.fetch_add(1, Ordering::SeqCst);
         self.commands
-            .send((id, method.to_string(), params))
+            .send(Command {
+                id,
+                method: method.to_string(),
+                params,
+                timeout,
+            })
             .map_err(|_| "the host request worker is gone".to_string())?;
         Ok(id)
     }
