@@ -68,8 +68,9 @@ fn every_event_kind_is_covered_by_the_contract_shape() {
         .iter()
         .map(|entry| entry["kind"].as_str().unwrap())
         .collect();
-    // Exact set, not a subset: a future unknown kind must fail this contract
-    // test instead of silently widening what the conversation model accepts.
+    // Exact set/order, not a subset: a future unknown kind must fail this
+    // contract test instead of silently widening what the conversation model
+    // accepts.
     assert_eq!(
         kinds,
         vec![
@@ -77,10 +78,11 @@ fn every_event_kind_is_covered_by_the_contract_shape() {
             "conversation.status",
             "conversation.inbox",
             "conversation.stream",
-            "skills.changed",
-            "instructions.changed",
             "controls.model",
             "controls.permission",
+            "sessions.context",
+            "skills.changed",
+            "instructions.changed",
             "jobs.event",
             "jobs.output"
         ]
@@ -88,6 +90,7 @@ fn every_event_kind_is_covered_by_the_contract_shape() {
     for (owner, kind) in [
         ("S04", "controls.model"),
         ("S04", "controls.permission"),
+        ("S07", "sessions.context"),
         ("S05", "skills.changed"),
         ("S05", "instructions.changed"),
         ("S08", "jobs.event"),

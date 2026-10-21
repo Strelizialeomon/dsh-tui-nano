@@ -18,15 +18,16 @@ use serde_json::Value;
 
 /// Every event kind this window subscribes to, in one place so the initial
 /// subscription and a later rebuild cannot drift apart.
-pub const SUBSCRIPTION_KINDS: [&str; 8] = [
+pub const SUBSCRIPTION_KINDS: [&str; 9] = [
     "session.event",
     "conversation.status",
     "conversation.inbox",
     "conversation.stream",
-    "skills.changed",
-    "instructions.changed",
     "controls.model",
     "controls.permission",
+    "sessions.context",
+    "skills.changed",
+    "instructions.changed",
 ];
 
 /// How a request failed, for deciding whether a result is explicitly failed or
@@ -54,7 +55,6 @@ pub struct RequestError {
 }
 
 /// One message from the background link.
-#[derive(Debug)]
 pub enum LinkEvent {
     /// Handshake and subscription succeeded.
     Ready {
@@ -74,6 +74,31 @@ pub enum LinkEvent {
     },
     /// The link cannot continue.
     Fatal(String),
+    /// The host exited before the handshake with a structured startup error.
+    StartupFailed {
+        /// Contract startup code (`occupied`, `startup-failed`, ...).
+        code: String,
+        /// Sanitized message from the host.
+        message: String,
+        /// Holder pid for a ledger `occupied` rejection.
+        holder_pid: Option<u32>,
+        /// Repair path for a damaged ledger.
+        repair_path: Option<String>,
+    },
+    /// A controlled restart spawned a new host; its handshake is still pending.
+    Switched {
+        /// The new generation's link.
+        link: HostLink,
+    },
+    /// A controlled restart could not spawn the new host.
+    SwitchFailed {
+        /// Sanitized diagnostic.
+        message: String,
+        /// Startup code when the failure came from the new host.
+        code: Option<String>,
+        /// Holder pid for an `occupied` rejection.
+        holder_pid: Option<u32>,
+    },
 }
 
 /// One locally tracked request.
@@ -120,7 +145,7 @@ impl HostLink {
             let hello = match startup_host.handshake(None) {
                 Ok(hello) => hello,
                 Err(error) => {
-                    let _ = startup_events.send(LinkEvent::Fatal(describe_host_error(&error)));
+                    let _ = startup_events.send(startup_failure_event(&error));
                     return;
                 }
             };
@@ -231,6 +256,19 @@ impl HostLink {
         )
     }
 
+    /// Send one request on the long-action worker with an explicit budget.
+    /// Manual compaction waits here so ordinary requests stay responsive.
+    pub fn request_long(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<u64, String> {
+        // Timed requests run on their own thread in the command worker, so a
+        // compaction wait cannot block ordinary prompts or shell requests.
+        self.request_with_timeout(method, params, timeout)
+    }
+
     /// Run the one ordered shutdown after the terminal is restored.
     pub fn shutdown(&self) -> nano_runtime::ShutdownOutcome {
         self.stop.store(true, Ordering::SeqCst);
@@ -245,6 +283,25 @@ impl HostLink {
 
 fn describe_host_error(error: &HostError) -> String {
     format!("{error}")
+}
+
+/// Keep the structured startup facts the UI needs (holder pid, repair path)
+/// instead of flattening every pre-hello failure into a diagnostic string.
+fn startup_failure_event(error: &HostError) -> LinkEvent {
+    match error {
+        HostError::Startup {
+            code,
+            message,
+            holder_pid,
+            repair_path,
+        } => LinkEvent::StartupFailed {
+            code: code.clone(),
+            message: message.clone(),
+            holder_pid: *holder_pid,
+            repair_path: repair_path.clone(),
+        },
+        other => LinkEvent::Fatal(describe_host_error(other)),
+    }
 }
 
 /// Whether the composed host reports the official job registry as usable.

@@ -97,7 +97,7 @@
 - 模型图片能力按以下顺序取路由：启动时的 `config.provider/model`、会话最近一次 `request.header`、官方 `agentDefaultModel`；只有官方模型元数据显式不含 `image` 时才在发送前拒绝。
 - 协议新增方法/错误码/可选 `hello.attachmentLimits` 使 minor 升到 1；S01 的帧、生命周期和关停契约不变。
 - 最小 `dsh-base` 组合不含 `@file` provider；`bridge/cordis.patch.yml` 挂载官方 `@deepseek-ai/dsh-file-reference-local`，`maxResults: 20`。
-- 宿主未报告完整 `hello.attachmentLimits` 时，Rust 不猜测限额并明确拒绝图片入口；bridge 仍保留 64 MiB 的本地暂存硬上限，官方准入是最终判定。`fileAdmission` 对随附 `dsh-attachment-local` 声明 `verbatim`；换用不支持文件保存的 store 时，`finish` 会以 1036 明确失败。
+- 宿主未报告完整 `hello.attachmentLimits` 时，Rust 不猜测限额并明确拒绝图片入口；bridge 仍保留 64 MiB 的本地暂存硬上限，官方准入是最终判定。`fileAdmission` 对随附 `dsh-attachment-local` 声明 `verbatim`；换用不支持文件保存的 store 时，`finish` 会以 1041 明确失败。
 - 附件判定按扩展名 + 前 16 字节魔数：扩展名是图片但魔数不符、或魔数是图片但扩展名不是，都按图片路径校验；否则按通用文件。
 - 回执 id 上限 128 字符、显示名上限 255 字符；`nano.fileReferences.list` 结果最多 50 项。
 - 为取消补全请求，S01 增加 `Host::start_request` + `PendingRequest`（暴露协议请求 id）并在应用侧每请求一个等待线程；不改生命周期、关停步骤或帧格式。
@@ -125,4 +125,4 @@
 | 13 | 次要 | 目录引号、图片 staging、回执退休时序与规格字面冲突 | 已修 §2/§5/§9 措辞，以官方 grammar 与实际收尾为准 |
 | 14 | 次要 | 绝对路径只测格式化、官方 provider 不返回绝对 query 候选；总字节/durable 退休缺测试 | 已补格式化、总字节、`observeUserMessage`/`observeDiscarded` 测试；绝对 query 边界写入证据 |
 | 15 | 残余 | 模型实际收图/句柄、官方 `readImage`、子代理真实路由、真实超限拒绝未测 | 证据 §6 明确标注；S12/S13 承接 |
-| 16 | 残余 | `fileAdmission` 对随附 `attachment-local` 声明 `verbatim`，`unsupported` 分支不可达 | 记录为部署假设；换 store 时 `finish` 以 1036 明确失败 |
+| 16 | 残余 | `fileAdmission` 对随附 `attachment-local` 声明 `verbatim`，`unsupported` 分支不可达 | 记录为部署假设；换 store 时 `finish` 以 1041 明确失败 |

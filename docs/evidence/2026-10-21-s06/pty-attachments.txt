@@ -61,7 +61,7 @@
   "exit": 0
 }
 --- SCREEN completion ---
- nano 已连接 · 空闲 · seq 3 · 队列 0
+ nano 已连接 · 空闲 · seq 3 · 队列 0 · ctx 未知 · 参考
 输入消息后按 Enter 发送。
 
 
@@ -102,7 +102,7 @@
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 work · 权限 workspace-write · Enter 发送 · Alt+Enter 插话 · @ 引用文件 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除…
 --- SCREEN attachment ---
- nano 已连接 · 空闲 · seq 3 · 队列 0
+ nano 已连接 · 空闲 · seq 3 · 队列 0 · ctx 未知 · 参考
 输入消息后按 Enter 发送。
 
 
@@ -143,7 +143,7 @@ work · 权限 workspace-write · Enter 发送 · Alt+Enter 插话 · @ 引用�
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 work · 权限 workspace-write · 附件「pixel.png」已就绪
 --- SCREEN reordered ---
- nano 已连接 · 空闲 · seq 3 · 队列 0
+ nano 已连接 · 空闲 · seq 3 · 队列 0 · ctx 未知 · 参考
 输入消息后按 Enter 发送。
 
 
@@ -184,7 +184,7 @@ work · 权限 workspace-write · 附件「pixel.png」已就绪
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 work · 权限 workspace-write · 已调整附件顺序（只影响本次列表）
 --- SCREEN submitted ---
- nano 已连接 · 空闲 · seq 18 · 队列 0
+ nano 已连接 · 空闲 · seq 18 · 队列 0 · ctx 未知 · 参考
 # 全局规矩（跨 harness 唯一真相源）
 
 **Claude Code / Codex / kimi 读的是本文件，规矩正文一字不差：**
@@ -192,7 +192,7 @@ work · 权限 workspace-write · 已调整附件顺序（只影响本次列表�
 | harness | 怎么读到 |
 |---|---|
 | Claude Code | `~/.claude/CLAUDE.md` 用 `@` 把它导入 |
-| Codex | `~/.codex/AGENTS.md` 是指向本文件的符号链接，启动时自[9读取 |
+| Codex | `~/.codex/AGENTS.md` 是指向本文件的符号链接，启动时自动读取 |
 | kimi | 原生读 `~/.agents/AGENTS.md` |
 
 **要改规矩，只改这一份**——各工具下次加载全局指令时读取同一份正文；已有会话需重新启动以确保加载新内容。
@@ -200,10 +200,10 @@ work · 权限 workspace-write · 已调整附件顺序（只影响本次列表�
 上下文
 Current runtime context. This snapshot supersedes earlier runtime-context snapshots.
 
-Current working directory: "/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-pty-s06-lp4p6g96/work".
+Current working directory: "/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-pty-s06-pea7aj0b/work".
 
-Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files unde
-r the session workspace: "/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-pty-s06-lp4p6g96/work". Some pla
+Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files unda
+
 tform temporary areas may also be writable.
 
 Approval policy: ask. Operations that require approval may ask through the configured answerers; without an availa

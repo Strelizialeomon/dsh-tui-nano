@@ -16,6 +16,7 @@ import { claimMount, releaseMount } from './ledger.mjs'
 import { SubscriptionHub } from './events.mjs'
 import { ConversationService } from '../conversation/service.mjs'
 import { AttachmentService } from '../attachments/service.mjs'
+import { SessionsService } from '../sessions/service.mjs'
 import { ShellService } from '../shell/service.mjs'
 import { JobsService } from '../jobs/service.mjs'
 import { ControlsService } from '../controls/service.mjs'
@@ -44,6 +45,7 @@ export function startHost(ctx, config) {
     hub: undefined,
     conversation: undefined,
     attachments: undefined,
+    sessions: undefined,
     shell: undefined,
     jobs: undefined,
     controls: undefined,
@@ -132,6 +134,8 @@ async function runStartup(state, config) {
     throw new StartupError('startup-failed', 'the official agent or session service is not composed')
   }
 
+  await inspectRootSession(ctx, state.config.sessionMode, state.config.rootSessionId)
+
   const route = agentRoute(state.config)
   try {
     state.agentHandle =
@@ -150,7 +154,15 @@ async function runStartup(state, config) {
       throw new StartupError('startup-failed', 'startup was aborted')
     }
   } catch (error) {
-    throw new StartupError('startup-failed', `could not ${state.config.sessionMode} root session: ${describe(error)}`, {
+    if (error?.name === 'SessionAlreadyOwnedError') {
+      // The official persistence write lock is held by another process. There
+      // is no pid in that error; the Nano ledger covers same-machine windows
+      // before this point, so this is an external writer. Never downgrade to a
+      // new session.
+      throw new StartupError('occupied', `session/writer-held: ${describe(error)}`, { cause: error })
+    }
+    const detail = error?.name === undefined ? describe(error) : `${error.name}: ${describe(error)}`
+    throw new StartupError('startup-failed', `could not ${state.config.sessionMode} root session: ${detail}`, {
       cause: error,
     })
   }
@@ -221,6 +233,13 @@ async function runStartup(state, config) {
     session,
     rootSessionId: state.config.rootSessionId,
     attachments: state.attachments,
+  })
+  state.sessions = new SessionsService({
+    ctx,
+    hub: state.hub,
+    agent: state.agentHandle.agent,
+    session,
+    rootSessionId: state.config.rootSessionId,
   })
   state.controls = new ControlsService({
     ctx,
@@ -327,6 +346,40 @@ function agentRoute(config) {
   return route
 }
 
+/**
+ * Check root-session existence before create/resume. Resume must never invent
+ * a same-id empty session, and create must never write over an existing log.
+ * `stat` is the official header-only persistence read; it does not open the log
+ * body or activate a cold agent.
+ * @param {object} ctx - host context.
+ * @param {'create'|'resume'} mode - requested lifecycle.
+ * @param {string} rootSessionId - exact official identity.
+ * @returns {Promise<void>} resolves when the identity is usable for the mode.
+ */
+async function inspectRootSession(ctx, mode, rootSessionId) {
+  const persistence = ctx.get('sessionPersistence')
+  if (persistence === undefined) return
+  let stored
+  try {
+    stored = await persistence.stat(rootSessionId)
+  } catch (error) {
+    throw new StartupError(
+      'startup-failed',
+      `could not inspect root session ${rootSessionId}: ${describe(error)}`,
+      { cause: error },
+    )
+  }
+  if (mode === 'resume' && stored === undefined) {
+    throw new StartupError('startup-failed', `session/not-found: no stored session ${rootSessionId}`)
+  }
+  if (mode === 'create' && stored !== undefined) {
+    throw new StartupError(
+      'startup-failed',
+      `session identity ${rootSessionId} already exists; refusing to create over it`,
+    )
+  }
+}
+
 function prepareDataRoots(dataRoot, rootSessionId) {
   const directories = [
     dataRoot,
@@ -427,7 +480,12 @@ function handleLine(state, line) {
   }
   const entry = {
     method: frame.method,
-    cancellable: frame.method === 'nano.subscribe' || frame.method === 'nano.fileReferences.list',
+    // Manual compaction settles through the official command's cancellation
+    // text, so it is a cancellable wait like a subscription replay.
+    cancellable:
+      frame.method === 'nano.subscribe' ||
+      frame.method === 'nano.fileReferences.list' ||
+      frame.method === 'nano.sessions.compact',
     controller: new AbortController(),
   }
   state.inFlight.set(frame.id, entry)
@@ -528,6 +586,27 @@ async function dispatchRequest(state, frame) {
     }
     case 'nano.conversation.snapshot': {
       await sendResult(state, id, state.conversation.snapshot(params))
+      return undefined
+    }
+    case 'nano.sessions.list': {
+      await sendResult(state, id, await state.sessions.list())
+      return undefined
+    }
+    case 'nano.sessions.rename': {
+      await sendResult(state, id, state.sessions.rename(params))
+      return undefined
+    }
+    case 'nano.sessions.context': {
+      await sendResult(state, id, state.sessions.context())
+      return undefined
+    }
+    case 'nano.sessions.compact': {
+      const signal = state.inFlight.get(id)?.controller.signal
+      await sendResult(state, id, await state.sessions.compact(params, signal))
+      return undefined
+    }
+    case 'nano.sessions.compactCancel': {
+      await sendResult(state, id, state.sessions.cancelCompact())
       return undefined
     }
     case 'nano.shell.exec': {
@@ -662,6 +741,8 @@ async function runShutdown(state, reason) {
     state.conversation = undefined
     state.attachments?.close()
     state.attachments = undefined
+    state.sessions?.close()
+    state.sessions = undefined
     state.skills?.close()
     state.skills = undefined
     state.shell?.close()
@@ -799,6 +880,14 @@ async function failStartup(state, error) {
       state.attachments = undefined
     } catch (cleanupError) {
       cleanupFailures.push(`attachments: ${describe(cleanupError)}`)
+    }
+  }
+  if (state.sessions !== undefined) {
+    try {
+      state.sessions.close()
+      state.sessions = undefined
+    } catch (cleanupError) {
+      cleanupFailures.push(`sessions: ${describe(cleanupError)}`)
     }
   }
   if (state.skills !== undefined) {

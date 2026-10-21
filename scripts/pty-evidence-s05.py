@@ -232,9 +232,14 @@ def main():
     snapshots["unknown"] = now
     checks.append(("unknown name passes as prose", "未注入" in now))
 
-    # `/compact` is an official command owned by S04; its routing is covered
-    # by scripts/pty-controls-evidence.py. S05 keeps the unknown-name prose
-    # check above and leaves command execution to the S04 evidence.
+    send("/compact\r")
+    pump(1.0)
+    now = snapshot()
+    snapshots["command"] = now
+    # After S04, an official command with the same name executes instead of
+    # being reported as a command-wins skill collision; the draft is consumed.
+    checks.append(("command wins over skill routing", "命令 compact" in now or "Compacted" in now))
+    checks.append(("official command took the draft", "/compact" not in now.split("输入")[-1]))
 
     send("\x03")
     pump(2)

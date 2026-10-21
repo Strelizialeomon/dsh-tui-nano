@@ -81,7 +81,7 @@ pub const LIFECYCLE_TRANSITIONS: [(&str, &str); 15] = [
 ];
 
 /// Error code names shared with the bridge contract.
-pub const ERROR_CODE_NAMES: [(&str, i64); 42] = [
+pub const ERROR_CODE_NAMES: [(&str, i64); 47] = [
     ("jsonrpc/parse-error", -32700),
     ("jsonrpc/invalid-request", -32600),
     ("jsonrpc/method-not-found", -32601),
@@ -115,19 +115,24 @@ pub const ERROR_CODE_NAMES: [(&str, i64); 42] = [
     ("nano/controls/unavailable", 1026),
     ("nano/shell/exec-failed", 1027),
     ("nano/jobs/not-found", 1028),
-    ("nano/attachments/receipt-unknown", 1029),
-    ("nano/attachments/receipt-committed", 1030),
-    ("nano/attachments/receipt-incomplete", 1031),
-    ("nano/attachments/chunk-sequence", 1032),
-    ("nano/attachments/image-invalid", 1033),
-    ("nano/attachments/model-no-images", 1034),
-    ("nano/attachments/limit", 1035),
-    ("nano/attachments/file-failed", 1036),
-    ("nano/file-references/failed", 1037),
+    ("nano/sessions/unavailable", 1029),
+    ("nano/sessions/not-active", 1030),
+    ("nano/sessions/title-invalid", 1031),
+    ("nano/sessions/compact-unavailable", 1032),
+    ("nano/sessions/rejected", 1033),
+    ("nano/attachments/receipt-unknown", 1034),
+    ("nano/attachments/receipt-committed", 1035),
+    ("nano/attachments/receipt-incomplete", 1036),
+    ("nano/attachments/chunk-sequence", 1037),
+    ("nano/attachments/image-invalid", 1038),
+    ("nano/attachments/model-no-images", 1039),
+    ("nano/attachments/limit", 1040),
+    ("nano/attachments/file-failed", 1041),
+    ("nano/file-references/failed", 1042),
 ];
 
 /// Method names implemented by this generation.
-pub const IMPLEMENTED_METHODS: [&str; 31] = [
+pub const IMPLEMENTED_METHODS: [&str; 36] = [
     "nano.hello",
     "nano.startupError",
     "nano.shutdown",
@@ -147,6 +152,11 @@ pub const IMPLEMENTED_METHODS: [&str; 31] = [
     "nano.conversation.steerQueued",
     "nano.conversation.cancel",
     "nano.conversation.snapshot",
+    "nano.sessions.list",
+    "nano.sessions.rename",
+    "nano.sessions.context",
+    "nano.sessions.compact",
+    "nano.sessions.compactCancel",
     "nano.skills.list",
     "nano.skills.preview",
     "nano.instructions.snapshot",
@@ -162,15 +172,16 @@ pub const IMPLEMENTED_METHODS: [&str; 31] = [
 ];
 
 /// Event kinds this client accepts.
-pub const EVENT_KINDS: [&str; 10] = [
+pub const EVENT_KINDS: [&str; 11] = [
     "session.event",
     "conversation.status",
     "conversation.inbox",
     "conversation.stream",
-    "skills.changed",
-    "instructions.changed",
     "controls.model",
     "controls.permission",
+    "sessions.context",
+    "skills.changed",
+    "instructions.changed",
     "jobs.event",
     "jobs.output",
 ];
@@ -189,4 +200,9 @@ pub const SHUTDOWN_STEP_NAMES: [&str; 6] = [
 pub const MAX_REPLAY_EVENTS: u64 = 10_000;
 
 /// Startup error codes accepted from the host.
-pub const STARTUP_ERROR_CODES: [&str; 4] = ["occupied", "startup-failed", "cleanup-failed", "unsupported"];
+pub const STARTUP_ERROR_CODES: [&str; 4] = [
+    "occupied",
+    "startup-failed",
+    "cleanup-failed",
+    "unsupported",
+];

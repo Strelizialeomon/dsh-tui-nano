@@ -9,6 +9,7 @@
     "./runtime": "./runtime/index.mjs",
     "./conversation": "./conversation/service.mjs",
     "./attachments": "./attachments/service.mjs",
+    "./sessions": "./sessions/service.mjs",
     "./shell": "./shell/service.mjs",
     "./jobs": "./jobs/service.mjs",
     "./profile/install": "./profile/install.mjs",
@@ -24,6 +25,7 @@
     "jobs/**/*.mjs",
     "controls/**/*.mjs",
     "skills/**/*.mjs",
+    "sessions/**/*.mjs",
     "profile/**/*.mjs",
     "cordis.patch.yml",
     "README.md"

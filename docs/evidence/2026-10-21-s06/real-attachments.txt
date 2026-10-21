@@ -1,4 +1,4 @@
-✔ attachment staging, ordered admission, discovery, and resume (2144.606584ms)
+✔ attachment staging, ordered admission, discovery, and resume (2127.70875ms)
 ℹ tests 1
 ℹ suites 0
 ℹ pass 1
@@ -6,4 +6,4 @@
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 2176.366917
+ℹ duration_ms 2158.651875

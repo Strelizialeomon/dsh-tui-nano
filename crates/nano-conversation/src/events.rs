@@ -91,11 +91,36 @@ pub struct SessionEvent {
     pub address: WireAddress,
     /// Durable sequence number.
     pub seq: u64,
+    /// Official durable event time, when forwarded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time: Option<u64>,
     /// Official event type, such as `user/message`.
     #[serde(rename = "type")]
     pub event_type: String,
     /// Official event data, verbatim.
     pub data: Value,
+    /// Opaque official surface operation. Only the documented `replace`
+    /// shape is interpreted; unknown operations are ignored, never guessed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface_op: Option<Value>,
+    /// Earlier durable sources cited by a surface event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_event_seqs: Option<Value>,
+}
+
+impl SessionEvent {
+    /// The replaced surface span for a `replace` surface operation.
+    /// A compaction summary is appended as a `user/message` with this marker;
+    /// the display projection must drop the shadowed range before adding it.
+    pub fn replacement_range(&self) -> Option<(u64, u64)> {
+        let op = self.surface_op.as_ref()?;
+        if op.get("op").and_then(Value::as_str) != Some("replace") {
+            return None;
+        }
+        let start = op.get("startSeq").and_then(Value::as_u64)?;
+        let end = op.get("endSeq").and_then(Value::as_u64)?;
+        Some((start, end))
+    }
 }
 
 /// One live assistant-stream frame.
@@ -286,6 +311,31 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(inbox, ConversationEvent::Inbox { .. }));
+    }
+
+    #[test]
+    fn surface_replacements_are_recognized_from_the_envelope() {
+        let event = parse_session_event(&json!({
+            "address": {"rootSessionId": "root"},
+            "seq": 6,
+            "time": 1234,
+            "type": "user/message",
+            "data": {"id": "summary", "content": []},
+            "surfaceOp": {"op": "replace", "startSeq": 3, "endSeq": 4},
+            "sourceEventSeqs": [3, 4]
+        }))
+        .unwrap();
+        assert_eq!(event.time, Some(1234));
+        assert_eq!(event.replacement_range(), Some((3, 4)));
+        let append = parse_session_event(&json!({
+            "address": {"rootSessionId": "root"},
+            "seq": 7,
+            "type": "user/message",
+            "data": {},
+            "surfaceOp": {"op": "append"}
+        }))
+        .unwrap();
+        assert_eq!(append.replacement_range(), None);
     }
 
     #[test]
