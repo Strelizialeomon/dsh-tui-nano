@@ -2126,12 +2126,21 @@ mod tests {
     }
 
     #[test]
-    fn preview_gap_and_truncation_use_plain_lines_and_wrap_at_sixty_columns() {
+    fn preview_gap_and_truncation_use_separate_wrapped_muted_lines() {
         let rendered = render_one(preview_entry(true, true), false, 60);
         let rows = plain(&rendered);
-        assert!(rows.iter().any(|row| row.contains("实时预览有缺失")));
-        assert!(rows.iter().any(|row| row.contains("实时预览过长已截断")));
-        assert!(rows.iter().all(|row| row.chars().count() <= 60));
+        let gap = rows
+            .iter()
+            .position(|row| row.contains("实时预览有缺失"))
+            .expect("gap note");
+        let truncated = rows
+            .iter()
+            .position(|row| row.contains("实时预览过长已截断"))
+            .expect("truncated note");
+        assert_ne!(gap, truncated, "each note owns its row");
+        assert!(rows
+            .iter()
+            .all(|row| row.chars().map(char_width).sum::<usize>() <= 60));
         let muted = rendered
             .lines
             .iter()
@@ -2146,5 +2155,18 @@ mod tests {
                     .all(|span| span.style.fg == Some(Color::DarkGray))
             });
         assert!(muted, "preview notes are muted");
+
+        let durable = Entry {
+            identity: "assistant-1".into(),
+            fingerprint: 1,
+            kind: EntryKind::Assistant {
+                text: "done".into(),
+                reasoning: String::new(),
+                reasoning_ms: None,
+                interrupted: false,
+            },
+        };
+        let rendered = render_one(durable, false, 80);
+        assert!(!plain(&rendered).iter().any(|row| row.contains("实时预览")));
     }
 }

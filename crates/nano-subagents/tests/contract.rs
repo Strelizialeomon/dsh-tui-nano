@@ -39,11 +39,11 @@ fn snapshot_dock_keeps_official_order_and_limits_to_four() {
     let (dock, overflow) = state.dock();
     assert_eq!(
         dock.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
-        ["a", "b", "c", "d"]
+        ["a", "b", "c", "e"]
     );
-    assert_eq!(overflow, 1);
+    assert_eq!(overflow, 0);
     assert_eq!(dock.len(), DOCK_LIMIT);
-    // External rows are not local and never count toward the pill.
+    // External rows stay out of the dock and never count as local.
     assert_eq!(state.local_count(), 4);
 }
 
@@ -236,15 +236,16 @@ fn every_official_end_hides_the_dock_entry_after_the_delay() {
             "parentLive": true
         }))
         .unwrap();
+    let now = Instant::now();
     state
         .apply_event(&json!({"type": "end", "childId": "live", "stopReason": "completed"}))
         .unwrap();
     state
         .apply_event(&json!({"type": "end", "childId": "done", "stopReason": "completed"}))
         .unwrap();
-    assert!(!state.cleanup(Instant::now() + CLEANUP_DELAY - Duration::from_millis(1)));
+    assert!(!state.cleanup(now + CLEANUP_DELAY / 2));
     assert_eq!(state.dock().0.len(), 2);
-    assert!(state.cleanup(Instant::now() + CLEANUP_DELAY + Duration::from_millis(1)));
+    assert!(state.cleanup(now + CLEANUP_DELAY + Duration::from_secs(1)));
     assert!(state.dock().0.is_empty());
     // Both records remain in the catalog/all-agents list.
     assert!(state.list_rows().iter().any(|row| row.id == "live"));

@@ -236,29 +236,29 @@ impl Catalog {
         }
     }
 
-    /// The local-agent count for the `N local agents` pill. External entries
-    /// are not local and never count.
+    /// The local direct-child count. External entries are not local and never
+    /// count.
     pub fn local_count(&self) -> usize {
         self.direct.iter().filter(|row| row.mode.is_local()).count()
     }
 
-    /// The dock rows: at most `limit` direct children in official order,
-    /// excluding externally hidden entries.
+    /// The dock rows: at most `limit` local direct children in official order,
+    /// excluding external executions and hidden entries.
     pub fn dock_rows(&self, limit: usize, hidden: &BTreeSet<String>) -> Vec<AgentRow> {
         self.direct
             .iter()
-            .filter(|row| !hidden.contains(&row.id))
+            .filter(|row| row.mode.is_local() && !hidden.contains(&row.id))
             .take(limit)
             .cloned()
             .collect()
     }
 
-    /// Number of direct children beyond the dock limit (plus hidden entries
-    /// still readable from the full list).
+    /// Number of local direct children beyond the dock limit (plus hidden
+    /// entries still readable from the full list).
     pub fn dock_overflow(&self, limit: usize, hidden: &BTreeSet<String>) -> usize {
         self.direct
             .iter()
-            .filter(|row| !hidden.contains(&row.id))
+            .filter(|row| row.mode.is_local() && !hidden.contains(&row.id))
             .count()
             .saturating_sub(limit)
     }

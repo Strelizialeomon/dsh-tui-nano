@@ -216,7 +216,8 @@ impl SubagentState {
         )
     }
 
-    /// `N local agents` pill count. External executions never count.
+    /// Visible local direct-child count for the all-agents list title.
+    /// External executions and cleaned-up hidden rows never count.
     pub fn local_count(&self) -> usize {
         let hidden = self.lifecycle.hidden();
         self.catalog

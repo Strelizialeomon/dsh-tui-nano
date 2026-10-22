@@ -3596,14 +3596,18 @@ mod tests {
     #[test]
     fn the_dock_sits_below_the_status_bar_without_a_title_and_counts_in_the_list() {
         let mut app = app();
+        let mut one_shot = subagent_row("c", "one-shot");
+        one_shot["settledMs"] = serde_json::json!(2400);
+        one_shot["activeThrough"] = serde_json::json!(5000);
         install_subagents(
             &mut app,
             serde_json::json!([
                 subagent_row("a", "continuable"),
                 subagent_row("b", "continuable"),
-                subagent_row("c", "continuable"),
+                one_shot,
                 subagent_row("d", "continuable"),
                 subagent_row("e", "continuable"),
+                subagent_row("f", "external"),
             ]),
         );
         let rows = screen(&mut app, 100, 30);
@@ -3617,7 +3621,13 @@ mod tests {
         assert!(rows_compact.last().unwrap().contains("还有1个子代理"));
         let dock_text = rows_compact[dock..].join("");
         assert!(!dock_text.contains("localagents"), "dock has no title");
-        assert!(!dock_text.contains("用时"), "dock has no duration");
+        assert!(!dock_text.contains("用时"), "dock has no duration label");
+        assert!(!dock_text.contains("2.4s"), "dock has no duration value");
+        assert!(!dock_text.contains("一次性"), "dock has no mode suffix");
+        assert!(
+            !dock_text.contains("taskf"),
+            "external rows stay out of the dock"
+        );
         assert!(dock_text.contains("taska"));
         assert!(dock_text.contains("未运行"));
 
@@ -3625,7 +3635,7 @@ mod tests {
         let list = compact(&screen(&mut app, 100, 30));
         assert!(
             list.iter().any(|row| row.contains("全部子代理·5·↑↓选择")),
-            "list title keeps its hints and adds the count"
+            "list title keeps its hints and adds the local-only count"
         );
     }
 
@@ -3741,21 +3751,18 @@ mod tests {
     #[test]
     fn dock_status_words_follow_the_official_lamp() {
         let mut app = app();
+        let mut running = subagent_row("run", "continuable");
+        running["activity"] = serde_json::json!("running");
         install_subagents(
             &mut app,
             serde_json::json!([
+                running,
                 subagent_row("ok", "continuable"),
                 subagent_row("bad", "one-shot"),
                 subagent_row("stop", "continuable"),
-                subagent_row("mystery", "continuable"),
             ]),
         );
-        for (id, reason) in [
-            ("ok", "completed"),
-            ("bad", "error"),
-            ("stop", "aborted"),
-            ("mystery", "future-reason"),
-        ] {
+        for (id, reason) in [("ok", "completed"), ("bad", "error"), ("stop", "aborted")] {
             app.subagents
                 .apply_event(&serde_json::json!({
                     "type": "end",
@@ -3766,10 +3773,10 @@ mod tests {
         }
         let rows = compact(&screen(&mut app, 100, 30));
         let dock = rows[app.subagent_dock_area.y as usize..].join("");
+        assert!(dock.contains("执行中"), "{dock:?}");
         assert!(dock.contains("完成"), "{dock:?}");
         assert!(dock.contains("错误"), "{dock:?}");
         assert!(dock.contains("终止"), "{dock:?}");
-        assert!(dock.contains("未运行"), "{dock:?}");
 
         app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         let rows = compact(&screen(&mut app, 100, 30));
@@ -3778,11 +3785,58 @@ mod tests {
     }
 
     #[test]
+    fn unknown_terminal_reason_uses_the_inactive_status_word() {
+        let mut app = app();
+        install_subagents(
+            &mut app,
+            serde_json::json!([subagent_row("mystery", "continuable")]),
+        );
+        app.subagents
+            .apply_event(&serde_json::json!({
+                "type": "end",
+                "childId": "mystery",
+                "stopReason": "future-reason"
+            }))
+            .expect("valid lifecycle event");
+        let rows = compact(&screen(&mut app, 100, 30));
+        let dock = rows[app.subagent_dock_area.y as usize..].join("");
+        assert!(dock.contains("未运行"), "{dock:?}");
+    }
+
+    #[test]
     fn dock_hover_uses_theme_tokens() {
         assert_eq!(hover_background(DiffTheme::Dark), Color::Rgb(36, 43, 53));
         assert_eq!(
             hover_background(DiffTheme::Light),
             Color::Rgb(232, 232, 229)
+        );
+    }
+
+    fn screen_bg(app: &mut App, width: u16, height: u16, x: u16, y: u16) -> Color {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw(frame, app))
+            .expect("draw the frame");
+        terminal.backend().buffer()[(x, y)].bg
+    }
+
+    #[test]
+    fn a_focused_dock_row_uses_a_hover_background() {
+        let mut app = app();
+        install_subagents(
+            &mut app,
+            serde_json::json!([subagent_row("child", "continuable")]),
+        );
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        let _ = screen(&mut app, 100, 30);
+        let y = app.subagent_dock_area.y + 1;
+        let bg = screen_bg(&mut app, 100, 30, 5, y);
+        assert!(
+            bg == Color::Rgb(36, 43, 53) || bg == Color::Rgb(232, 232, 229),
+            "focused dock row uses the hover token, got {bg:?}"
         );
     }
 }

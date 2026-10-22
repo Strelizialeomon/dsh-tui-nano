@@ -32,8 +32,7 @@
 ## Ghostty 截图
 
 - 命令：`python3 scripts/ghostty-evidence-followup.py`
-- 原始运行记录：`ghostty-run.txt`、`ghostty-evidence.json`
-- 保留的有效截图：
+- 脚本使用 `child_delay = 1.0`，生成与下表一致的四个文件；子代理完成态在 8 秒时稳定可见。
 
 | 文件 | 覆盖 |
 | --- | --- |
@@ -43,11 +42,13 @@
 | `07-dock-focus-100-light.png` | `NANO_THEME=light`，dock 焦点行 hover `#e8e8e5` |
 
 - 截图只捕获本次运行拥有的 Ghostty 窗口；剪贴板已恢复。
+- 截图取自 18:37 的 run；之后按轻审修订了历史扫描、粘贴/队列编辑与 dock 边框色。dock 行文案、状态词与 30 秒清理行为与最终代码一致；边框色以最终代码（DarkGray）为准。
 
 ## 未覆盖 / 注意
 
-- **标题下留白**：由 `cargo-test.txt` 的 `the_header_is_followed_by_one_blank_row` 与 `history-pty.txt` 的真实屏幕覆盖。Ghostty 空态截图的顶部被 shell 集成提示行占用，标题行未进入画面，因此未保留该图。
+- **标题下留白**：由 `cargo-test.txt` 的 `the_header_is_followed_by_one_blank_row` 与 `history-pty.txt` 的真实屏幕覆盖。Ghostty 空态截图的顶部被 shell 集成提示行占用，标题行未进入画面，因此未保留该图；也未单独截块间距。
 - **100 列运行中 dock**：由 `dock-running-pty.txt` 的真实 PTY 屏幕覆盖；Ghostty 100 列只保留了完成态与清理后。
 - **60 列运行中/完成态拆分**：只保留一张 dock 截图（`05`），未分别截运行与完成。
 - **历史跨进程回看**：由单测与真实 PTY 文件检查覆盖；未做第二次启动后的 Ghostty 截图。
+- **子代理输入历史**：由 `child_history_uses_only_user_messages_from_the_child_projection` 单测覆盖；未做真实 PTY 子代理输入回看。
 - 浅色证据只覆盖 dock 焦点行；第二批的 diff 浅色证据在 `docs/evidence/2026-10-22-visual/batch2/`。

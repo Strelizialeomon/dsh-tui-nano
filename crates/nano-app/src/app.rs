@@ -2175,6 +2175,8 @@ impl App {
         let old = self.drafts.current().text().to_string();
         let outcome = self.drafts.current_mut().handle(&InputEvent::Paste(text));
         if outcome != InputOutcome::Ignored {
+            // A paste is an edit; it ends history browsing but keeps the text.
+            self.history_browse = None;
             let new = self.drafts.current().text().to_string();
             self.shift_attachment_anchors(&old, &new);
             self.refresh_completion();
@@ -5297,8 +5299,9 @@ impl App {
             return;
         }
         // Every non-empty root submission is remembered, including slash and
-        // `!` commands; a failed send still counts, matching Claude Code.
-        if !text.trim().is_empty() {
+        // `!` commands; a failed send still counts, matching Claude Code. A
+        // queue edit is not a new submission and is never recorded.
+        if !text.trim().is_empty() && self.edit_target.is_none() {
             self.record_history_entry(&text);
         }
         // Commands, skills, and `!` are routed only for text-only input; an
@@ -6053,6 +6056,7 @@ impl App {
     }
 
     fn begin_queue_edit(&mut self) {
+        self.history_browse = None;
         if self.edit_target.is_some() {
             self.notice = Some("已经在编辑队列项；Enter 应用，Esc 取消".to_string());
             return;
@@ -6339,9 +6343,10 @@ impl App {
     }
 
     /// Canonical project identity for history entries. The host cwd is
-    /// canonical; the CLI cwd is the pre-handshake fallback.
+    /// canonical; pre-handshake fallbacks are canonicalized when possible.
     fn history_project(&self) -> String {
-        self.hello
+        let raw = self
+            .hello
             .as_ref()
             .map(|hello| hello.cwd.clone())
             .or_else(|| {
@@ -6355,7 +6360,10 @@ impl App {
                     .ok()
                     .map(|path| path.to_string_lossy().into_owned())
             })
-            .unwrap_or_default()
+            .unwrap_or_default();
+        std::fs::canonicalize(&raw)
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or(raw)
     }
 
     /// Current root session identity, used to put this session's prompts first.
@@ -6379,9 +6387,10 @@ impl App {
             "project": self.history_project(),
             "sessionId": self.history_session_id(),
         });
-        let Ok(line) = serde_json::to_string(&value) else {
+        let Ok(mut line) = serde_json::to_string(&value) else {
             return;
         };
+        line.push('\n');
         let Ok(mut file) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -6391,20 +6400,20 @@ impl App {
             return;
         };
         let _ = file.write_all(line.as_bytes());
-        let _ = file.write_all(b"\n");
     }
 
-    /// Read enough of the file's tail to cover the newest matching prompts.
-    /// The newest 100 project entries are always within the last 256 lines;
-    /// reading backwards keeps a long history file from being loaded whole.
-    fn history_tail(path: &std::path::Path) -> String {
+    /// Newest-first window of this project's prompts. Reads backwards in
+    /// chunks and counts matching project records (not raw lines) until 100
+    /// are found or the byte cap is reached.
+    fn history_window(path: &std::path::Path, project: &str, session: &str) -> Vec<(bool, String)> {
         const CHUNK: u64 = 64 * 1024;
-        const LINE_BUDGET: usize = 256;
+        const BYTE_CAP: usize = 8 * 1024 * 1024;
+        const LIMIT: usize = 100;
         let Ok(mut file) = File::open(path) else {
-            return String::new();
+            return Vec::new();
         };
         let Ok(length) = file.metadata().map(|metadata| metadata.len()) else {
-            return String::new();
+            return Vec::new();
         };
         let mut tail: Vec<u8> = Vec::new();
         let mut position = length;
@@ -6415,16 +6424,35 @@ impl App {
             if file.seek(SeekFrom::Start(position)).is_err()
                 || file.read_exact(&mut buffer).is_err()
             {
-                return String::new();
+                return Vec::new();
             }
             buffer.extend_from_slice(&tail);
             tail = buffer;
-            let newlines = tail.iter().filter(|byte| **byte == b'\n').count();
-            if position == 0 || newlines >= LINE_BUDGET {
-                break;
+            let text = String::from_utf8_lossy(&tail);
+            let mut window = Vec::new();
+            for line in text.lines().rev() {
+                let Ok(value) = serde_json::from_str::<Value>(line) else {
+                    continue;
+                };
+                if value.get("project").and_then(Value::as_str) != Some(project) {
+                    continue;
+                }
+                let Some(display) = value.get("display").and_then(Value::as_str) else {
+                    continue;
+                };
+                if display.trim().is_empty() {
+                    continue;
+                }
+                let current = value.get("sessionId").and_then(Value::as_str) == Some(session);
+                window.push((current, display.to_string()));
+                if window.len() >= LIMIT {
+                    break;
+                }
+            }
+            if window.len() >= LIMIT || position == 0 || tail.len() >= BYTE_CAP {
+                return window;
             }
         }
-        String::from_utf8_lossy(&tail).into_owned()
     }
 
     /// Root history: the project's submitted prompts from the file, newest
@@ -6434,32 +6462,8 @@ impl App {
         let Some(path) = self.history_path.as_ref() else {
             return Vec::new();
         };
-        let text = Self::history_tail(path);
-        if text.is_empty() {
-            return Vec::new();
-        }
-        let project = self.history_project();
-        let session = self.history_session_id();
-        let mut window: Vec<(bool, String)> = Vec::new();
-        for line in text.lines().rev() {
-            let Ok(value) = serde_json::from_str::<Value>(line) else {
-                continue;
-            };
-            if value.get("project").and_then(Value::as_str) != Some(project.as_str()) {
-                continue;
-            }
-            let Some(display) = value.get("display").and_then(Value::as_str) else {
-                continue;
-            };
-            if display.trim().is_empty() {
-                continue;
-            }
-            let current = value.get("sessionId").and_then(Value::as_str) == Some(session.as_str());
-            window.push((current, display.to_string()));
-            if window.len() >= 100 {
-                break;
-            }
-        }
+        let window =
+            Self::history_window(path, &self.history_project(), &self.history_session_id());
         let mut ordered: Vec<String> = window
             .iter()
             .filter(|(current, _)| *current)
@@ -10222,6 +10226,7 @@ mod tests {
 mod terminal_tests {
     use super::*;
     use crossterm::event::KeyEvent;
+    use nano_attachments::CandidateKind;
     use serde_json::json;
 
     fn app() -> App {
@@ -10704,6 +10709,29 @@ mod terminal_tests {
     }
 
     #[test]
+    fn root_history_scans_past_other_projects() {
+        let path = temp_history_path("projects");
+        let project = "/tmp/nano-history-project-a";
+        let other = "/tmp/nano-history-project-b";
+        for index in 0..5 {
+            append_history(&path, project, "root", &format!("mine{index}"));
+        }
+        // These newer records belong to another project; they must not hide
+        // this project's older history behind a raw line window.
+        for index in 0..300 {
+            append_history(&path, other, "root", &format!("other{index}"));
+        }
+        let mut app = app();
+        app.history_path = Some(path.clone());
+        app.cli.cwd = Some(PathBuf::from(project));
+        assert_eq!(
+            app.root_input_history(),
+            vec!["mine0", "mine1", "mine2", "mine3", "mine4"]
+        );
+        remove_history(&path);
+    }
+
+    #[test]
     fn a_submitted_prompt_is_appended_with_private_permissions() {
         use std::os::unix::fs::PermissionsExt;
         let path = temp_history_path("write");
@@ -10763,6 +10791,164 @@ mod terminal_tests {
     }
 
     #[test]
+    fn blank_down_without_history_focuses_the_dock() {
+        let mut app = app();
+        install_subagents(&mut app, json!([subagent_row("child", "continuable")]));
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert!(app.subagents.nav().dock_focus);
+    }
+
+    #[test]
+    fn a_non_blank_up_never_focuses_the_dock() {
+        let mut app = app();
+        install_subagents(&mut app, json!([subagent_row("child", "continuable")]));
+        app.drafts.current_mut().set_text("draft");
+        app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert!(!app.subagents.nav().dock_focus);
+        assert_eq!(app.drafts.current().text(), "draft");
+    }
+
+    #[test]
+    fn queue_edit_keys_do_not_enter_history_or_the_dock() {
+        let mut app = app();
+        install_subagents(&mut app, json!([subagent_row("child", "continuable")]));
+        app.edit_target = Some("m-1".to_string());
+        app.drafts.current_mut().set_text("edited");
+        app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert!(!app.subagents.nav().dock_focus);
+        assert_eq!(app.drafts.current().text(), "edited");
+    }
+
+    #[test]
+    fn pasting_ends_history_browsing_and_keeps_the_text() {
+        let path = temp_history_path("paste");
+        let project = "/tmp/nano-history-paste";
+        append_history(&path, project, "root", "second");
+        let mut app = app();
+        app.history_path = Some(path.clone());
+        app.cli.cwd = Some(PathBuf::from(project));
+        app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(app.drafts.current().text(), "second");
+        app.handle_paste("XYZ".to_string());
+        assert!(app.history_browse.is_none());
+        assert!(app.drafts.current().text().contains("XYZ"));
+        remove_history(&path);
+    }
+
+    #[test]
+    fn a_multi_line_history_entry_moves_the_cursor_before_going_newer() {
+        let path = temp_history_path("multiline");
+        let project = "/tmp/nano-history-multiline";
+        append_history(&path, project, "root", "first line\nsecond line");
+        let mut app = app();
+        app.history_path = Some(path.clone());
+        app.cli.cwd = Some(PathBuf::from(project));
+        app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(app.drafts.current().text(), "first line\nsecond line");
+        assert_eq!(app.drafts.current().cursor(), 0);
+        // Down on the first line moves the cursor instead of leaving history.
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert!(app.history_browse.is_some());
+        assert_ne!(app.drafts.current().cursor(), 0);
+        // Down on the last line returns to the saved draft.
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert!(app.history_browse.is_none());
+        assert_eq!(app.drafts.current().text(), "");
+        remove_history(&path);
+    }
+
+    #[test]
+    fn a_root_submission_writes_history_before_the_host_call() {
+        let path = temp_history_path("submit");
+        let project = "/tmp/nano-history-submit";
+        let mut app = app();
+        app.history_path = Some(path.clone());
+        app.cli.cwd = Some(PathBuf::from(project));
+        app.ready = true;
+        app.drafts.current_mut().set_text("submit me");
+        app.submit_draft(Delivery::Queue);
+        let text = std::fs::read_to_string(&path).expect("history written");
+        let value: Value = serde_json::from_str(text.trim()).expect("valid line");
+        assert_eq!(value["display"], "submit me");
+        remove_history(&path);
+    }
+
+    #[test]
+    fn queue_edits_never_record_submitted_text() {
+        let path = temp_history_path("queue");
+        let mut app = app();
+        app.history_path = Some(path.clone());
+        app.cli.cwd = Some(PathBuf::from("/tmp/nano-history-queue"));
+        app.ready = true;
+        app.edit_target = Some("m-1".to_string());
+        app.drafts.current_mut().set_text("edited");
+        app.submit_draft(Delivery::Queue);
+        assert!(!path.exists() || std::fs::read_to_string(&path).unwrap().trim().is_empty());
+        remove_history(&path);
+    }
+
+    #[test]
+    fn the_completion_popup_owns_up_before_history() {
+        let path = temp_history_path("completion");
+        let project = "/tmp/nano-history-completion";
+        append_history(&path, project, "root", "second");
+        let mut app = app();
+        app.history_path = Some(path.clone());
+        app.cli.cwd = Some(PathBuf::from(project));
+        app.drafts.current_mut().set_text("@a");
+        app.drafts.current_mut().set_cursor(2);
+        let update = app.completion.update("@a", 2);
+        let revision = update.request.expect("completion request").revision;
+        assert!(app.completion.apply(
+            revision,
+            vec![nano_attachments::FileReferenceCandidate {
+                path: "a".to_string(),
+                kind: CandidateKind::File,
+            }],
+        ));
+        app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(app.drafts.current().text(), "@a");
+        assert!(app.history_browse.is_none());
+        remove_history(&path);
+    }
+
+    #[test]
+    fn a_read_only_child_swallows_up_before_history() {
+        let mut app = app();
+        install_subagents(&mut app, json!([subagent_row("old", "one-shot")]));
+        assert!(app.enter_subagent(0));
+        app.apply_subagent_description(&describe_child("old", "one-shot"));
+        app.drafts.current_mut().set_text("draft");
+        app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(app.drafts.current().text(), "draft");
+        assert!(app.history_browse.is_none());
+    }
+
+    #[test]
+    fn local_count_excludes_hidden_and_external_rows() {
+        let mut app = app();
+        install_subagents(
+            &mut app,
+            json!([
+                subagent_row("a", "continuable"),
+                subagent_row("b", "one-shot"),
+                subagent_row("x", "external"),
+            ]),
+        );
+        assert_eq!(app.subagents.local_count(), 2);
+        app.subagents
+            .apply_event(&json!({
+                "type": "end",
+                "childId": "a",
+                "stopReason": "completed"
+            }))
+            .expect("valid lifecycle event");
+        app.subagents
+            .cleanup(Instant::now() + nano_subagents::CLEANUP_DELAY * 2);
+        assert_eq!(app.subagents.local_count(), 1);
+    }
+
+    #[test]
     fn child_history_uses_only_user_messages_from_the_child_projection() {
         let mut app = app();
         install_subagents(&mut app, json!([subagent_row("child", "continuable")]));
@@ -10799,5 +10985,7 @@ mod terminal_tests {
             )));
         }
         assert_eq!(app.input_history(), vec!["child prompt"]);
+        app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(app.drafts.current().text(), "child prompt");
     }
 }
