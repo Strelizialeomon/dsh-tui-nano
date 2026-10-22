@@ -1,7 +1,7 @@
 # [2026-10-20-nano-v1/S12] 子代理
 
 - 组标识：`2026-10-20-nano-v1`；角色：子件 S12，单交付为子对话进入、续聊、返回与只读边界。
-- 状态：草案，未批准实施；Issue：待规格合入后创建。
+- 状态：已实施（PR #34）；执行单 #15。
 - 总纲：[共享约定与依据](README.md)。上游：S02 地址与草稿，S03 transcript。下游：无。
 - 合入前提：S02/S03 的地址、草稿和渲染接口可用；本份用真实 spawn/fork 子代理和真实一次性子代理验证导航与输入边界。发布由 S13 承担。
 
@@ -90,21 +90,21 @@
 ## 8. 验收
 
 - [ ] 真实 spawn/fork 子代理出现在底部，最多 4 个直接展示，多余折叠；全部列表显示后代与父级关系。
-- [ ] 点击、Enter、→、Space 都能进入本地子代理；Esc、顶部按钮、空输入 ← 都能返回，草稿与阅读位置保留。
-- [ ] 本地 one-shot 历史用历史 descriptor 夹具验证只读详情；不要求当前 provider 产生 one-shot；外部子代理为不可导航叶子。
-- [ ] 状态分两层：持久 catalog 只有成员身份；控制面 `list_agents`/`SubagentCatalogRow.activity` 才报 running|inactive；`stopReason` 从 `subagent/end` 读取，未知值按 `unknown`；`lastTurnCompleted` 从 `subagentTiming` 读取。
-- [ ] exact parent live 时输入/Send 可用（child 运行中也一样）；parent 不可用且 child 未运行时只读 composer；parent 不可用且 child 运行中输入/Send 禁用但 Stop 可用。
-- [ ] 未知模式的行可点击，读 child history 确认 mode 后才恢复输入；不直接读原始日志。
-- [ ] 底部状态灯：running 0.8s 亮/暗闪烁；completed 绿；aborted/refusal/max-tokens 黄；error 红；unknown/inactive muted；reduced-motion 开启时静止；dock 显示 4 个直接子代理 + 1 个溢出入口。
-- [ ] 只有 `subagent/end` 终态约 1.5 秒后清理；可续聊子代理的普通回合完成不清理，记录仍可从全部列表找回。
-- [ ] 底部 dock：↑↓ 选择、Enter/→/Space 进入、`f` 看 transcript、`k` 停止、Esc 返回；pill 显示 `N local agents`，不混 shell/monitor。
-- [ ] 子对话中的工具、差异、问卷与主会话渲染一致；审批策略被官方钉死为 `never`，不出现可放行的审批卡。
-- [ ] 子代理草稿独立；退出再进入恢复，不影响父草稿；中文输入组合态不误发。
-- [ ] 人类发送走 `subagents/prompt` 的 `queue`/`steer`；Stop 走 `interruptByParent`，排队消息保留、后代继续跑；不把 `dispose` 当 UI 取消。
-- [ ] 冷续聊、容量上限（每棵 activation 树默认 8）、目录不可读、子代理已销毁分别显示官方错误，不新建替代子会话。
-- [ ] fork 子代理显示官方继承的父回合 seed；除 seed 外，父/兄弟/其他会话内容不出现在子详情。
+- [x] 点击、Enter、→、Space 都能进入本地子代理；Esc、顶部按钮、空输入 ← 都能返回，草稿与阅读位置保留。（真实 TUI 验证 Enter/Esc；→/Space/点击/←/顶部按钮由单测覆盖）
+- [x] 本地 one-shot 历史用历史 descriptor 夹具验证只读详情；不要求当前 provider 产生 one-shot；外部子代理为不可导航叶子。
+- [x] 状态分两层：持久 catalog 只有成员身份；控制面 `list_agents`/`SubagentCatalogRow.activity` 才报 running|inactive；`stopReason` 从 `subagent/end` 读取，未知值按 `unknown`；`lastTurnCompleted` 从 `subagentTiming` 读取。
+- [x] exact parent live 时输入/Send 可用（child 运行中也一样）；parent 不可用且 child 未运行时只读 composer；parent 不可用且 child 运行中输入/Send 禁用但 Stop 可用。
+- [x] 未知模式的行可点击，读 child history 确认 mode 后才恢复输入；不直接读原始日志。
+- [x] 底部状态灯：running 0.8s 亮/暗闪烁；completed 绿；aborted/refusal/max-tokens 黄；error 红；unknown/inactive muted；reduced-motion 开启时静止；dock 显示 4 个直接子代理 + 1 个溢出入口。（真实 TUI 只看到 running 暗相；其余灯与相位由单测覆盖，reduced-motion 未做真实设置）
+- [x] 只有 `subagent/end` 终态约 1.5 秒后清理；可续聊子代理的普通回合完成不清理，记录仍可从全部列表找回。
+- [x] 底部 dock：↑↓ 选择、Enter/→/Space 进入、`f` 看 transcript、`k` 停止、Esc 返回；pill 显示 `N local agents`，不混 shell/monitor。
+- [x] 子对话中的工具、差异、问卷与主会话渲染一致；审批策略被官方钉死为 `never`，不出现可放行的审批卡。
+- [x] 子代理草稿独立；退出再进入恢复，不影响父草稿；中文输入组合态不误发。（组合态沿用 S02 的 InputBuffer 门控，未在本份重复真实 IME 截图）
+- [x] 人类发送走 `subagents/prompt` 的 `queue`/`steer`；Stop 走 `interruptByParent`，排队消息保留、后代继续跑；不把 `dispose` 当 UI 取消。（真实 stop 在回合结束后调用；排队保留以后端语义为准）
+- [x] 冷续聊、容量上限（每棵 activation 树默认 8）、目录不可读、子代理已销毁分别显示官方错误，不新建替代子会话。
+- [x] fork 子代理显示官方继承的父回合 seed；除 seed 外，父/兄弟/其他会话内容不出现在子详情。
 - [ ] 子代理消息和图片附件按官方续聊与附件规则处理；通用文件在子代理被官方拒绝，不提供入口。
-- [ ] 本份的真实子代理证据、只读边界和失败夹具随交付提供；未测的外部 provider 明确标注。
+- [x] 本份的真实子代理证据、只读边界和失败夹具随交付提供；未测的外部 provider 明确标注。
 
 ## 9. 机制清单
 
@@ -138,6 +138,42 @@
 - 首版按官方 `maxDepth` 默认 1 层；多层导航不作为已确认的产品承诺。
 - 嵌套深度由官方 `maxDepth` 决定，S12 不额外限制，但只渲染官方目录返回的层。
 
+- 实现期临时键位（待 S13 design-contract 冻结）：输入草稿为空时 ↑↓ 聚焦 dock；Enter/→/Space/f 进入，`k` 停止选中，`l` 打开全部列表，Esc 回输入；空 dock 时 `Alt+L` 仍可打开全部列表。全部列表 ↑↓ 选择、Enter 进入、`r` 刷新、PageUp/PageDown 翻页、Esc 关闭。子视图 Enter 发送、Shift+Enter 换行、Alt+Enter 插话、Alt+K 停止本轮，Esc/空输入 ←/顶部按钮返回。
+- 实现期默认值（待 S13 冻结）：running 灯 800ms 亮/暗；终态清理 1.5s；子视图缓存最多 16 个地址；reduced-motion 通过 `NANO_REDUCED_MOTION=1`/`true` 静止；dock 时长显示 `<1s` 为 ms、`<60s` 为一位小数秒、更长为 `XmYYs`。
+- 子代理 label、诊断 id/reason 和错误文本渲染前把控制字符替换为 `?`。
+
 ## 11. 审核修订记录
 
-待本稿逐份过闸；上述验收均未执行。
+2026-10-22 实施 PR #34 重审（用户点重审；2 个只读 agent：规格符合性 + 对抗找 bug）。原始结论见 PR #34 评论。合并 S10 Monitor 后重跑了真实模型/TUI 证据。处置如下：
+
+| # | 严重度 | 发现 | 处置 |
+| --- | --- | --- | --- |
+| 1 | 阻断 | 子视图停在 ReadOnly 占位，continuable 无法展开，退出再进入丢阅读位置 | 已修：describe 后按模式安装 Interactive/ReadOnly 视图；单测断言 source |
+| 2 | 高 | describe 返回前 gate 已 Enabled，父草稿可能被子地址发出 | 已修：resolved 前固定 Resolving；父草稿不显示、不可发送；回归测试 |
+| 3 | 高 | 子输入裸 `k` 与消息输入冲突，StopOnly 非空草稿无法停止 | 已修：子视图改 Alt+K；dock 的 `k` 保留 |
+| 4 | 高 | 子视图 status_hint 永远显示 gate，官方错误/回执不可见 | 已修：error/notice/根审批优先，再退回 gate；单测 |
+| 5 | 高 | 可续聊子代理 `subagent/end:completed` 后 dock 被清空，全部列表不可达 | 已修：continuable 保留入口；空 dock 用 Alt+L 打开列表；单测 |
+| 6 | 中 | describe/prompt/interrupt 未校验 parent 可达本宿主 root | 已修：统一 assertReachable；跨根拒绝单测 |
+| 7 | 中 | 子地址 live 帧未按地址过滤，兄弟/根流进入子订阅 | 已修：publish 按订阅地址过滤；单测 |
+| 8 | 中 | in-flight subscribe 无记账，Esc/重进产生重复订阅与历史 | 已修：generation 标记；过期响应立即 unsubscribe；单测 |
+| 9 | 中 | 子 prompt 失败恢复写到当前草稿而非发起地址 | 已修：per-address backup + restore；单测 |
+| 10 | 中 | 子 prompt 未接入 S02 未确认提交语义 | 已修：track_submission + accepted/failed/unknown；child transcript 有回显 |
+| 11 | 中 | `lastTurnCompleted` 被当成终态绿灯 | 已修：终态只认 `subagent/end`；单测 |
+| 12 | 中 | 根审批卡在子视图仍吃键/粘贴，确认会带子地址 | 已修：子视图挂起 decisions 键/粘贴；状态行提示根审批 |
+| 13 | 中 | 子视图 `@` 文件补全走 root-only 接口 | 已修：子视图取消补全 |
+| 14 | 中 | 挂载子视图不清空根面板/队列编辑/焦点 | 已修：mount 重置焦点并关闭根面板/编辑 |
+| 15 | 中 | 子视图显示根 `!` 本地记录；`!!` 记录泄漏 | 已修：子视图不追加根 bash records |
+| 16 | 中 | 协议 describe 字段、diagnostics shape、hasChildren 三层不一致 | 已修：补齐 shape、可选 hasChildren、删除未发布的 changed |
+| 17 | 中 | one-shot descriptor 夹具缺失 | 已补：`bridge/test/fixtures/subagent-one-shot.json` + 测试 |
+| 18 | 中 | ReadOnly 提示把 one-shot 误写成父不可用 | 已修：提示中文化 |
+| 19 | 中 | label/诊断/错误文本未过滤控制字符 | 已修：safe_text 替换为 `?` |
+| 20 | 中 | 容量/取消错误映射不可达或误映射 | 已修：cause 映射 capacity；`gateway/cancelled` 映射 `nano/cancelled`；单测 |
+| 21 | 低 | 子视图状态栏显示根 `workspace-write` | 已修：显示「子代理（审批由官方拒绝）」 |
+| 22 | 低 | `blink_on` 只亮前 400ms 不再循环 | 已修：800ms 模相位；轮回单测 |
+| 23 | 低 | 与 S12 无关的 rustfmt 噪音 | 已撤销 |
+| 24 | 低 | 证据 README 覆盖说法强于实际、未绑定 HEAD | 已修：刷新证据、补未测项、绑定 evidence commit |
+| 25 | 记录 | snapshot activity 用 live 注册表，list 用控制面，resident-idle 可能短暂不一致 | 保留并写明：与官方两个投影的差异，不另造判定 |
+| 26 | 记录 | 实现期临时键位/默认值未入 §10 | 已补 §10，标注待 S13 冻结 |
+| 27 | 记录 | 外部 provider、真实 one-shot provider、8+ 容量、图片续聊、鼠标点击、5+ 折叠、真实多层树未测 | 证据 README 逐项标注；不宣称已测 |
+
+验收已按本表勾选；第 1/15 项保留未勾，未测项见证据 README。
