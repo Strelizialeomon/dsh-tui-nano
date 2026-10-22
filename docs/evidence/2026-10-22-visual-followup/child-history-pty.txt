@@ -1,0 +1,71 @@
+{
+  "ok": true,
+  "checks": [
+    [
+      "connected",
+      true
+    ],
+    [
+      "child started",
+      true
+    ],
+    [
+      "child view",
+      true
+    ],
+    [
+      "child gate enabled",
+      true
+    ],
+    [
+      "child history recalled",
+      true
+    ],
+    [
+      "clean exit",
+      true
+    ]
+  ],
+  "exit": 0
+}
+--- SCREEN ---
+[>nano  …/work
+  ← 子代理 followup-tui 可输入
+
+  > 只回复一行 S12CHILD，不要调用任何工具。Your parent agent id is "session-e63b1a1f-0bbe-41d3-a923-d1d13e7e0c3b". Bef
+    ore you finish, send your result to that agent with send_message({ agent_id: "session-e63b1a1f-0bbe-41d3-a923-d1d1
+    3e7e0c3b", message: "<self-contained result>" }). The parent shares your workspace but does not automatically rece
+    ive your transcript, tool output, or reasoning. Send earlier messages as well when a finding changes what the pare
+    nt should do next; sending a message does not end your turn.
+
+  上下文 3 段 · 点击展开
+
+  done
+
+  > child history prompt
+
+  done
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  > child history prompt                                                                                             ↑
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  权限：子代理审批由官方拒绝                                                                                    …/work
