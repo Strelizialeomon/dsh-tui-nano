@@ -249,7 +249,14 @@ fn events_for_another_address_do_not_enrich_this_transcript() {
     assert!(!transcript.apply_event("session.event", &other));
     let mut cache = RenderCache::new();
     let mut scroll = ScrollState::default();
-    let rendered = nano_transcript::render(&transcript, &mut cache, &mut scroll, 80, 20);
+    let rendered = nano_transcript::render(
+        &transcript,
+        &mut cache,
+        &mut scroll,
+        80,
+        20,
+        nano_transcript::DiffTheme::Dark,
+    );
     assert_eq!(rendered.lines.len(), 0);
 }
 

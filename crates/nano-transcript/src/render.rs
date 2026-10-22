@@ -37,6 +37,25 @@ const MAX_CACHED_ENTRIES: usize = 512;
 /// Wrapped source rows kept per block, even when expanded.
 const MAX_BLOCK_ROWS: usize = 4_000;
 
+/// Diff color tokens selected by `NANO_THEME`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffTheme {
+    /// Frozen dark tokens from design-contract §3.
+    Dark,
+    /// Light tokens from the visual-alignment spec §3.
+    Light,
+}
+
+impl DiffTheme {
+    /// Read `NANO_THEME`; anything other than `light` keeps the frozen dark set.
+    pub fn from_env() -> Self {
+        match std::env::var("NANO_THEME").as_deref() {
+            Ok("light") => Self::Light,
+            _ => Self::Dark,
+        }
+    }
+}
+
 /// What a click does on a rendered row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HitKind {
@@ -83,7 +102,7 @@ pub struct RenderCache {
     order: VecDeque<CacheKey>,
 }
 
-type CacheKey = (String, u64, usize, bool);
+type CacheKey = (String, u64, usize, bool, u8);
 
 #[derive(Debug, Clone, Default)]
 struct RenderedEntry {
@@ -149,9 +168,9 @@ fn units(model: &TranscriptModel) -> Vec<Unit<'_>> {
     units
 }
 
-fn render_unit(unit: &Unit<'_>, width: usize, expanded: bool) -> RenderedEntry {
+fn render_unit(unit: &Unit<'_>, width: usize, expanded: bool, theme: DiffTheme) -> RenderedEntry {
     match unit {
-        Unit::Single(entry) => render_entry(entry, width, expanded),
+        Unit::Single(entry) => render_entry(entry, width, expanded, theme),
         Unit::Context(entries) => {
             let mut output = RenderedEntry::default();
             render_context_group(&mut output, unit.identity(), entries, width, expanded);
@@ -174,12 +193,19 @@ impl RenderCache {
         fingerprint: u64,
         width: usize,
         expanded: bool,
+        theme: DiffTheme,
         render: F,
     ) -> &RenderedEntry
     where
         F: FnOnce() -> RenderedEntry,
     {
-        let key = (identity.to_string(), fingerprint, width.max(1), expanded);
+        let key = (
+            identity.to_string(),
+            fingerprint,
+            width.max(1),
+            expanded,
+            theme as u8,
+        );
         if !self.lines.contains_key(&key) {
             let rendered = render();
             self.heights.insert(key.clone(), rendered.height());
@@ -208,27 +234,34 @@ impl RenderCache {
         fingerprint: u64,
         width: usize,
         expanded: bool,
+        theme: DiffTheme,
         render: F,
     ) -> usize
     where
         F: FnOnce() -> RenderedEntry,
     {
-        let key = (identity.to_string(), fingerprint, width.max(1), expanded);
+        let key = (
+            identity.to_string(),
+            fingerprint,
+            width.max(1),
+            expanded,
+            theme as u8,
+        );
         if let Some(height) = self.heights.get(&key) {
             return *height;
         }
-        self.ensure(identity, fingerprint, width, expanded, render)
+        self.ensure(identity, fingerprint, width, expanded, theme, render)
             .height()
     }
 
     /// Drop cache rows for entries that no longer exist.
     pub fn retain(&mut self, identities: &HashSet<&str>) {
         self.lines
-            .retain(|(identity, _, _, _), _| identities.contains(identity.as_str()));
+            .retain(|(identity, _, _, _, _), _| identities.contains(identity.as_str()));
         self.order
-            .retain(|(identity, _, _, _)| identities.contains(identity.as_str()));
+            .retain(|(identity, _, _, _, _)| identities.contains(identity.as_str()));
         self.heights
-            .retain(|(identity, _, _, _), _| identities.contains(identity.as_str()));
+            .retain(|(identity, _, _, _, _), _| identities.contains(identity.as_str()));
     }
 }
 
@@ -239,6 +272,7 @@ pub fn render(
     scroll: &mut ScrollState,
     width: usize,
     viewport: usize,
+    theme: DiffTheme,
 ) -> TranscriptRender {
     let width = width.max(1);
     let viewport = viewport.max(1);
@@ -248,9 +282,14 @@ pub fn render(
     let mut start = 0usize;
     for unit in &units {
         let expanded = model.is_expanded(unit.identity());
-        let height = cache.height(unit.identity(), unit.fingerprint(), width, expanded, || {
-            render_unit(unit, width, expanded)
-        });
+        let height = cache.height(
+            unit.identity(),
+            unit.fingerprint(),
+            width,
+            expanded,
+            theme,
+            || render_unit(unit, width, expanded, theme),
+        );
         starts.push(start);
         entries.push(EntryOffset {
             identity: unit.identity().to_string(),
@@ -282,9 +321,14 @@ pub fn render(
         }
         let expanded = model.is_expanded(unit.identity());
         let rendered = cache
-            .ensure(unit.identity(), unit.fingerprint(), width, expanded, || {
-                render_unit(unit, width, expanded)
-            })
+            .ensure(
+                unit.identity(),
+                unit.fingerprint(),
+                width,
+                expanded,
+                theme,
+                || render_unit(unit, width, expanded, theme),
+            )
             .clone();
         let first = window_start.saturating_sub(offset.start);
         let last = (window_end - offset.start).min(rendered.lines.len());
@@ -320,7 +364,7 @@ pub fn render(
     }
 }
 
-fn render_entry(entry: &Entry, width: usize, expanded: bool) -> RenderedEntry {
+fn render_entry(entry: &Entry, width: usize, expanded: bool, theme: DiffTheme) -> RenderedEntry {
     let mut output = RenderedEntry::default();
     if let EntryKind::Assistant {
         text, reasoning, ..
@@ -401,7 +445,7 @@ fn render_entry(entry: &Entry, width: usize, expanded: bool) -> RenderedEntry {
                 render_context_group(&mut output, &entry.identity, &[entry], width, expanded);
             }
         }
-        EntryKind::Tool(record) => render_tool(&mut output, record, width, expanded),
+        EntryKind::Tool(record) => render_tool(&mut output, record, width, expanded, theme),
         EntryKind::Preview(preview) => render_preview(&mut output, preview, width),
         EntryKind::Echo { text, state } => render_echo(&mut output, width, text, state),
     }
@@ -492,7 +536,13 @@ fn render_thinking(
     }
 }
 
-fn render_tool(output: &mut RenderedEntry, record: &ToolRecord, width: usize, expanded: bool) {
+fn render_tool(
+    output: &mut RenderedEntry,
+    record: &ToolRecord,
+    width: usize,
+    expanded: bool,
+    theme: DiffTheme,
+) {
     let question_hit = question_hit(record);
     match &record.display {
         ToolDisplay::Bash {
@@ -634,7 +684,7 @@ fn render_tool(output: &mut RenderedEntry, record: &ToolRecord, width: usize, ex
                     muted(),
                 )));
                 output.hits.push(toggle_hit(record));
-                render_diff_body(output, diff, width, expanded, record);
+                render_diff_body(output, diff, width, expanded, record, theme);
             } else {
                 output.lines.push(Line::from(Span::styled(
                     "  （没有可显示的差异数据）",
@@ -774,6 +824,7 @@ fn render_diff_body(
     width: usize,
     expanded: bool,
     record: &ToolRecord,
+    theme: DiffTheme,
 ) {
     if diff.coarse {
         output.lines.push(Line::from(Span::styled(
@@ -813,7 +864,7 @@ fn render_diff_body(
             }
             DiffRow::Line(kind, old_no, new_no, text, emphasis) => {
                 render_diff_line(
-                    output, *kind, *old_no, *new_no, text, *emphasis, width, record,
+                    output, *kind, *old_no, *new_no, text, *emphasis, width, record, theme,
                 );
             }
         }
@@ -836,29 +887,44 @@ fn render_diff_line(
     emphasis: Option<(usize, usize)>,
     width: usize,
     record: &ToolRecord,
+    theme: DiffTheme,
 ) {
     let number = old_no.or(new_no);
     let number = number
         .map(|number| format!("{number:>4}"))
         .unwrap_or_else(|| "    ".to_string());
-    // Frozen dark tokens from design-contract §3; the light set is batch 2.
-    let (marker, background, emphasis_background, emphasis_foreground, marker_color) = match kind {
-        DiffLineKind::Add => (
-            '+',
-            Some(Color::Rgb(0, 42, 0)),
-            Some(Color::Rgb(0, 88, 0)),
-            Color::LightGreen,
-            Color::Green,
-        ),
-        DiffLineKind::Delete => (
-            '-',
-            Some(Color::Rgb(48, 0, 0)),
-            Some(Color::Rgb(96, 0, 0)),
-            Color::LightRed,
-            Color::Red,
-        ),
-        DiffLineKind::Context => (' ', None, None, Color::Reset, Color::DarkGray),
-    };
+    let (marker, background, emphasis_background, emphasis_foreground, marker_color) =
+        match (theme, kind) {
+            (DiffTheme::Dark, DiffLineKind::Add) => (
+                '+',
+                Some(Color::Rgb(0, 42, 0)),
+                Some(Color::Rgb(0, 88, 0)),
+                Color::LightGreen,
+                Color::Green,
+            ),
+            (DiffTheme::Dark, DiffLineKind::Delete) => (
+                '-',
+                Some(Color::Rgb(48, 0, 0)),
+                Some(Color::Rgb(96, 0, 0)),
+                Color::LightRed,
+                Color::Red,
+            ),
+            (DiffTheme::Light, DiffLineKind::Add) => (
+                '+',
+                Some(Color::Rgb(220, 235, 221)),
+                Some(Color::Rgb(182, 214, 188)),
+                Color::Green,
+                Color::Green,
+            ),
+            (DiffTheme::Light, DiffLineKind::Delete) => (
+                '-',
+                Some(Color::Rgb(241, 220, 223)),
+                Some(Color::Rgb(233, 186, 195)),
+                Color::Red,
+                Color::Red,
+            ),
+            (_, DiffLineKind::Context) => (' ', None, None, Color::Reset, Color::DarkGray),
+        };
     let number_style = Style::default().fg(Color::DarkGray);
     let text_style = Style::default();
     let (number_style, text_style) = match background {
@@ -1443,7 +1509,16 @@ mod tests {
     }
 
     fn render_one(entry: Entry, expanded: bool, width: usize) -> RenderedEntry {
-        render_entry(&entry, width, expanded)
+        render_one_with_theme(entry, expanded, width, DiffTheme::Dark)
+    }
+
+    fn render_one_with_theme(
+        entry: Entry,
+        expanded: bool,
+        width: usize,
+        theme: DiffTheme,
+    ) -> RenderedEntry {
+        render_entry(&entry, width, expanded, theme)
     }
 
     #[test]
@@ -1461,7 +1536,7 @@ mod tests {
         );
         let mut cache = RenderCache::new();
         let mut scroll = ScrollState::default();
-        let rendered = render(&model, &mut cache, &mut scroll, 80, 20);
+        let rendered = render(&model, &mut cache, &mut scroll, 80, 20, DiffTheme::Dark);
         assert!(rendered.total_height > 100);
         assert!(rendered.mounted <= MAX_MOUNTED_ROWS);
         assert_eq!(rendered.lines.len(), 20);
@@ -1484,7 +1559,14 @@ mod tests {
         let mut cache = RenderCache::new();
         let mut scroll = ScrollState::default();
         let viewport = 250;
-        let rendered = render(&model, &mut cache, &mut scroll, 80, viewport);
+        let rendered = render(
+            &model,
+            &mut cache,
+            &mut scroll,
+            80,
+            viewport,
+            DiffTheme::Dark,
+        );
         assert_eq!(rendered.lines.len(), viewport);
         assert_eq!(rendered.top + rendered.lines.len(), rendered.total_height);
         model.revision += 1;
@@ -1501,7 +1583,7 @@ mod tests {
         }]);
         let mut cache = RenderCache::new();
         let mut scroll = ScrollState::default();
-        let rendered = render(&model, &mut cache, &mut scroll, 4, 10);
+        let rendered = render(&model, &mut cache, &mut scroll, 4, 10, DiffTheme::Dark);
         assert!(rendered
             .lines
             .iter()
@@ -1597,6 +1679,47 @@ mod tests {
             .iter()
             .flat_map(|line| line.spans.iter())
             .any(|span| span.style.add_modifier.contains(Modifier::BOLD)));
+    }
+
+    #[test]
+    fn light_theme_uses_light_diff_backgrounds() {
+        let diff = crate::diff::single_text_diff(
+            Some("a.txt".into()),
+            Some("hello world".into()),
+            Some("hello there".into()),
+            DiffState::Applied,
+        );
+        let entry = Entry {
+            identity: "call-light".into(),
+            fingerprint: 1,
+            kind: EntryKind::Tool(ToolRecord {
+                call_id: "light".into(),
+                name: "edit".into(),
+                status: ToolStatus::Succeeded,
+                display_status: DisplayStatus::Succeeded,
+                turn: None,
+                step: None,
+                arguments: "{}".into(),
+                result: None,
+                result_fact: None,
+                approval: None,
+                display: ToolDisplay::File {
+                    path: Some("a.txt".into()),
+                    diff: Some(diff),
+                },
+            }),
+        };
+        let rendered = render_one_with_theme(entry, true, 80, DiffTheme::Light);
+        let backgrounds: Vec<Color> = rendered
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .filter_map(|span| span.style.bg)
+            .collect();
+        assert!(backgrounds.contains(&Color::Rgb(220, 235, 221)));
+        assert!(backgrounds.contains(&Color::Rgb(241, 220, 223)));
+        assert!(!backgrounds.contains(&Color::Rgb(0, 42, 0)));
+        assert!(!backgrounds.contains(&Color::Rgb(48, 0, 0)));
     }
 
     #[test]
@@ -1716,7 +1839,7 @@ mod tests {
         let model = model(entries);
         let mut cache = RenderCache::new();
         let mut scroll = ScrollState::default();
-        let rendered = render(&model, &mut cache, &mut scroll, 80, 20);
+        let rendered = render(&model, &mut cache, &mut scroll, 80, 20, DiffTheme::Dark);
         let text = rendered
             .lines
             .iter()
@@ -1758,7 +1881,7 @@ mod tests {
         for identity in identities {
             model.reveal(&identity);
         }
-        let rendered = render(&model, cache, scroll, width, viewport);
+        let rendered = render(&model, cache, scroll, width, viewport, DiffTheme::Dark);
         rendered.lines.iter().map(ToString::to_string).collect()
     }
 
