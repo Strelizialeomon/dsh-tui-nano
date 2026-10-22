@@ -38,6 +38,8 @@ pub struct MountedChild {
     pub parent_live: bool,
     /// Official live activity.
     pub activity: Activity,
+    /// Whether the official history read has confirmed mode and liveness.
+    pub resolved: bool,
     /// Where this view was opened from.
     pub origin: EntryOrigin,
 }
@@ -168,6 +170,7 @@ impl Navigation {
             mode,
             parent_live,
             activity,
+            resolved: false,
             origin: EntryOrigin::Dock { index, child_id },
         });
         self.list_open = false;
@@ -194,6 +197,7 @@ impl Navigation {
             mode,
             parent_live,
             activity,
+            resolved: false,
             origin: EntryOrigin::List { child_id },
         });
         self.list_open = false;
@@ -261,6 +265,7 @@ impl Navigation {
         mounted.mode = mode;
         mounted.parent_live = parent_live;
         mounted.activity = activity;
+        mounted.resolved = true;
         if let Some(label) = label {
             mounted.label = label;
         }

@@ -195,7 +195,7 @@ fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
         let label_room = (area.width as usize)
             .saturating_sub(fixed + exit_width + 1)
             .max(1);
-        let label = truncate(&mounted.label, label_room);
+        let label = truncate(&safe_text(&mounted.label), label_room);
         let mut spans = vec![
             Span::styled(" nano ", Style::default().fg(Color::Black).bg(Color::Cyan)),
             Span::styled("子代理", Style::default().fg(Color::Cyan)),
@@ -590,7 +590,7 @@ fn draw_subagent_dock(frame: &mut Frame, app: &mut App, area: Rect) {
         let (dot, color) = lamp_glyph(app.subagents.lamp(row), blink_on);
         let mut text = format!(
             "{marker} {dot} {} · {} · {}",
-            row.display_label(),
+            safe_text(row.display_label()),
             row.mode.label(),
             row.activity.label()
         );
@@ -678,7 +678,7 @@ fn draw_subagent_list(frame: &mut Frame, app: &mut App, area: Rect) {
         let branch = if row.depth > 1 { "└ " } else { "" };
         let mut text = format!(
             "{indent}{branch}{} · {} · {}",
-            row.display_label(),
+            safe_text(row.display_label()),
             row.mode.label(),
             row.activity.label()
         );
@@ -703,9 +703,13 @@ fn draw_subagent_list(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     }
     for diagnostic in app.subagents.diagnostics() {
-        let mut text = format!("! 读不到 {}: {}", diagnostic.id, diagnostic.reason);
+        let mut text = format!(
+            "! 读不到 {}: {}",
+            safe_text(&diagnostic.id),
+            safe_text(&diagnostic.reason)
+        );
         if let Some(parent) = &diagnostic.parent_id {
-            text.push_str(&format!("（父 {parent}）"));
+            text.push_str(&format!("（父 {}）", safe_text(parent)));
         }
         for segment in wrap_segments(&truncate(&text, width.saturating_mul(2)), width) {
             lines.push(Line::from(Span::styled(
@@ -715,7 +719,7 @@ fn draw_subagent_list(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     }
     if let Some(error) = app.subagents.last_error() {
-        for segment in wrap_segments(&truncate(error, width.saturating_mul(2)), width) {
+        for segment in wrap_segments(&truncate(&safe_text(error), width.saturating_mul(2)), width) {
             lines.push(Line::from(Span::styled(
                 segment.text,
                 Style::default().fg(Color::Red),
@@ -729,6 +733,20 @@ fn draw_subagent_list(frame: &mut Frame, app: &mut App, area: Rect) {
         .min(lines.len().saturating_sub(viewport.max(1)));
     let visible: Vec<Line<'static>> = lines.into_iter().skip(start).take(viewport).collect();
     frame.render_widget(Paragraph::new(Text::from(visible)), inner);
+}
+
+/// Replace terminal control characters with a visible marker. Labels come
+/// from model/tool input and must never be able to inject escape sequences.
+fn safe_text(text: &str) -> String {
+    text.chars()
+        .map(|character| {
+            if character.is_control() {
+                '?'
+            } else {
+                character
+            }
+        })
+        .collect()
 }
 
 fn format_duration_ms(ms: u64) -> String {
@@ -782,7 +800,7 @@ fn draw_feed(frame: &mut Frame, app: &mut App, area: Rect) {
     let mut lines = render.lines;
     // Local `!` records are S08 display data until the official synthetic
     // message is durable. Show them only while following the bottom.
-    if app.view.scroll().sticky() && !app.bash_records.is_empty() {
+    if !app.subagent_active() && app.view.scroll().sticky() && !app.bash_records.is_empty() {
         let before = lines.len();
         for record in &app.bash_records {
             push_bash_record(&mut lines, record, area.width.max(1) as usize);
@@ -2030,13 +2048,14 @@ fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
         } else {
             cursor_column = 0;
             let draft = app.drafts.current().text();
-            if draft.trim().is_empty() {
+            if gate == ComposerGate::Resolving {
                 lines.push(Line::from(Span::styled(
-                    if gate == ComposerGate::Resolving {
-                        "正在读取子代理历史以确认可续聊性…"
-                    } else {
-                        "只读记录 · 没有可用的输入框"
-                    },
+                    "正在读取子代理历史以确认可续聊性…",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            } else if draft.trim().is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "只读记录 · 没有可用的输入框",
                     Style::default().fg(Color::DarkGray),
                 )));
             } else {
@@ -2069,6 +2088,11 @@ fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
 
 /// Attachment card lines shown above the input text.
 fn attachment_lines(app: &App) -> Vec<(String, Color)> {
+    if app.subagent_active() && app.subagents.mounted_gate() == Some(ComposerGate::Resolving) {
+        // The parent attachment draft must not appear in a child view before
+        // the child's own address and draft are installed.
+        return Vec::new();
+    }
     if app.editing_queue().is_some() {
         // Queue edits carry only text; the draft's attachments stay in memory
         // but are not part of this edit.
@@ -2143,7 +2167,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect, width: u16) {
     } else {
         Style::default().fg(Color::DarkGray)
     };
-    let text = truncate(&hint, width as usize);
+    let text = truncate(&safe_text(&hint), width as usize);
     frame.render_widget(Paragraph::new(Line::from(Span::styled(text, style))), area);
 }
 

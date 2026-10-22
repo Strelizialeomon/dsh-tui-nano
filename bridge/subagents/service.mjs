@@ -179,6 +179,7 @@ export class SubagentsService {
     const service = this.requireRuntime()
     const parentSessionId = requireId(params?.parentSessionId, 'parentSessionId')
     const childSessionId = requireId(params?.childSessionId, 'childSessionId')
+    await this.assertReachable(parentSessionId)
     const children = await service.listChildren(parentSessionId)
     const catalog = children.find((entry) => entry.id === childSessionId)
     if (catalog === undefined) {
@@ -277,9 +278,10 @@ export class SubagentsService {
    * @param {object} params - child address.
    * @returns {{accepted: true}} receipt.
    */
-  interrupt(params) {
+  async interrupt(params) {
     const service = this.requireRuntime()
     const address = this.validateAddress(params?.address, { continuableOnly: true })
+    await this.assertReachable(address.parentSessionId)
     try {
       service.interruptByParent(address.childSessionId, address.parentSessionId, 'continuable')
     } catch (error) {
@@ -297,19 +299,7 @@ export class SubagentsService {
   async authorizeChild(address) {
     const service = this.requireRuntime()
     const normalized = this.validateAddress(address, { continuableOnly: false })
-    if (normalized.parentSessionId !== this.rootSessionId) {
-      const reachable = await service.listDescendants(this.rootSessionId)
-      const parent = reachable.find(
-        (entry) => entry.kind === 'child' && entry.id === normalized.parentSessionId,
-      )
-      if (parent === undefined) {
-        throw new RpcError(
-          'nano/subagents/unauthorized',
-          `parent ${normalized.parentSessionId} is not reachable from ${this.rootSessionId}`,
-          { parentSessionId: normalized.parentSessionId },
-        )
-      }
-    }
+    await this.assertReachable(normalized.parentSessionId)
     const children = await service.listChildren(normalized.parentSessionId)
     const catalog = children.find((entry) => entry.id === normalized.childSessionId)
     if (catalog === undefined) {
@@ -332,6 +322,24 @@ export class SubagentsService {
     }
     this.known.add(normalized.childSessionId)
     return normalized
+  }
+
+  /**
+   * The direct parent must be the host root or a session reachable through
+   * its official catalog. Unknown-mode parents appear as diagnostics in
+   * `listDescendants`; their readable catalogs are still traversable.
+   * @param {string} parentSessionId - claimed direct parent.
+   */
+  async assertReachable(parentSessionId) {
+    if (parentSessionId === this.rootSessionId) return
+    const reachable = await this.requireRuntime().listDescendants(this.rootSessionId)
+    if (!reachable.some((entry) => entry.id === parentSessionId)) {
+      throw new RpcError(
+        'nano/subagents/unauthorized',
+        `parent ${parentSessionId} is not reachable from ${this.rootSessionId}`,
+        { parentSessionId },
+      )
+    }
   }
 
   /** Validate a wire child address and return its normalized spelling. */
@@ -374,15 +382,15 @@ export class SubagentsService {
   }
 
   /** One catalog or control-plane row in the wire shape. */
-  rowFromEntry(entry, parentId, depth, hasChildren = false) {
+  rowFromEntry(entry, parentId, depth, hasChildren) {
     const row = {
       id: entry.id,
       parentId,
       depth,
       mode: entry.mode,
       activity: entry.activity ?? this.activityOf(entry.id),
-      hasChildren: hasChildren === true,
     }
+    if (hasChildren !== undefined) row.hasChildren = hasChildren === true
     if (entry.label !== undefined) row.label = entry.label
     return row
   }
@@ -474,6 +482,16 @@ function mapSubagentError(error, address) {
   const code = typeof error?.code === 'string' ? error.code : ''
   const message = describeError(error)
   const data = { childSessionId: address.childSessionId, parentSessionId: address.parentSessionId }
+  if (code === 'gateway/cancelled') {
+    return new RpcError('nano/cancelled', message, data)
+  }
+  if (
+    code === 'subagent/delivery-unavailable' &&
+    (error?.cause?.code === 'ACTIVATION_LIMIT_REACHED' ||
+      error?.cause?.code === 'CONTINUATION_UNAVAILABLE')
+  ) {
+    return new RpcError('nano/subagents/capacity', message, data)
+  }
   switch (code) {
     case 'subagent/parent-unavailable':
       return new RpcError('nano/subagents/parent-unavailable', message, data)

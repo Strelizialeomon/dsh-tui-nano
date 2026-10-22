@@ -140,18 +140,29 @@ impl Lifecycle {
                 was_hidden || was_pending || was_terminal
             }
             LifecycleEvent::End { child_id, reason } => {
-                self.terminal.insert(
-                    child_id.clone(),
-                    TerminalFact {
-                        reason: *reason,
-                        at: Instant::now(),
-                    },
-                );
-                self.pending_cleanup
-                    .insert(child_id.clone(), Instant::now() + CLEANUP_DELAY);
+                self.apply_end(child_id, *reason, true);
                 true
             }
             LifecycleEvent::Changed => true,
+        }
+    }
+
+    /// Record one terminal edge. `hide` decides whether the dock entry ages
+    /// out; continuable children keep their entry after an ordinary turn.
+    pub fn apply_end(&mut self, child_id: &str, reason: StopReason, hide: bool) {
+        self.terminal.insert(
+            child_id.to_string(),
+            TerminalFact {
+                reason,
+                at: Instant::now(),
+            },
+        );
+        if hide {
+            self.pending_cleanup
+                .insert(child_id.to_string(), Instant::now() + CLEANUP_DELAY);
+        } else {
+            self.pending_cleanup.remove(child_id);
+            self.hidden.remove(child_id);
         }
     }
 
@@ -207,9 +218,8 @@ impl Lifecycle {
         if row.activity == Activity::Running {
             return Lamp::Running;
         }
-        if row.last_turn_completed == Some(true) {
-            return Lamp::Completed;
-        }
+        // `lastTurnCompleted` is a turn fact, not an activation outcome. Only
+        // the official `subagent/end` stop reason may paint a terminal lamp.
         Lamp::Inactive
     }
 
@@ -220,7 +230,9 @@ impl Lifecycle {
 
     /// Blink phase: true for the first half of each 800ms period.
     pub fn blink_on(&self, now: Instant) -> bool {
-        now.duration_since(self.blink_origin) < BLINK_PERIOD / 2
+        let elapsed = now.duration_since(self.blink_origin).as_millis() as u64;
+        let period = BLINK_PERIOD.as_millis() as u64;
+        elapsed % period < period / 2
     }
 
     /// Next instant at which the blink phase changes. Used by the app's tick

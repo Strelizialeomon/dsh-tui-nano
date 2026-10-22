@@ -68,8 +68,8 @@ const childAddress = {
   mode: 'continuable',
 }
 
-function authorize() {
-  return Promise.resolve(childAddress)
+function authorize(address) {
+  return Promise.resolve(address)
 }
 
 test('a child subscription replays only that child and keeps the address', async () => {
@@ -115,6 +115,36 @@ test('live child events reach only child subscriptions', async () => {
   const count = frames.length
   emit({ id: 'sibling' }, { seq: 1, type: 'user/message', data: { text: 'sibling' } })
   assert.equal(frames.length, count)
+})
+
+test('child subscriptions receive only their own live frames', async () => {
+  const query = {
+    async observeSession() {
+      return observation([], 0)
+    },
+  }
+  const { hub, frames } = harness({ query, authorizeChild: authorize })
+  await hub.subscribe({
+    address: { ...childAddress, childSessionId: 'child-a' },
+    kinds: ['conversation.stream'],
+    fromSeq: 1,
+  })
+  const before = frames.length
+  hub.publish('conversation.stream', {
+    address: { rootSessionId: ROOT },
+    frame: { text: 'ROOT-SECRET' },
+  })
+  hub.publish('conversation.stream', {
+    address: { rootSessionId: ROOT, parentSessionId: ROOT, childSessionId: 'child-b', mode: 'continuable' },
+    frame: { text: 'SIBLING-SECRET' },
+  })
+  assert.equal(frames.length, before)
+  hub.publish('conversation.stream', {
+    address: { rootSessionId: ROOT, parentSessionId: ROOT, childSessionId: 'child-a', mode: 'continuable' },
+    frame: { text: 'own' },
+  })
+  assert.equal(frames.length, before + 1)
+  assert.ok(JSON.stringify(frames.at(-1).frame).includes('own'))
 })
 
 test('an unauthorized child address is rejected before replay', async () => {

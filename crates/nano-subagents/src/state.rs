@@ -172,7 +172,20 @@ impl SubagentState {
     /// Apply one lifecycle event payload.
     pub fn apply_event(&mut self, value: &Value) -> Result<bool, String> {
         let event = wire::parse_event(value).map_err(|error| self.remember(error))?;
-        let changed = self.lifecycle.apply(&event);
+        let changed = match &event {
+            LifecycleEvent::End { child_id, reason } => {
+                // A continuable child's activation ends after each ordinary
+                // turn. Its durable entry stays in the dock; only one-shot and
+                // external records are one-shot dock entries.
+                let keeps_entry = self
+                    .catalog
+                    .row(child_id)
+                    .is_some_and(|row| row.mode == AgentMode::Continuable);
+                self.lifecycle.apply_end(child_id, *reason, !keeps_entry);
+                true
+            }
+            _ => self.lifecycle.apply(&event),
+        };
         if matches!(event, LifecycleEvent::Changed)
             || matches!(
                 event,
@@ -231,9 +244,14 @@ impl SubagentState {
         )
     }
 
-    /// Gate for the mounted child.
+    /// Gate for the mounted child. Until the official history read confirms
+    /// mode and liveness, the child is read-only; this closes the window in
+    /// which the parent draft could otherwise be sent to the child address.
     pub fn mounted_gate(&self) -> Option<ComposerGate> {
         self.nav.mounted().map(|mounted| {
+            if !mounted.resolved {
+                return ComposerGate::Resolving;
+            }
             ComposerGate::resolve(mounted.mode, mounted.parent_live, mounted.activity)
         })
     }

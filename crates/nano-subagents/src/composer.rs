@@ -60,9 +60,9 @@ impl ComposerGate {
     /// Short explanation for the composer title.
     pub fn hint(self) -> &'static str {
         match self {
-            Self::Enabled => "Enter 发送 · Shift+Enter 换行 · k 停止本轮 · Esc 返回",
-            Self::ReadOnly => "只读（父会话不可用且子代理未运行）· Esc 返回",
-            Self::StopOnly => "父会话不可用；输入已禁用，k 停止本轮 · Esc 返回",
+            Self::Enabled => "Enter 发送 · Shift+Enter 换行 · Alt+K 停止本轮 · Esc 返回",
+            Self::ReadOnly => "只读（一次性记录，或父会话不可用且子代理未运行）· Esc 返回",
+            Self::StopOnly => "父会话不可用；输入已禁用，Alt+K 停止本轮 · Esc 返回",
             Self::NotNavigable => "外部子代理没有本地详情",
             Self::Resolving => "正在读取子代理历史以确认可续聊性…",
         }

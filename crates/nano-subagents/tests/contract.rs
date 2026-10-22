@@ -75,6 +75,17 @@ fn one_shot_opens_read_only_and_unknown_resolves() {
         }))
         .unwrap();
     assert!(state.enter_dock(0));
+    // No official history read yet: the composer is resolving, not enabled.
+    assert_eq!(state.mounted_gate(), Some(ComposerGate::Resolving));
+    state
+        .apply_description(&json!({
+            "id": "one",
+            "parentId": "root",
+            "mode": "one-shot",
+            "activity": "inactive",
+            "parentLive": true
+        }))
+        .unwrap();
     assert_eq!(state.mounted_gate(), Some(ComposerGate::ReadOnly));
     state.exit();
 
@@ -163,9 +174,30 @@ fn terminal_reasons_map_to_lamps_and_unknown_stays_unproven() {
 
     lifecycle.apply(&LifecycleEvent::End {
         child_id: "a".into(),
+        reason: StopReason::parse("completed"),
+    });
+    assert_eq!(lifecycle.lamp(&running), Lamp::Completed);
+
+    lifecycle.apply(&LifecycleEvent::End {
+        child_id: "a".into(),
+        reason: StopReason::parse("error"),
+    });
+    assert_eq!(lifecycle.lamp(&running), Lamp::Error);
+
+    lifecycle.apply(&LifecycleEvent::End {
+        child_id: "a".into(),
         reason: StopReason::parse("future-reason"),
     });
     assert_eq!(lifecycle.lamp(&running), Lamp::Inactive);
+}
+
+#[test]
+fn blink_uses_the_eight_hundred_millisecond_period() {
+    let lifecycle = Lifecycle::new();
+    let now = Instant::now();
+    assert!(lifecycle.blink_on(now));
+    assert!(!lifecycle.blink_on(now + nano_subagents::BLINK_PERIOD / 2));
+    assert!(lifecycle.blink_on(now + nano_subagents::BLINK_PERIOD));
 }
 
 #[test]
@@ -173,7 +205,7 @@ fn cleanup_hides_only_the_dock_entry_after_the_delay() {
     let mut state = SubagentState::new("root");
     state
         .apply_snapshot(&json!({
-            "agents": [row("a", "continuable", "inactive")],
+            "agents": [row("a", "one-shot", "inactive")],
             "diagnostics": [],
             "parentLive": true
         }))
@@ -189,6 +221,55 @@ fn cleanup_hides_only_the_dock_entry_after_the_delay() {
     // The record is not deleted: a fresh snapshot or the all-agents list can
     // still find it.
     assert!(state.list_rows().iter().any(|row| row.id == "a"));
+}
+
+#[test]
+fn continuable_end_keeps_the_dock_entry_but_one_shot_end_hides_it() {
+    let mut state = SubagentState::new("root");
+    state
+        .apply_snapshot(&json!({
+            "agents": [
+                row("live", "continuable", "inactive"),
+                row("done", "one-shot", "inactive")
+            ],
+            "diagnostics": [],
+            "parentLive": true
+        }))
+        .unwrap();
+    state
+        .apply_event(&json!({"type": "end", "childId": "live", "stopReason": "completed"}))
+        .unwrap();
+    state
+        .apply_event(&json!({"type": "end", "childId": "done", "stopReason": "completed"}))
+        .unwrap();
+    assert!(state.cleanup(Instant::now() + CLEANUP_DELAY + Duration::from_millis(1)));
+    let (dock, _) = state.dock();
+    let ids: Vec<&str> = dock.iter().map(|row| row.id.as_str()).collect();
+    assert_eq!(ids, ["live"]);
+    // The one-shot record remains in the catalog/all-agents list.
+    assert!(state.list_rows().iter().any(|row| row.id == "done"));
+}
+
+#[test]
+fn last_turn_completed_never_paints_a_terminal_lamp() {
+    let mut state = SubagentState::new("root");
+    state
+        .apply_snapshot(&json!({
+            "agents": [{
+                "id": "a",
+                "parentId": "root",
+                "depth": 1,
+                "mode": "continuable",
+                "activity": "inactive",
+                "hasChildren": false,
+                "lastTurnCompleted": true
+            }],
+            "diagnostics": [],
+            "parentLive": true
+        }))
+        .unwrap();
+    let row = state.catalog().row("a").unwrap();
+    assert_eq!(state.lamp(row), Lamp::Inactive);
 }
 
 #[test]

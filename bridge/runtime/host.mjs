@@ -817,7 +817,7 @@ async function dispatchRequest(state, frame) {
       return undefined
     }
     case 'nano.subagents.interrupt': {
-      await sendResult(state, id, state.subagents.interrupt(params))
+      await sendResult(state, id, await state.subagents.interrupt(params))
       return undefined
     }
     case 'nano.approval.answer': {

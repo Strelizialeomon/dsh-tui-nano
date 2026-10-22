@@ -775,7 +775,7 @@
       "mode": "enum:continuable|one-shot|external|unknown",
       "label": "string?",
       "activity": "enum:running|inactive",
-      "hasChildren": "boolean",
+      "hasChildren": "boolean?",
       "lastTurnCompleted": "boolean?",
       "settledMs": "integer?",
       "activeSince": "integer?",
@@ -783,12 +783,12 @@
     },
     "subagentSnapshot": {
       "agents": "array:subagentRow",
-      "diagnostics": "array:object",
+      "diagnostics": "array:subagentDiagnostic",
       "parentLive": "boolean"
     },
     "subagentList": {
       "entries": "array:subagentRow",
-      "diagnostics": "array:object"
+      "diagnostics": "array:subagentDiagnostic"
     },
     "subagentDescription": {
       "id": "string",
@@ -799,10 +799,12 @@
       "parentLive": "boolean",
       "lastTurnCompleted": "boolean?",
       "settledMs": "integer?",
-      "seq": "integer?; next durable sequence for a local child session"
+      "seq": "integer?; next durable sequence for a local child session",
+      "activeSince": "integer?",
+      "activeThrough": "integer?"
     },
     "subagentEventPayload": {
-      "type": "enum:start|end|changed",
+      "type": "enum:start|end",
       "childId": "string",
       "parentSessionId": "string?",
       "provider": "string?",
@@ -840,6 +842,12 @@
       "writable": "boolean",
       "info": "terminalInfo",
       "snapshot": "string; bounded ANSI screen, including scrollback limits"
+    },
+    "subagentDiagnostic": {
+      "id": "string",
+      "reason": "string",
+      "parentId": "string?",
+      "depth": "integer?"
     }
   },
   "methods": [

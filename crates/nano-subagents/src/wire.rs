@@ -135,7 +135,7 @@ pub fn parse_row(value: &Value) -> Result<AgentRow, WireError> {
         has_children: value
             .get("hasChildren")
             .and_then(Value::as_bool)
-            .ok_or_else(|| WireError("row.hasChildren is missing".to_string()))?,
+            .unwrap_or(false),
         last_turn_completed: value.get("lastTurnCompleted").and_then(Value::as_bool),
         settled_ms: value.get("settledMs").and_then(Value::as_u64),
         active_since: value.get("activeSince").and_then(Value::as_u64),

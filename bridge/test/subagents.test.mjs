@@ -3,10 +3,15 @@
 // the official service surface the bridge is allowed to call.
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 
 import { SubagentsService } from '../subagents/service.mjs'
 
 const ROOT = 'root'
+
+function childFor(parent) {
+  return parent === ROOT ? 'child' : 'nested'
+}
 
 function fakeHub() {
   const published = []
@@ -330,7 +335,7 @@ test('prompt refuses a non-continuable address before calling the host', async (
   )
 })
 
-test('interrupt uses interruptByParent and never dispose', () => {
+test('interrupt uses interruptByParent and never dispose', async () => {
   const calls = []
   const subagents = {
     interruptByParent(child, parent, mode) {
@@ -339,7 +344,7 @@ test('interrupt uses interruptByParent and never dispose', () => {
     },
   }
   const { service } = serviceFor({ subagents })
-  const receipt = service.interrupt({
+  const receipt = await service.interrupt({
     address: {
       rootSessionId: ROOT,
       parentSessionId: ROOT,
@@ -389,6 +394,112 @@ test('assistant frames for known children use the child address', () => {
   assert.equal(stream.payload.address.childSessionId, 'child')
   assert.equal(stream.payload.address.parentSessionId, ROOT)
   assert.equal(stream.payload.address.mode, 'continuable')
+})
+
+test('a historical one-shot descriptor fixture stays read-only', async () => {
+  const fixture = JSON.parse(
+    fs.readFileSync(new URL('./fixtures/subagent-one-shot.json', import.meta.url), 'utf8'),
+  )
+  const subagents = {
+    async listChildren() {
+      return [{ id: 'finished', createdAt: 1, mode: 'one-shot', label: fixture.descriptor.label }]
+    },
+  }
+  const query = {
+    async observeSession() {
+      return observation(
+        { subagent: fixture.descriptor },
+        fixture.events,
+        fixture.events.length - 1,
+      )
+    },
+  }
+  const { service } = serviceFor({ subagents, query })
+  const described = await service.describe({
+    parentSessionId: ROOT,
+    childSessionId: 'finished',
+  })
+  assert.equal(described.mode, 'one-shot')
+  assert.equal(described.label, 'finished task')
+  // The replay path sees the recorded descriptor/history, not live input.
+  const replay = await query.observeSession('finished')
+  assert.deepEqual(
+    replay.events.map((event) => event.type),
+    ['subagent/descriptor', 'user/message', 'assistant/message', 'turn/end'],
+  )
+})
+
+test('describe and interrupt refuse a parent outside this host root', async () => {
+  const subagents = {
+    async listDescendants() {
+      return [{ kind: 'child', id: 'reachable', parentId: ROOT, depth: 1, mode: 'continuable', activity: 'inactive', hasChildren: false }]
+    },
+    async listChildren(parent) {
+      return [{ id: childFor(parent), createdAt: 1, mode: 'continuable' }]
+    },
+    interruptByParent() {
+      throw new Error('must not be called')
+    },
+  }
+  const { service } = serviceFor({ subagents })
+  await assert.rejects(
+    service.describe({ parentSessionId: 'foreign', childSessionId: 'child' }),
+    (error) => error.rpcName === 'nano/subagents/unauthorized',
+  )
+  await assert.rejects(
+    service.interrupt({
+      address: {
+        rootSessionId: ROOT,
+        parentSessionId: 'foreign',
+        childSessionId: 'child',
+        mode: 'continuable',
+      },
+    }),
+    (error) => error.rpcName === 'nano/subagents/unauthorized',
+  )
+})
+
+test('capacity refusals map to the capacity error', async () => {
+  const subagents = {
+    async listChildren() {
+      return [{ id: 'child', createdAt: 1, mode: 'continuable' }]
+    },
+    async prompt() {
+      const cause = new Error('limit')
+      cause.code = 'ACTIVATION_LIMIT_REACHED'
+      const error = new Error('temporarily unavailable')
+      error.code = 'subagent/delivery-unavailable'
+      error.cause = cause
+      throw error
+    },
+  }
+  const query = {
+    async observeSession() {
+      return observation({ subagent: { mode: 'continuable', label: 'child' } })
+    },
+  }
+  const attachments = {
+    resolveSubagentPrompt() {
+      return { parts: [{ type: 'text', text: 'hi' }], receipts: [] }
+    },
+    commit() {},
+    releasePrompt() {},
+  }
+  const { service } = serviceFor({ subagents, query, attachments })
+  await assert.rejects(
+    service.prompt({
+      address: {
+        rootSessionId: ROOT,
+        parentSessionId: ROOT,
+        childSessionId: 'child',
+        mode: 'continuable',
+      },
+      requestId: 'req-1',
+      delivery: 'queue',
+      content: [{ type: 'text', text: 'hi' }],
+    }),
+    (error) => error.rpcName === 'nano/subagents/capacity',
+  )
 })
 
 test('authorizeChild checks the parent catalog and mode agreement', async () => {

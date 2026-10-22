@@ -293,6 +293,16 @@ export class SubscriptionHub {
     if (!EVENT_KINDS.has(kind)) throw new Error(`unknown event kind ${kind}`)
     for (const subscription of this.subscriptions.values()) {
       if (subscription.closed || !subscription.kinds.includes(kind)) continue
+      // A child subscription only receives frames addressed to that exact
+      // child. Root subscriptions still receive all frames and route by the
+      // payload address in the client.
+      if (
+        subscription.address.childSessionId !== undefined &&
+        payload?.address !== undefined &&
+        payload.address.childSessionId !== subscription.address.childSessionId
+      ) {
+        continue
+      }
       this.deliver(subscription, payload, kind)
     }
   }

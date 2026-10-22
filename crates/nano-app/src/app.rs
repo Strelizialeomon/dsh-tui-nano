@@ -284,6 +284,8 @@ pub enum Pending {
     SubagentSubscribe {
         /// Address key the subscription serves.
         address_key: String,
+        /// Subscription generation; stale responses are released immediately.
+        generation: u64,
     },
     /// Release a child transcript subscription.
     SubagentUnsubscribe,
@@ -578,6 +580,10 @@ pub struct App {
     pub active_child_key: Option<String>,
     /// Open child session subscription.
     pub subagent_subscription: Option<String>,
+    /// Monotonic generation for in-flight child subscriptions.
+    pub subagent_subscribe_generation: u64,
+    /// Child prompt drafts kept per request id for address-correct restore.
+    pub subagent_backups: HashMap<String, (SessionAddress, SubmittedDraft)>,
     /// A snapshot request is in flight.
     pub subagents_snapshot_pending: bool,
     /// A snapshot was requested while one was in flight.
@@ -710,6 +716,8 @@ impl App {
             parent_view: None,
             active_child_key: None,
             subagent_subscription: None,
+            subagent_subscribe_generation: 0,
+            subagent_backups: HashMap::new(),
             subagents_snapshot_pending: false,
             subagents_snapshot_queued: false,
             subagent_list_loading: false,
@@ -883,6 +891,17 @@ impl App {
         self.active_child_key = Some(key);
         self.transcript_dirty = true;
         self.completion.clear();
+        // A child view owns the conversation surface: hidden root panels and
+        // focus owners must not keep consuming keys underneath it.
+        self.scene.focus_mut().reset(FocusId::input());
+        self.sessions_panel.close();
+        self.jobs_open = false;
+        self.panel.close();
+        self.picker = None;
+        self.schedule.close_view();
+        self.shell_confirm = None;
+        self.edit_target = None;
+        self.edit_backup = None;
         if !self.ready {
             // No live host means no live exact parent. Keep the view readable
             // and the composer read-only until a host is available again.
@@ -972,12 +991,15 @@ impl App {
             "kinds": ["session.event", "conversation.stream"],
             "fromSeq": from_seq,
         });
+        self.subagent_subscribe_generation = self.subagent_subscribe_generation.wrapping_add(1);
+        let generation = self.subagent_subscribe_generation;
         match link.request("nano.subscribe", params) {
             Ok(id) => {
                 self.pending.insert(
                     id,
                     Pending::SubagentSubscribe {
                         address_key: address.key(),
+                        generation,
                     },
                 );
             }
@@ -1103,12 +1125,19 @@ impl App {
             text: text.clone(),
             attachments: self.attachments.current().clone(),
         };
+        if let Some(model) = self.child_models.get_mut(&mounted.address.key()) {
+            model.track_submission(&request_id, &text, delivery);
+        }
         self.drafts.current_mut().take();
         self.attachments.current_mut().clear();
         self.completion.clear();
-        self.submit_backups.insert(request_id.clone(), snapshot);
+        self.subagent_backups
+            .insert(request_id.clone(), (mounted.address.clone(), snapshot));
         let Some(link) = &self.link else {
-            self.submit_backups.remove(&request_id);
+            self.restore_subagent_draft(&request_id);
+            if let Some(model) = self.child_models.get_mut(&mounted.address.key()) {
+                model.submit_failed(&request_id, "宿主连接已关闭");
+            }
             self.error = Some("宿主连接已关闭；子代理消息未发送".to_string());
             return;
         };
@@ -1122,10 +1151,42 @@ impl App {
                 );
             }
             Err(message) => {
-                if let Some(snapshot) = self.submit_backups.get(&request_id).cloned() {
-                    self.restore_draft(&request_id, &snapshot);
+                self.restore_subagent_draft(&request_id);
+                if let Some(model) = self.child_models.get_mut(&mounted.address.key()) {
+                    model.submit_failed(&request_id, message.clone());
                 }
                 self.error = Some(format!("子代理发送失败：{message}"));
+            }
+        }
+    }
+
+    /// Restore one failed child prompt to the address that sent it, even if
+    /// the user has already left that child view.
+    fn restore_subagent_draft(&mut self, request_id: &str) {
+        let Some((address, snapshot)) = self.subagent_backups.remove(request_id) else {
+            return;
+        };
+        let mut restored = false;
+        if let Some(draft) = self.drafts.get_mut(&address) {
+            let current = draft.text().to_string();
+            if current.is_empty() {
+                draft.set_text(snapshot.text.clone());
+            } else if !current.contains(&snapshot.text) {
+                draft.set_text(format!("{}\n\n{current}", snapshot.text));
+            }
+            restored = true;
+        }
+        if let Some(attachments) = self.attachments.get_mut(&address) {
+            if attachments.is_empty() {
+                *attachments = snapshot.attachments.clone();
+            }
+            restored = true;
+        }
+        if !restored {
+            // The address was never switched in (rare teardown race); keep the
+            // text visible on the current draft rather than losing it.
+            if self.drafts.current().is_empty() {
+                self.drafts.current_mut().set_text(snapshot.text.clone());
             }
         }
     }
@@ -1707,7 +1768,16 @@ impl App {
         if let Some(handled) = self.handle_child_key(key) {
             return handled;
         }
-        if self.decisions.top().is_some() {
+        if key.modifiers.contains(KeyModifiers::ALT)
+            && matches!(key.code, KeyCode::Char('l') | KeyCode::Char('L'))
+            && !self.subagent_active()
+            && self.drafts.current().is_blank()
+        {
+            // Always reachable, even after every dock entry has aged out.
+            self.enter_subagent_overflow();
+            return true;
+        }
+        if !self.subagent_active() && self.decisions.top().is_some() {
             if let Some(mapped) = decision_key(key) {
                 self.clear_transient_status();
                 self.decisions.handle_key(mapped);
@@ -1951,7 +2021,7 @@ impl App {
         {
             return true;
         }
-        if self.decision_owns_seat() {
+        if !self.subagent_active() && self.decision_owns_seat() {
             self.clear_transient_status();
             return self.decisions.paste(&text);
         }
@@ -2368,7 +2438,10 @@ impl App {
                 // If the mounted child's direct parent settled, its liveness
                 // may have changed; re-read the official description instead
                 // of keeping a stale enabled composer.
-                if payload.get("type").and_then(Value::as_str) == Some("end") {
+                if matches!(
+                    payload.get("type").and_then(Value::as_str),
+                    Some("start") | Some("end")
+                ) {
                     let description = self.subagents.mounted().and_then(|mounted| {
                         let child = mounted.address.child.as_ref()?;
                         Some((
@@ -2936,27 +3009,61 @@ impl App {
                         .get("accepted")
                         .and_then(Value::as_bool)
                         .unwrap_or(false);
+                    let message_id = value
+                        .get("messageId")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let address = self
+                        .subagent_backups
+                        .get(&request_id)
+                        .map(|(address, _)| address.clone());
                     if accepted {
-                        self.submit_backups.remove(&request_id);
+                        self.subagent_backups.remove(&request_id);
+                        if let Some(address) = &address {
+                            if let Some(model) = self.child_models.get_mut(&address.key()) {
+                                model.submit_accepted(&request_id, &message_id, false);
+                            }
+                        }
                         self.notice =
                             Some("子代理消息已被官方收件箱接受（回执不等于已执行）".to_string());
-                    } else if let Some(snapshot) = self.submit_backups.get(&request_id).cloned() {
-                        self.restore_draft(&request_id, &snapshot);
+                    } else {
+                        if let Some(address) = &address {
+                            if let Some(model) = self.child_models.get_mut(&address.key()) {
+                                model.submit_failed(&request_id, "官方未接受");
+                            }
+                        }
+                        self.restore_subagent_draft(&request_id);
                         self.error = Some("官方未接受子代理消息；草稿已恢复".to_string());
                     }
                 }
                 Err(error)
                     if matches!(error.kind, RequestErrorKind::Rpc | RequestErrorKind::Local) =>
                 {
-                    if let Some(snapshot) = self.submit_backups.get(&request_id).cloned() {
-                        self.restore_draft(&request_id, &snapshot);
+                    let address = self
+                        .subagent_backups
+                        .get(&request_id)
+                        .map(|(address, _)| address.clone());
+                    self.restore_subagent_draft(&request_id);
+                    if let Some(address) = address {
+                        if let Some(model) = self.child_models.get_mut(&address.key()) {
+                            model.submit_failed(&request_id, error.message.clone());
+                        }
                     }
                     self.error = Some(format!("子代理发送失败：{}", error.message));
                 }
-                Err(_) => {
+                Err(error) => {
                     // The prompt may have reached the child. Keep the draft
                     // cleared and never retry with a new requestId.
-                    self.submit_backups.remove(&request_id);
+                    let address = self
+                        .subagent_backups
+                        .remove(&request_id)
+                        .map(|(address, _)| address);
+                    if let Some(address) = address {
+                        if let Some(model) = self.child_models.get_mut(&address.key()) {
+                            model.submit_unknown(&request_id, error.message);
+                        }
+                    }
                     self.notice =
                         Some("子代理发送结果未知；草稿未回滚，也不会自动重发".to_string());
                 }
@@ -2969,16 +3076,38 @@ impl App {
                 }
                 Err(error) => self.error = Some(format!("子代理停止失败：{}", error.message)),
             },
-            Pending::SubagentSubscribe { address_key } => match result {
+            Pending::SubagentSubscribe {
+                address_key,
+                generation,
+            } => match result {
                 Ok(value) => {
+                    let subscription_id = value
+                        .get("subscriptionId")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    let current = generation == self.subagent_subscribe_generation
+                        && self.active_child_key.as_deref() == Some(address_key.as_str());
+                    if !current {
+                        // The view moved or re-subscribed while this request was
+                        // in flight. Release the stale subscription instead of
+                        // leaking a second live stream.
+                        if let Some(subscription_id) = subscription_id {
+                            if let Some(link) = &self.link {
+                                if let Ok(id) = link.request(
+                                    "nano.unsubscribe",
+                                    json!({ "subscriptionId": subscription_id }),
+                                ) {
+                                    self.pending.insert(id, Pending::SubagentUnsubscribe);
+                                }
+                            }
+                        }
+                        return;
+                    }
                     if let Some(model) = self.child_models.get_mut(&address_key) {
                         let seq = value.get("seq").and_then(Value::as_u64).unwrap_or(0);
                         model.apply_replay_baseline(seq, false);
                     }
-                    self.subagent_subscription = value
-                        .get("subscriptionId")
-                        .and_then(Value::as_str)
-                        .map(str::to_string);
+                    self.subagent_subscription = subscription_id;
                     self.transcript_dirty = true;
                 }
                 Err(error) => {
@@ -3654,6 +3783,11 @@ impl App {
 
     /// Ask the host for `@file` candidates for the current token.
     fn refresh_completion(&mut self) {
+        if self.subagent_active() {
+            // Child prompts do not expose the root-only file-reference path.
+            self.cancel_completion();
+            return;
+        }
         if !self.ready || self.edit_target.is_some() || !self.file_references_supported() {
             self.cancel_completion();
             return;
@@ -5457,7 +5591,10 @@ impl App {
         {
             return Some(self.leave_subagent());
         }
-        if key.code == KeyCode::Char('k') && key.modifiers.is_empty() && blank && gate.can_stop() {
+        if key.code == KeyCode::Char('k')
+            && key.modifiers.contains(KeyModifiers::ALT)
+            && gate.can_stop()
+        {
             self.stop_mounted_subagent();
             return Some(true);
         }
@@ -5692,6 +5829,10 @@ impl App {
     /// fact, plus a transient hint. A failed controls read marks the retained
     /// permission value as possibly stale.
     pub fn status_line(&self) -> String {
+        if self.subagent_active() {
+            let hint = self.status_hint();
+            return format!("{} · 子代理（审批由官方拒绝） · {hint}", self.display_cwd());
+        }
         let stale = if self.controls.state_error().is_some() {
             "（可能过期）"
         } else {
@@ -5737,7 +5878,23 @@ impl App {
         if self.switch.busy() {
             return self.switch.state().label();
         }
-        if self.subagent_active() {
+        if self.subagent_active()
+            && !self.schedule.open
+            && !self.sessions_panel.open
+            && !self.jobs_open
+            && !self.panel.is_open()
+            && !self.skills_panel_open()
+            && !self.instructions_panel_open()
+        {
+            if let Some(error) = &self.error {
+                return format!("子代理错误：{error}");
+            }
+            if let Some(notice) = &self.notice {
+                return notice.clone();
+            }
+            if self.decisions.top().is_some() {
+                return "根会话有待处理审批；Esc 返回后处理".to_string();
+            }
             if let Some(gate) = self.subagents.mounted_gate() {
                 return format!("子代理 · {}", gate.hint());
             }
@@ -6146,6 +6303,8 @@ impl App {
         self.parent_view = None;
         self.active_child_key = None;
         self.subagent_subscription = None;
+        self.subagent_subscribe_generation = 0;
+        self.subagent_backups.clear();
         self.subagents_snapshot_pending = false;
         self.subagents_snapshot_queued = false;
         self.subagent_list_loading = false;
@@ -8847,6 +9006,122 @@ mod terminal_tests {
     }
 
     #[test]
+    fn describe_window_never_sends_or_shows_the_parent_draft() {
+        let mut app = app();
+        install_subagents(&mut app, json!([subagent_row("child", "continuable")]));
+        let root = SessionAddress::root("root".to_string());
+        app.drafts.current_mut().set_text("parent draft");
+        assert!(app.enter_subagent(0));
+        assert_eq!(app.subagents.mounted_gate(), Some(ComposerGate::Resolving));
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        // The child address is not usable before its history is confirmed.
+        assert_eq!(app.drafts.current().text(), "parent draft");
+        assert!(app.subagent_backups.is_empty());
+        app.apply_subagent_description(&describe_child("child", "continuable"));
+        assert_eq!(app.subagents.mounted_gate(), Some(ComposerGate::Enabled));
+        assert_eq!(app.drafts.current().text(), "");
+        assert_eq!(
+            app.drafts.get(&root).map(|draft| draft.text()),
+            Some("parent draft")
+        );
+    }
+
+    #[test]
+    fn child_k_types_normally_and_alt_k_stops() {
+        let mut app = app();
+        install_subagents(&mut app, json!([subagent_row("child", "continuable")]));
+        assert!(app.enter_subagent(0));
+        app.apply_subagent_description(&describe_child("child", "continuable"));
+        app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+        assert_eq!(app.drafts.current().text(), "k");
+        // Alt+K is the independent stop; with no host it is a no-op and must
+        // not consume or alter the draft.
+        app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::ALT));
+        assert_eq!(app.drafts.current().text(), "k");
+    }
+
+    #[test]
+    fn child_status_line_surfaces_errors_and_hides_root_permission() {
+        let mut app = app();
+        install_subagents(&mut app, json!([subagent_row("child", "continuable")]));
+        assert!(app.enter_subagent(0));
+        app.apply_subagent_description(&describe_child("child", "continuable"));
+        app.error = Some("官方拒绝".to_string());
+        let hint = app.status_hint();
+        assert!(hint.contains("子代理错误"));
+        assert!(hint.contains("官方拒绝"));
+        app.error = None;
+        let line = app.status_line();
+        assert!(line.contains("子代理（审批由官方拒绝）"));
+        assert!(!line.contains("workspace-write"));
+    }
+
+    #[test]
+    fn alt_l_opens_the_all_agents_list_even_when_the_dock_is_empty() {
+        let mut app = app();
+        app.handle_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::ALT));
+        assert!(app.subagents.nav().list_open);
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.subagents.nav().list_open);
+    }
+
+    #[test]
+    fn a_stale_subscribe_response_is_released() {
+        let mut app = app();
+        app.subagent_subscribe_generation = 2;
+        app.active_child_key = Some("child:root:root:child:continuable".to_string());
+        app.pending.insert(
+            7,
+            Pending::SubagentSubscribe {
+                address_key: "old".to_string(),
+                generation: 1,
+            },
+        );
+        app.handle_request_done(7, Ok(json!({ "subscriptionId": "stale" })));
+        assert!(app.subagent_subscription.is_none());
+    }
+
+    #[test]
+    fn failed_child_prompt_restores_the_sending_address_draft() {
+        let mut app = app();
+        install_subagents(&mut app, json!([subagent_row("child", "continuable")]));
+        assert!(app.enter_subagent(0));
+        app.apply_subagent_description(&describe_child("child", "continuable"));
+        let address = app.subagents.mounted().unwrap().address.clone();
+        app.drafts.current_mut().set_text("lost text");
+        app.subagent_backups.insert(
+            "req-1".to_string(),
+            (
+                address.clone(),
+                SubmittedDraft {
+                    text: "lost text".to_string(),
+                    attachments: ComposerAttachments::default(),
+                },
+            ),
+        );
+        app.drafts.current_mut().take();
+        assert!(app.leave_subagent());
+        app.restore_subagent_draft("req-1");
+        assert_eq!(
+            app.drafts.get(&address).map(|draft| draft.text()),
+            Some("lost text")
+        );
+        assert_eq!(app.drafts.current().text(), "");
+    }
+
+    #[test]
+    fn mounting_a_child_clears_hidden_root_focus_owners() {
+        let mut app = app();
+        install_subagents(&mut app, json!([subagent_row("child", "continuable")]));
+        app.jobs_open = true;
+        app.sessions_panel.open = true;
+        assert!(app.enter_subagent(0));
+        assert!(app.scene.focus().input_focused());
+        assert!(!app.jobs_open);
+        assert!(!app.sessions_panel.open);
+    }
+
+    #[test]
     fn one_shot_child_is_read_only_and_swallows_typing() {
         let mut app = app();
         install_subagents(&mut app, json!([subagent_row("old", "one-shot")]));
@@ -8920,9 +9195,9 @@ mod terminal_tests {
     #[test]
     fn terminal_cleanup_hides_the_dock_entry_but_not_the_open_view() {
         let mut app = app();
-        install_subagents(&mut app, json!([subagent_row("child", "continuable")]));
+        install_subagents(&mut app, json!([subagent_row("child", "one-shot")]));
         assert!(app.enter_subagent(0));
-        app.apply_subagent_description(&describe_child("child", "continuable"));
+        app.apply_subagent_description(&describe_child("child", "one-shot"));
         app.subagents
             .apply_event(&json!({
                 "type": "end",

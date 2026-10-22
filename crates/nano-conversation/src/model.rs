@@ -381,6 +381,14 @@ impl ConversationModel {
         })
     }
 
+    /// Track one submission that S12 sent through the subagent continuation
+    /// path. The local echo and the accepted/failed/unknown transitions use
+    /// the same S02 state machine as root submissions.
+    pub fn track_submission(&mut self, request_id: &str, text: &str, delivery: Delivery) {
+        self.submissions
+            .begin(request_id.to_string(), text.to_string(), delivery);
+    }
+
     /// The host accepted the submission.
     pub fn submit_accepted(&mut self, request_id: &str, message_id: &str, duplicate: bool) {
         self.submissions.accepted(request_id, message_id, duplicate);
