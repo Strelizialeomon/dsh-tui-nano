@@ -1,7 +1,7 @@
 # [2026-10-22-nano-visual-followup] 视觉与输入反馈收尾
 
 - 组标识：`2026-10-22-nano-visual-followup`；角色：单份 spec（不拆），同时承担总纲与执行规格。
-- 状态：草案（待合入）；执行单：待开。
+- 状态：已合入（PR #42）；执行单：#45（代码已合，PR #50 `77ba43d`；剩余证据见 `docs/evidence/2026-10-22-visual-followup/README.md`）。
 - 上游：`2026-10-22-nano-visual-v1` 第一批已合并；`2026-10-20-nano-v1` 的 S02/S12 已合并实现。
 - 下游：无。
 - 合入前提：本 spec 合并后开执行 issue；实施需真实 Ghostty 证据、现有测试全绿，并逐项核对本 spec §4。
@@ -256,3 +256,4 @@ N 只数**本地直接子代理**：含 Running 与尚未到 30 秒清理的终�
 - 2026-10-22：第二轮 6 条全部按上表修订。
 - 2026-10-22：实施发现视觉第二批（#48）已先落地 `NANO_THEME`/`DiffTheme` 读取；本单复用 `DiffTheme` 选择 dock 焦点底色，不新增第二个读取。长期决定已落 ADR：`docs/decisions/2026-10-22-input-history.md`、`docs/decisions/2026-10-22-subagent-dock-lifecycle.md`、`docs/decisions/2026-10-22-nano-theme-scope.md`。
 - 2026-10-22：实施期轻审修订（PR #50）：历史窗口按项目匹配反向扫描、粘贴/队列编辑退出浏览、历史行单次 append、external 不进 dock、队列编辑不写历史。spec 正文口径不变，澄清落在 ADR 与 PR #50。
+- 2026-10-22：实施 PR #50 已合入（`77ba43d`）；issue #45 保持打开，等 Ghostty 标题/块间距、100 列运行中帧、子代理输入 PTY 证据补齐后关单。
