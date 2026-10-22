@@ -365,7 +365,6 @@ if let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: An
         "checks": checks,
         "mockRequests": MockModel.count,
     }
-    (out / "ghostty-evidence.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2))
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     shutil.rmtree(root, ignore_errors=True)
     return 0 if summary["ok"] else 2

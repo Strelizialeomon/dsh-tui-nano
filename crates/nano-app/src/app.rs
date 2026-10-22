@@ -6402,12 +6402,11 @@ impl App {
         let _ = file.write_all(line.as_bytes());
     }
 
-    /// Newest-first window of this project's prompts. Reads backwards in
-    /// chunks and counts matching project records (not raw lines) until 100
-    /// are found or the byte cap is reached.
+    /// Newest-first window of this project's prompts. Reads at most the final
+    /// 8 MiB once, then scans from the end and counts matching project records
+    /// (not raw lines) until 100 are found.
     fn history_window(path: &std::path::Path, project: &str, session: &str) -> Vec<(bool, String)> {
-        const CHUNK: u64 = 64 * 1024;
-        const BYTE_CAP: usize = 8 * 1024 * 1024;
+        const BYTE_CAP: u64 = 8 * 1024 * 1024;
         const LIMIT: usize = 100;
         let Ok(mut file) = File::open(path) else {
             return Vec::new();
@@ -6415,44 +6414,36 @@ impl App {
         let Ok(length) = file.metadata().map(|metadata| metadata.len()) else {
             return Vec::new();
         };
-        let mut tail: Vec<u8> = Vec::new();
-        let mut position = length;
-        loop {
-            let chunk = position.min(CHUNK);
-            position -= chunk;
-            let mut buffer = vec![0u8; chunk as usize];
-            if file.seek(SeekFrom::Start(position)).is_err()
-                || file.read_exact(&mut buffer).is_err()
-            {
-                return Vec::new();
+        let start = length.saturating_sub(BYTE_CAP);
+        if file.seek(SeekFrom::Start(start)).is_err() {
+            return Vec::new();
+        }
+        let mut buffer = vec![0u8; (length - start) as usize];
+        if file.read_exact(&mut buffer).is_err() {
+            return Vec::new();
+        }
+        let text = String::from_utf8_lossy(&buffer);
+        let mut window = Vec::new();
+        for line in text.lines().rev() {
+            let Ok(value) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            if value.get("project").and_then(Value::as_str) != Some(project) {
+                continue;
             }
-            buffer.extend_from_slice(&tail);
-            tail = buffer;
-            let text = String::from_utf8_lossy(&tail);
-            let mut window = Vec::new();
-            for line in text.lines().rev() {
-                let Ok(value) = serde_json::from_str::<Value>(line) else {
-                    continue;
-                };
-                if value.get("project").and_then(Value::as_str) != Some(project) {
-                    continue;
-                }
-                let Some(display) = value.get("display").and_then(Value::as_str) else {
-                    continue;
-                };
-                if display.trim().is_empty() {
-                    continue;
-                }
-                let current = value.get("sessionId").and_then(Value::as_str) == Some(session);
-                window.push((current, display.to_string()));
-                if window.len() >= LIMIT {
-                    break;
-                }
+            let Some(display) = value.get("display").and_then(Value::as_str) else {
+                continue;
+            };
+            if display.trim().is_empty() {
+                continue;
             }
-            if window.len() >= LIMIT || position == 0 || tail.len() >= BYTE_CAP {
-                return window;
+            let current = value.get("sessionId").and_then(Value::as_str) == Some(session);
+            window.push((current, display.to_string()));
+            if window.len() >= LIMIT {
+                break;
             }
         }
+        window
     }
 
     /// Root history: the project's submitted prompts from the file, newest
@@ -10918,9 +10909,34 @@ mod terminal_tests {
         install_subagents(&mut app, json!([subagent_row("old", "one-shot")]));
         assert!(app.enter_subagent(0));
         app.apply_subagent_description(&describe_child("old", "one-shot"));
-        app.drafts.current_mut().set_text("draft");
+        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::Event(
+            nano_runtime::protocol::EventParams {
+                runtime_id: "rt".into(),
+                generation: 1,
+                subscription_id: "sub-child".into(),
+                sequence: 1,
+                kind: "session.event".into(),
+                payload: json!({
+                    "address": {
+                        "rootSessionId": "root",
+                        "parentSessionId": "root",
+                        "childSessionId": "old",
+                        "mode": "one-shot"
+                    },
+                    "seq": 1,
+                    "type": "user/message",
+                    "data": {
+                        "id": "message-1",
+                        "role": "user",
+                        "content": [{"type": "text", "text": "child prompt"}],
+                        "source": {"kind": "user", "rpcId": "r-1"}
+                    }
+                }),
+            },
+        )));
+        assert!(app.drafts.current().is_blank());
         app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-        assert_eq!(app.drafts.current().text(), "draft");
+        assert!(app.drafts.current().is_blank());
         assert!(app.history_browse.is_none());
     }
 
