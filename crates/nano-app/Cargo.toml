@@ -23,6 +23,7 @@ nano-monitor = { path = "../nano-monitor" }
 nano-controls = { path = "../nano-controls" }
 nano-sessions = { path = "../nano-sessions" }
 nano-skills = { path = "../nano-skills" }
+nano-subagents = { path = "../nano-subagents" }
 serde_json = "1"
 crossterm = "0.28"
 ratatui = "0.29"

@@ -1,0 +1,202 @@
+{
+  "ok": true,
+  "checks": [
+    [
+      "connected",
+      true
+    ],
+    [
+      "dock pill",
+      true
+    ],
+    [
+      "dock row",
+      true
+    ],
+    [
+      "child header",
+      true
+    ],
+    [
+      "exit button",
+      true
+    ],
+    [
+      "child follow-up visible",
+      true
+    ],
+    [
+      "returned to parent",
+      true
+    ],
+    [
+      "clean exit",
+      true
+    ]
+  ],
+  "exit": 0
+}
+--- SCREEN dock ---
+ nano 已连接 · 运行中 · seq 24 · 队列 0 · ctx 未知 · 参考
+你
+只做一件事：调用 subagent 工具（不要指定 provider），label 设为 s12-tui，任务内容为「只回复一行 S12CHILD，不要调用任何工
+具」。等它返回后，用一句很短的话结束。
+
+上下文 · 点击展开
+<system-reminder>
+  … 还有 227 行 · 点击展开
+
+上下文 · 点击展开
+Current runtime context. This snapshot supersedes earlier runtime-context snapshots.
+  … 还有 9 行 · 点击展开
+
+上下文 · 点击展开
+<system-reminder>
+  … 还有 297 行 · 点击展开
+
+工具 subagent · 完成
+  started subagent b292ae11-a6cb-4d81-b823-f1f28c363e62
+
+助手（流式）
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 1 local agents · ↑↓ 选择 · Enter/→ 进入 · f transcript · k 停止 · l 全部 · Esc 返回 ───────────────────────────────────
+  ● s12-tui · 可续聊 · 运行中 · 153ms
+┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除附件 · Ctrl+J 换行 · Ctrl+┐
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+work · 权限 workspace-write · 已接收
+--- SCREEN child ---
+ nano 子代理 · s12-tui · 可输入                                                                                 [← 返回]
+你
+只回复一行 S12CHILD，不要调用任何工具Your parent agent id is "session-2b6361a1-161c-4a03-b810-5d8d1365c006". Before you
+finish, send your result to that agent with send_message({ agent_id: "session-2b6361a1-161c-4a03-b810-5d8d1365c006", mes
+sage: "<self-contained result>" }). The parent shares your workspace but does not automatically receive your transcript,
+ tool output, or reasoning. Send earlier messages as well when a finding changes what the parent should do next; sending
+ a message does not end your turn.
+
+上下文 · 点击展开
+<system-reminder>
+  … 还有 227 行 · 点击展开
+
+上下文 · 点击展开
+Current runtime context. This snapshot supersedes earlier runtime-context snapshots.
+  … 还有 19 行 · 点击展开
+
+上下文 · 点击展开
+<system-reminder>
+  … 还有 297 行 · 点击展开
+
+助手
+[reasoning][tool-call]
+
+工具 send_message · 完成
+  message delivered to agent session-2b6361a1-161c-4a03-b810-5d8d1365c006
+
+助手
+[reasoning]S12CHILD
+
+
+
+
+
+
+
+
+┌ 子代理 · Enter 发送 · Shift+Enter 换行 · Alt+K 停止本轮 · Esc 返回───────────────────────────────────────────────────┐
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+work · 子代理（审批由官方拒绝） · 子代理 · Enter 发送 · Shift+Enter 换行 · Alt+K 停止本轮 · Esc 返回
+--- SCREEN followup ---
+ nano 子代理 · s12-tui · 可输入                                                                                 [← 返回]
+你
+只回复一行 S12CHILD，不要调用任何工具Your parent agent id is "session-2b6361a1-161c-4a03-b810-5d8d1365c006". Before you
+finish, send your result to that agent with send_message({ agent_id: "session-2b6361a1-161c-4a03-b810-5d8d1365c006", mes
+sage: "<self-contained result>" }). The parent shares your workspace but does not automatically receive your transcript,
+ tool output, or reasoning. Send earlier messages as well when a finding changes what the parent should do next; sending
+ a message does not end your turn.
+
+上下文 · 点击展开
+<system-reminder>
+  … 还有 227 行 · 点击展开
+
+上下文 · 点击展开
+Current runtime context. This snapshot supersedes earlier runtime-context snapshots.
+  … 还有 19 行 · 点击展开
+
+上下文 · 点击展开
+<system-reminder>
+  … 还有 297 行 · 点击展开
+
+助手
+[reasoning][tool-call]
+
+工具 send_message · 完成
+  message delivered to agent session-2b6361a1-161c-4a03-b810-5d8d1365c006
+
+助手
+[reasoning]S12CHILD
+
+你
+请只回复一行 S12TUI，不要调用任何工具。
+
+助手（流式）
+
+
+
+┌ 子代理 · Enter 发送 · Shift+Enter 换行 · Alt+K 停止本轮 · Esc 返回───────────────────────────────────────────────────┐
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+work · 子代理（审批由官方拒绝） · 子代理消息已被官方收件箱接受（回执不等于已执行）
+--- SCREEN return ---
+ nano 已连接 · 运行中 · seq 31 · 队列 3 · ctx 19.6k/1000k (1%) · 参考 · 任务 1/1
+你
+只做一件事：调用 subagent 工具（不要指定 provider），label 设为 s12-tui，任务内容为「只回复一行 S12CHILD，不要调用任何工
+具」。等它返回后，用一句很短的话结束。
+
+上下文 · 点击展开
+<system-reminder>
+  … 还有 227 行 · 点击展开
+
+上下文 · 点击展开
+Current runtime context. This snapshot supersedes earlier runtime-context snapshots.
+  … 还有 9 行 · 点击展开
+
+上下文 · 点击展开
+<system-reminder>
+  … 还有 297 行 · 点击展开
+
+工具 subagent · 完成
+  started subagent b292ae11-a6cb-4d81-b823-f1f28c363e62
+
+助手
+[reasoning][tool-call]
+
+命令 等待结果 · Wait briefly for subagent
+› sleep 20; echo waited
+  （等待结果；没有来源时不显示假输出）
+  退出码未知
+
+
+
+ 队列 · 官方 inbox · 3 项（Alt+↑↓ 选择，Alt+E 编辑，Alt+D 删除，Alt+S 插话，Alt+X 清空并停止） ─────────────────────────
+▶ [待下一步] Agent b292ae11-a6cb-4d81-b823-f1f28c363e62 sent a message: S12CHILD
+  [待下一步] Background subagent b292ae11-a6cb-4d81-b823-f1f28c363e62 finished and will do no further work unless you se
+  [待下一步] Background subagent b292ae11-a6cb-4d81-b823-f1f28c363e62 finished and will do no further work unless you se
+ 1 local agents · ↑↓ 选择 · Enter/→ 进入 · f transcript · k 停止 · l 全部 · Esc 返回 ───────────────────────────────────
+  ● s12-tui · 可续聊 · 未运行 · 3.7s
+┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除附件 · Ctrl+J 换行 · Ctrl+┐
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+work · 权限 workspace-write · Enter 发送 · Alt+Enter 插话 · @ 引用文件 · Alt+A 附加 · Alt+←→ 排[4 · Alt+Backspace 移除…

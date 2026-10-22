@@ -18,7 +18,7 @@ use serde_json::Value;
 
 /// Every event kind this window subscribes to, in one place so the initial
 /// subscription and a later rebuild cannot drift apart.
-pub const SUBSCRIPTION_KINDS: [&str; 13] = [
+pub const SUBSCRIPTION_KINDS: [&str; 14] = [
     "session.event",
     "conversation.status",
     "conversation.inbox",
@@ -32,6 +32,7 @@ pub const SUBSCRIPTION_KINDS: [&str; 13] = [
     "decisions.approval",
     "decisions.question",
     "decisions.projection",
+    "subagents.event",
 ];
 
 /// How a request failed, for deciding whether a result is explicitly failed or

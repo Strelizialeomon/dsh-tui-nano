@@ -382,6 +382,38 @@
     {
       "code": 1061,
       "name": "nano/monitor/limit-reached"
+    },
+    {
+      "code": 1062,
+      "name": "nano/subagents/unavailable"
+    },
+    {
+      "code": 1063,
+      "name": "nano/subagents/unauthorized"
+    },
+    {
+      "code": 1064,
+      "name": "nano/subagents/not-resumable"
+    },
+    {
+      "code": 1065,
+      "name": "nano/subagents/parent-unavailable"
+    },
+    {
+      "code": 1066,
+      "name": "nano/subagents/delivery-unavailable"
+    },
+    {
+      "code": 1067,
+      "name": "nano/subagents/attachment-invalid"
+    },
+    {
+      "code": 1068,
+      "name": "nano/subagents/capacity"
+    },
+    {
+      "code": 1069,
+      "name": "nano/subagents/invalid"
     }
   ],
   "shapes": {
@@ -475,7 +507,7 @@
       "generation": "integer",
       "subscriptionId": "string",
       "sequence": "integer",
-      "kind": "enum:session.event|conversation.status|conversation.inbox|conversation.stream|schedule.changed|controls.model|controls.permission|sessions.context|skills.changed|instructions.changed|jobs.event|jobs.output|decisions.approval|decisions.question|decisions.projection|monitor.updated",
+      "kind": "enum:session.event|conversation.status|conversation.inbox|conversation.stream|schedule.changed|controls.model|controls.permission|sessions.context|skills.changed|instructions.changed|jobs.event|jobs.output|decisions.approval|decisions.question|decisions.projection|monitor.updated|subagents.event",
       "payload": "object"
     },
     "streamEnded": {
@@ -863,6 +895,55 @@
       "writable": "boolean",
       "info": "terminalInfo",
       "snapshot": "string; bounded ANSI screen, including scrollback limits"
+    },
+    "subagentRow": {
+      "id": "string",
+      "parentId": "string",
+      "depth": "integer",
+      "mode": "enum:continuable|one-shot|external|unknown",
+      "label": "string?",
+      "activity": "enum:running|inactive",
+      "hasChildren": "boolean?",
+      "lastTurnCompleted": "boolean?",
+      "settledMs": "integer?",
+      "activeSince": "integer?",
+      "activeThrough": "integer?"
+    },
+    "subagentSnapshot": {
+      "agents": "array:subagentRow",
+      "diagnostics": "array:subagentDiagnostic",
+      "parentLive": "boolean"
+    },
+    "subagentList": {
+      "entries": "array:subagentRow",
+      "diagnostics": "array:subagentDiagnostic"
+    },
+    "subagentDescription": {
+      "id": "string",
+      "parentId": "string",
+      "mode": "enum:continuable|one-shot|external|unknown",
+      "label": "string?",
+      "activity": "enum:running|inactive",
+      "parentLive": "boolean",
+      "lastTurnCompleted": "boolean?",
+      "settledMs": "integer?",
+      "seq": "integer?; next durable sequence for a local child session",
+      "activeSince": "integer?",
+      "activeThrough": "integer?"
+    },
+    "subagentDiagnostic": {
+      "id": "string",
+      "reason": "string",
+      "parentId": "string?",
+      "depth": "integer?"
+    },
+    "subagentEventPayload": {
+      "type": "enum:start|end",
+      "childId": "string",
+      "parentSessionId": "string?",
+      "provider": "string?",
+      "local": "boolean?",
+      "stopReason": "enum:completed|aborted|error|max-tokens|refusal|unknown?"
     }
   },
   "methods": [
@@ -2311,6 +2392,133 @@
           "monitor"
         ]
       }
+    },
+    {
+      "name": "nano.subagents.snapshot",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S12",
+      "status": "implemented",
+      "params": {
+        "required": [],
+        "optional": []
+      },
+      "result": {
+        "shape": "subagentSnapshot",
+        "required": [
+          "agents",
+          "diagnostics",
+          "parentLive"
+        ],
+        "optional": []
+      },
+      "paramsSemantics": {
+        "agents": "direct children of the host root session in parent catalog order; no child log body is read for membership"
+      }
+    },
+    {
+      "name": "nano.subagents.list",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S12",
+      "status": "implemented",
+      "params": {
+        "required": [],
+        "optional": []
+      },
+      "result": {
+        "shape": "subagentList",
+        "required": [
+          "entries",
+          "diagnostics"
+        ],
+        "optional": []
+      }
+    },
+    {
+      "name": "nano.subagents.describe",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S12",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "parentSessionId",
+          "childSessionId"
+        ],
+        "optional": []
+      },
+      "result": {
+        "shape": "subagentDescription",
+        "required": [
+          "id",
+          "parentId",
+          "mode",
+          "activity",
+          "parentLive"
+        ],
+        "optional": [
+          "label",
+          "lastTurnCompleted",
+          "settledMs",
+          "seq",
+          "activeSince",
+          "activeThrough"
+        ]
+      },
+      "paramsSemantics": {
+        "mode": "unknown catalog modes are resolved from the child's own official projection; no Agent is activated"
+      }
+    },
+    {
+      "name": "nano.subagents.prompt",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S12",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address",
+          "requestId",
+          "delivery",
+          "content"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "accepted",
+          "messageId"
+        ],
+        "optional": []
+      },
+      "paramsSemantics": {
+        "address": "child address with mode continuable; parentSessionId must own the live child",
+        "delivery": "enum:queue|steer",
+        "requestId": "client-minted business identity persisted on the accepted message"
+      }
+    },
+    {
+      "name": "nano.subagents.interrupt",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S12",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "accepted"
+        ],
+        "optional": []
+      },
+      "paramsSemantics": {
+        "address": "child address with mode continuable; only the current turn stops"
+      }
     }
   ],
   "eventKinds": [
@@ -2490,6 +2698,24 @@
           "address",
           "seq",
           "monitor"
+        ]
+      }
+    },
+    {
+      "kind": "subagents.event",
+      "owner": "S12",
+      "status": "implemented",
+      "payload": {
+        "shape": "subagentEventPayload",
+        "required": [
+          "type",
+          "childId"
+        ],
+        "optional": [
+          "parentSessionId",
+          "provider",
+          "local",
+          "stopReason"
         ]
       }
     }

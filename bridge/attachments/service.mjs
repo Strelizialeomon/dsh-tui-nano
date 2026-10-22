@@ -408,6 +408,93 @@ export class AttachmentService {
   }
 
   /**
+   * Resolve one S12 human continuation prompt. The official subagent prompt
+   * accepts raw image parts, not durable file receipts: images are copied from
+   * the staged receipt into the prompt, and generic files are refused before
+   * any admission. Receipts are bound to the same request identity so a
+   * successful continuation commits them and a rejection releases them.
+   * @param {object} address - child address the receipts belong to.
+   * @param {Array<object>} content - ordered wire content (`text` and `image` receipt blocks).
+   * @param {string} requestId - business identity of the prompt.
+   * @returns {{parts: Array<object>, receipts: Array<object>}} raw parts and bound receipts.
+   */
+  resolveSubagentPrompt(address, content, requestId) {
+    if (!Array.isArray(content) || content.length === 0) {
+      throw new RpcError('nano/conversation/empty', 'content must be a non-empty array')
+    }
+    this.assertAddress(address)
+    const parts = []
+    const receipts = []
+    let hasText = false
+    let textBytes = 0
+    for (const block of content) {
+      if (block === null || typeof block !== 'object' || Array.isArray(block)) {
+        throw new RpcError('nano/subagents/invalid', 'each content block must be an object')
+      }
+      if (block.type === 'text') {
+        if (typeof block.text !== 'string') {
+          throw new RpcError('nano/subagents/invalid', 'text blocks must carry a string')
+        }
+        if (block.text.trim() !== '') hasText = true
+        textBytes += Buffer.byteLength(block.text, 'utf8')
+        parts.push({ type: 'text', text: block.text })
+        continue
+      }
+      if (block.type === 'file') {
+        throw new RpcError(
+          'nano/subagents/attachment-invalid',
+          'generic files are rejected for subagent addresses; images only',
+          { reason: 'FILE_NOT_SUPPORTED' },
+        )
+      }
+      if (block.type !== 'image') {
+        throw new RpcError('nano/subagents/invalid', `content block type ${String(block.type)} is not supported`)
+      }
+      if (typeof block.receiptId !== 'string' || block.receiptId === '') {
+        throw new RpcError('nano/subagents/attachment-invalid', 'image blocks need a receiptId', {
+          reason: 'IMAGE_PART_INVALID',
+        })
+      }
+      const receipt = this.requireReceipt(block.receiptId)
+      this.assertSameAddress(receipt.address, address)
+      if (receipt.kind !== 'image') {
+        throw new RpcError(
+          'nano/subagents/attachment-invalid',
+          'generic files are rejected for subagent addresses; images only',
+          { reason: 'FILE_NOT_SUPPORTED' },
+        )
+      }
+      if (receipt.state === 'committed' || receipt.state === 'bound') {
+        throw new RpcError(
+          'nano/attachments/receipt-committed',
+          `receipt ${receipt.id} is already committed; it cannot be submitted again`,
+        )
+      }
+      if (receipt.state !== 'ready' || receipt.data === undefined) {
+        throw new RpcError('nano/attachments/receipt-incomplete', `receipt ${receipt.id} is not ready`)
+      }
+      parts.push({
+        type: 'image',
+        mediaType: receipt.mediaType,
+        data: receipt.data.toString('base64'),
+      })
+      receipts.push(receipt)
+    }
+    if (!hasText && receipts.length === 0) {
+      throw new RpcError('nano/conversation/empty', 'content needs non-whitespace text or an attachment')
+    }
+    if (textBytes > LIMITS.maxSubmitTextBytes) {
+      throw new RpcError(
+        'nano/conversation/too-large',
+        `content is ${String(textBytes)} bytes, over the ${String(LIMITS.maxSubmitTextBytes)} byte submission limit`,
+      )
+    }
+    for (const receipt of receipts) receipt.state = 'bound'
+    this.bindPrompt(requestId, receipts)
+    return { parts, receipts }
+  }
+
+  /**
    * Bind receipts to the request before the Agent sees the message, so a
    * synchronous inbox insertion can retire them.
    * @param {string} requestId - business identity of the pending prompt.

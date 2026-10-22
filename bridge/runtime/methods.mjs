@@ -59,6 +59,11 @@ export const IMPLEMENTED_REQUEST_METHODS = Object.freeze([
   'nano.terminal.detach',
   'nano.terminal.rename',
   'nano.terminal.close',
+  'nano.subagents.snapshot',
+  'nano.subagents.list',
+  'nano.subagents.describe',
+  'nano.subagents.prompt',
+  'nano.subagents.interrupt',
 ])
 
 /** Notifications this host can emit. */

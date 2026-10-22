@@ -15,6 +15,7 @@ use nano_decisions::{
 use nano_jobs::{BashRecord, BashState, JobStatus};
 use nano_schedule::RowKind;
 use nano_sessions::{format_clock, Occupancy};
+use nano_subagents::{ComposerGate, Lamp};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -35,16 +36,30 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_schedule(frame, app, area);
         return;
     }
-    let queue_height = if app.model.inbox().is_empty() {
+    let child_active = app.subagent_active();
+    let queue_height = if child_active || app.model.inbox().is_empty() {
         0
     } else {
         (app.model.inbox().len().min(4) as u16) + 1
     };
-    let decision = app.decision_owns_seat();
-    let completion_height = if !decision && app.completion.visible() && app.picker.is_none() {
-        (app.completion.candidates().len().min(6) as u16) + 1
+    // Root decision cards belong to the parent conversation and never take the
+    // child composer seat.
+    let decision = !child_active && app.decision_owns_seat();
+    let completion_height =
+        if !decision && !child_active && app.completion.visible() && app.picker.is_none() {
+            (app.completion.candidates().len().min(6) as u16) + 1
+        } else {
+            0
+        };
+    let (dock_rows, dock_overflow) = if child_active {
+        (Vec::new(), 0)
     } else {
+        app.subagents.dock()
+    };
+    let dock_height = if dock_rows.is_empty() && dock_overflow == 0 {
         0
+    } else {
+        (dock_rows.len() + usize::from(dock_overflow > 0)) as u16 + 1
     };
     let attachment_rows = if decision || app.picker.is_some() {
         0
@@ -69,14 +84,19 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             Constraint::Min(3),
             Constraint::Length(queue_height),
             Constraint::Length(completion_height),
+            Constraint::Length(dock_height),
             Constraint::Length(bottom_height),
             Constraint::Length(1),
         ])
         .split(area);
 
     draw_header(frame, app, layout[0]);
+    app.subagent_dock_area = Rect::default();
+    app.subagent_dock_hits.clear();
     if app.sessions_panel.open {
         draw_sessions(frame, app, layout[1]);
+    } else if app.subagents.nav().list_open {
+        draw_subagent_list(frame, app, layout[1]);
     } else if app.jobs_open {
         draw_jobs(frame, app, layout[1]);
     } else if app.skills_panel_open() {
@@ -92,14 +112,17 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if completion_height > 0 {
         draw_completion(frame, app, layout[3]);
     }
+    if dock_height > 0 {
+        draw_subagent_dock(frame, app, layout[4]);
+    }
     if decision {
-        draw_decision(frame, app, layout[4]);
+        draw_decision(frame, app, layout[5]);
     } else {
         app.decision_area = Rect::default();
         app.decision_hits.clear();
-        draw_input(frame, app, layout[4]);
+        draw_input(frame, app, layout[5]);
     }
-    draw_status(frame, app, layout[5], area.width);
+    draw_status(frame, app, layout[6], area.width);
     if app.panel.is_open() {
         draw_panel(frame, app, area);
     }
@@ -144,7 +167,58 @@ fn draw_terminal(frame: &mut Frame, app: &mut App, area: Rect) {
     );
 }
 
-fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
+    app.subagent_exit_area = Rect::default();
+    if let Some(mounted) = app.subagents.mounted() {
+        let gate = app
+            .subagents
+            .mounted_gate()
+            .unwrap_or(ComposerGate::Resolving);
+        let state = match gate {
+            ComposerGate::Enabled => "可输入",
+            ComposerGate::ReadOnly => "只读",
+            ComposerGate::StopOnly => "仅停止",
+            ComposerGate::Resolving => "读取历史中",
+            ComposerGate::NotNavigable => "不可进入",
+        };
+        let color = match gate {
+            ComposerGate::Enabled => Color::Green,
+            ComposerGate::StopOnly => Color::Yellow,
+            ComposerGate::ReadOnly | ComposerGate::NotNavigable => Color::DarkGray,
+            ComposerGate::Resolving => Color::Cyan,
+        };
+        let exit = "[← 返回]";
+        let exit_width = exit.chars().map(display_width).sum::<usize>();
+        // Reserve the exit button before truncating the task label so the
+        // header keeps a working exit at narrow widths.
+        let fixed = 6 + 6 + 3 + 3 + state.chars().map(display_width).sum::<usize>();
+        let label_room = (area.width as usize)
+            .saturating_sub(fixed + exit_width + 1)
+            .max(1);
+        let label = truncate(&safe_text(&mounted.label), label_room);
+        let mut spans = vec![
+            Span::styled(" nano ", Style::default().fg(Color::Black).bg(Color::Cyan)),
+            Span::styled("子代理", Style::default().fg(Color::Cyan)),
+            Span::raw(" · "),
+            Span::styled(label, Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(" · "),
+            Span::styled(state, Style::default().fg(color)),
+        ];
+        let used: usize = spans.iter().map(|span| span.width()).sum();
+        let room = (area.width as usize).saturating_sub(used + exit_width);
+        if room > 0 {
+            spans.push(Span::raw(" ".repeat(room)));
+        }
+        spans.push(Span::styled(exit, Style::default().fg(Color::DarkGray)));
+        app.subagent_exit_area = Rect::new(
+            area.x + area.width.saturating_sub(exit_width as u16),
+            area.y,
+            exit_width as u16,
+            1,
+        );
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+        return;
+    }
     let status_color = match app.connection {
         Connection::Ready => match app.model.status() {
             nano_conversation::ConversationStatus::Running => Color::Yellow,
@@ -507,11 +581,231 @@ fn short_clock(epoch_ms: u64) -> String {
     text.get(0..5).map(str::to_string).unwrap_or(text)
 }
 
+/// Bottom subagent dock: at most four direct children plus one overflow row.
+fn draw_subagent_dock(frame: &mut Frame, app: &mut App, area: Rect) {
+    let (rows, overflow) = app.subagents.dock();
+    app.subagent_dock_area = area;
+    app.subagent_dock_hits.clear();
+    let pill = format!("{} local agents", app.subagents.local_count());
+    let title =
+        format!(" {pill} · ↑↓ 选择 · Enter/→ 进入 · f transcript · k 停止 · l 全部 · Esc 返回 ");
+    let block = Block::default().borders(Borders::TOP).title(title);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let now = Instant::now();
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    let blink_on = app.reduced_motion || app.subagents.lifecycle().blink_on(now);
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for (index, row) in rows.iter().enumerate() {
+        let selected = app.subagents.nav().dock_focus && app.subagents.nav().dock_selected == index;
+        let marker = if selected { "▶" } else { " " };
+        let (dot, color) = lamp_glyph(app.subagents.lamp(row), blink_on);
+        let mut text = format!(
+            "{marker} {dot} {} · {} · {}",
+            safe_text(row.display_label()),
+            row.mode.label(),
+            row.activity.label()
+        );
+        if row.mode == nano_subagents::AgentMode::External {
+            text.push_str(" · 不可进入");
+        }
+        if let Some(duration) = row.duration_ms(now_ms) {
+            text.push_str(&format!(" · {}", format_duration_ms(duration)));
+        }
+        let style = if selected {
+            Style::default().fg(Color::Black).bg(Color::Cyan)
+        } else {
+            Style::default()
+        };
+        let dot_style = if selected {
+            style
+        } else {
+            Style::default().fg(color)
+        };
+        let label_start = marker.len() + 1;
+        let mut spans = Vec::new();
+        spans.push(Span::styled(
+            text[..label_start].to_string(),
+            if selected { style } else { Style::default() },
+        ));
+        spans.push(Span::styled(dot.to_string(), dot_style));
+        spans.push(Span::styled(
+            text[label_start + dot.len()..].to_string(),
+            style,
+        ));
+        lines.push(Line::from(spans));
+        app.subagent_dock_hits.push((index, inner.y + index as u16));
+    }
+    if overflow > 0 {
+        let selected =
+            app.subagents.nav().dock_focus && app.subagents.nav().dock_selected == rows.len();
+        let marker = if selected { "▶" } else { " " };
+        let style = if selected {
+            Style::default().fg(Color::Black).bg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        lines.push(Line::from(Span::styled(
+            format!("{marker} … 还有 {overflow} 个子代理"),
+            style,
+        )));
+        app.subagent_dock_hits
+            .push((rows.len(), inner.y + rows.len() as u16));
+    }
+    frame.render_widget(Paragraph::new(Text::from(lines)), inner);
+}
+
+/// All-agents list: recursive descendants with parent relationships and
+/// diagnostics for unreadable branches.
+fn draw_subagent_list(frame: &mut Frame, app: &mut App, area: Rect) {
+    let title = if app.subagent_list_loading {
+        " 全部子代理 · 读取中… · ↑↓ 选择 · r 刷新 · Esc 关闭 ".to_string()
+    } else {
+        " 全部子代理 · ↑↓ 选择 · Enter 进入 · r 刷新 · Esc 关闭 ".to_string()
+    };
+    let block = Block::default().borders(Borders::ALL).title(title);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    app.subagent_list_area = area;
+    let rows = app.subagents.list_rows();
+    let selected = app.subagents.nav().list_selected;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    let width = inner.width.max(1) as usize;
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if rows.is_empty() {
+        lines.push(Line::from(Span::styled(
+            if app.subagent_list_loading {
+                "正在读取官方子代理目录…"
+            } else {
+                "没有已知子代理。"
+            },
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    for (index, row) in rows.iter().enumerate() {
+        let indent = "  ".repeat(row.depth.saturating_sub(1) as usize);
+        let branch = if row.depth > 1 { "└ " } else { "" };
+        let mut text = format!(
+            "{indent}{branch}{} · {} · {}",
+            safe_text(row.display_label()),
+            row.mode.label(),
+            row.activity.label()
+        );
+        if row.mode == nano_subagents::AgentMode::External {
+            text.push_str(" · 不可进入");
+        }
+        if let Some(duration) = row.duration_ms(now_ms) {
+            text.push_str(&format!(" · {}", format_duration_ms(duration)));
+        }
+        if let Some(completed) = row.last_turn_completed {
+            if completed {
+                text.push_str(" · 上回合完成");
+            }
+        }
+        let style = if index == selected {
+            Style::default().fg(Color::Black).bg(Color::Cyan)
+        } else {
+            Style::default()
+        };
+        for segment in wrap_segments(&truncate(&text, width.saturating_mul(2)), width) {
+            lines.push(Line::from(Span::styled(segment.text, style)));
+        }
+    }
+    for diagnostic in app.subagents.diagnostics() {
+        let mut text = format!(
+            "! 读不到 {}: {}",
+            safe_text(&diagnostic.id),
+            safe_text(&diagnostic.reason)
+        );
+        if let Some(parent) = &diagnostic.parent_id {
+            text.push_str(&format!("（父 {}）", safe_text(parent)));
+        }
+        for segment in wrap_segments(&truncate(&text, width.saturating_mul(2)), width) {
+            lines.push(Line::from(Span::styled(
+                segment.text,
+                Style::default().fg(Color::Red),
+            )));
+        }
+    }
+    if let Some(error) = app.subagents.last_error() {
+        for segment in wrap_segments(&truncate(&safe_text(error), width.saturating_mul(2)), width) {
+            lines.push(Line::from(Span::styled(
+                segment.text,
+                Style::default().fg(Color::Red),
+            )));
+        }
+    }
+    let viewport = inner.height as usize;
+    let start = selected
+        .saturating_add(1)
+        .saturating_sub(viewport.max(1))
+        .min(lines.len().saturating_sub(viewport.max(1)));
+    let visible: Vec<Line<'static>> = lines.into_iter().skip(start).take(viewport).collect();
+    frame.render_widget(Paragraph::new(Text::from(visible)), inner);
+}
+
+/// Replace terminal control characters with a visible marker. Labels come
+/// from model/tool input and must never be able to inject escape sequences.
+fn safe_text(text: &str) -> String {
+    text.chars()
+        .map(|character| {
+            if character.is_control() {
+                '?'
+            } else {
+                character
+            }
+        })
+        .collect()
+}
+
+fn format_duration_ms(ms: u64) -> String {
+    if ms < 1000 {
+        format!("{ms}ms")
+    } else if ms < 60_000 {
+        format!("{:.1}s", ms as f64 / 1000.0)
+    } else {
+        format!("{}m{:02}s", ms / 60_000, (ms % 60_000) / 1000)
+    }
+}
+
+fn lamp_glyph(lamp: Lamp, blink_on: bool) -> (&'static str, Color) {
+    match lamp {
+        Lamp::Running => (
+            if blink_on { "●" } else { "○" },
+            if blink_on {
+                Color::Cyan
+            } else {
+                Color::DarkGray
+            },
+        ),
+        Lamp::Completed => ("●", Color::Green),
+        Lamp::Warned => ("●", Color::Yellow),
+        Lamp::Error => ("●", Color::Red),
+        Lamp::Inactive => ("●", Color::DarkGray),
+    }
+}
+
 fn draw_feed(frame: &mut Frame, app: &mut App, area: Rect) {
     app.feed_area = area;
     app.feed_height = area.height as usize;
-    if app.transcript_dirty || !app.model.previews().is_empty() {
-        app.view.sync(&app.model, Instant::now());
+    if app.transcript_dirty || !app.active_model().previews().is_empty() {
+        // The mounted child owns its own official model; the root model keeps
+        // its history and previews untouched while the child view is active.
+        if app.subagent_active() {
+            if let Some(key) = app.active_child_key.clone() {
+                if let Some(model) = app.child_models.get(&key) {
+                    app.view.sync(model, Instant::now());
+                }
+            }
+        } else {
+            app.view.sync(&app.model, Instant::now());
+        }
         app.transcript_dirty = false;
     }
     let render = app
@@ -521,7 +815,7 @@ fn draw_feed(frame: &mut Frame, app: &mut App, area: Rect) {
     let mut lines = render.lines;
     // Local `!` records are S08 display data until the official synthetic
     // message is durable. Show them only while following the bottom.
-    if app.view.scroll().sticky() && !app.bash_records.is_empty() {
+    if !app.subagent_active() && app.view.scroll().sticky() && !app.bash_records.is_empty() {
         let before = lines.len();
         for record in &app.bash_records {
             push_bash_record(&mut lines, record, area.width.max(1) as usize);
@@ -536,9 +830,14 @@ fn draw_feed(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     }
     if lines.is_empty() {
+        let empty = if app.subagent_active() {
+            "正在读取子代理历史…"
+        } else {
+            "输入消息后按 Enter 发送。"
+        };
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                "输入消息后按 Enter 发送。",
+                empty,
                 Style::default().fg(Color::DarkGray),
             ))),
             area,
@@ -2027,12 +2326,22 @@ fn draw_queue(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
+    let gate = if app.subagent_active() {
+        app.subagents
+            .mounted_gate()
+            .unwrap_or(ComposerGate::Resolving)
+    } else {
+        ComposerGate::Enabled
+    };
+    let sendable = gate.can_send();
     let title = if app.shell_confirm.is_some() {
         " 人工命令（用户权限，不是 Agent 授权）· Enter 执行，Esc 取消 ".to_string()
     } else if app.picker.is_some() {
         " 附加文件 · 输入路径，Enter 确认，Esc 取消 ".to_string()
     } else if let Some(message_id) = app.editing_queue() {
         format!(" 编辑队列项 {message_id} · Enter 应用，Esc 取消 ")
+    } else if app.subagent_active() {
+        format!(" 子代理 · {}", gate.hint())
     } else {
         " 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除附件 · Ctrl+J 换行 · Ctrl+T 任务 "
             .to_string()
@@ -2056,11 +2365,31 @@ fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
             lines.push(Line::from(Span::styled(text, Style::default().fg(color))));
         }
         cursor_row = lines.len();
-        let (row, column) = input_cursor(app, width);
-        cursor_row += row;
-        cursor_column = column;
-        for text in input_lines(app, width) {
-            lines.push(Line::from(text));
+        if sendable {
+            let (row, column) = input_cursor(app, width);
+            cursor_row += row;
+            cursor_column = column;
+            for text in input_lines(app, width) {
+                lines.push(Line::from(text));
+            }
+        } else {
+            cursor_column = 0;
+            let draft = app.drafts.current().text();
+            if gate == ComposerGate::Resolving {
+                lines.push(Line::from(Span::styled(
+                    "正在读取子代理历史以确认可续聊性…",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            } else if draft.trim().is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "只读记录 · 没有可用的输入框",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            } else {
+                for text in input_lines(app, width) {
+                    lines.push(Line::from(text));
+                }
+            }
         }
     }
     let viewport = inner.height as usize;
@@ -2072,7 +2401,7 @@ fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
     let visible: Vec<Line<'static>> = lines.into_iter().skip(offset).take(viewport).collect();
     frame.render_widget(block, area);
     frame.render_widget(Paragraph::new(Text::from(visible)), inner);
-    if app.scene.focus().input_focused() && !app.panel.is_open() && viewport > 0 {
+    if sendable && app.scene.focus().input_focused() && !app.panel.is_open() && viewport > 0 {
         let row = cursor_row
             .saturating_sub(offset)
             .min(viewport.saturating_sub(1));
@@ -2086,6 +2415,11 @@ fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
 
 /// Attachment card lines shown above the input text.
 fn attachment_lines(app: &App) -> Vec<(String, Color)> {
+    if app.subagent_active() && app.subagents.mounted_gate() == Some(ComposerGate::Resolving) {
+        // The parent attachment draft must not appear in a child view before
+        // the child's own address and draft are installed.
+        return Vec::new();
+    }
     if app.editing_queue().is_some() {
         // Queue edits carry only text; the draft's attachments stay in memory
         // but are not part of this edit.
@@ -2160,7 +2494,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect, width: u16) {
     } else {
         Style::default().fg(Color::DarkGray)
     };
-    let text = truncate(&hint, width as usize);
+    let text = truncate(&safe_text(&hint), width as usize);
     frame.render_widget(Paragraph::new(Line::from(Span::styled(text, style))), area);
 }
 

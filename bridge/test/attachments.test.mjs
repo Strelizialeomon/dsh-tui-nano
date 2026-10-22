@@ -213,6 +213,46 @@ test('subagent addresses accept images but reject generic files', () => {
   assert.equal(image.kind, 'image')
 })
 
+test('subagent prompts resolve images to raw parts and bind receipts', async () => {
+  const { service, store } = serviceFor()
+  const child = { rootSessionId: ROOT, parentSessionId: ROOT, childSessionId: 'child', mode: 'continuable' }
+  service.begin({
+    address: child,
+    receiptId: 'child-image',
+    kind: 'image',
+    mediaType: 'image/png',
+  })
+  service.chunk({ receiptId: 'child-image', sequence: 0, bytes: 'AAED' })
+  await service.finish({ receiptId: 'child-image' })
+  const resolved = service.resolveSubagentPrompt(
+    child,
+    [
+      { type: 'text', text: 'look' },
+      { type: 'image', receiptId: 'child-image' },
+    ],
+    'child-req',
+  )
+  assert.equal(resolved.parts[0].type, 'text')
+  assert.deepEqual(resolved.parts[1], {
+    type: 'image',
+    mediaType: 'image/png',
+    data: 'AAED',
+  })
+  assert.equal(resolved.receipts.length, 1)
+  assert.equal(store.admitted.length, 0)
+  service.commit('child-req', resolved.receipts)
+  assert.equal(service.receipts.get('child-image').state, 'committed')
+})
+
+test('subagent prompts refuse generic file blocks before admission', () => {
+  const { service } = serviceFor()
+  const child = { rootSessionId: ROOT, parentSessionId: ROOT, childSessionId: 'child', mode: 'continuable' }
+  assert.throws(
+    () => service.resolveSubagentPrompt(child, [{ type: 'file', receiptId: 'f' }], 'child-req'),
+    (error) => error.code === 1067,
+  )
+})
+
 test('receipt ids and names cannot smuggle local paths', () => {
   const { service } = serviceFor()
   assert.throws(

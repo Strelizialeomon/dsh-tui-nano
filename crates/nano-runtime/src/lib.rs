@@ -81,7 +81,7 @@ pub const LIFECYCLE_TRANSITIONS: [(&str, &str); 15] = [
 ];
 
 /// Error code names shared with the bridge contract.
-pub const ERROR_CODE_NAMES: [(&str, i64); 66] = [
+pub const ERROR_CODE_NAMES: [(&str, i64); 74] = [
     ("jsonrpc/parse-error", -32700),
     ("jsonrpc/invalid-request", -32600),
     ("jsonrpc/method-not-found", -32601),
@@ -148,10 +148,18 @@ pub const ERROR_CODE_NAMES: [(&str, i64); 66] = [
     ("nano/monitor/filter-invalid", 1059),
     ("nano/monitor/budget-invalid", 1060),
     ("nano/monitor/limit-reached", 1061),
+    ("nano/subagents/unavailable", 1062),
+    ("nano/subagents/unauthorized", 1063),
+    ("nano/subagents/not-resumable", 1064),
+    ("nano/subagents/parent-unavailable", 1065),
+    ("nano/subagents/delivery-unavailable", 1066),
+    ("nano/subagents/attachment-invalid", 1067),
+    ("nano/subagents/capacity", 1068),
+    ("nano/subagents/invalid", 1069),
 ];
 
 /// Method names implemented by this generation.
-pub const IMPLEMENTED_METHODS: [&str; 65] = [
+pub const IMPLEMENTED_METHODS: [&str; 70] = [
     "nano.hello",
     "nano.startupError",
     "nano.shutdown",
@@ -217,6 +225,11 @@ pub const IMPLEMENTED_METHODS: [&str; 65] = [
     "nano.terminal.state",
     "nano.terminal.ack",
     "nano.terminal.ended",
+    "nano.subagents.snapshot",
+    "nano.subagents.list",
+    "nano.subagents.describe",
+    "nano.subagents.prompt",
+    "nano.subagents.interrupt",
 ];
 /// Host-to-client terminal notifications understood by this client.
 pub const TERMINAL_NOTIFICATION_METHODS: [&str; 4] = [
@@ -227,7 +240,7 @@ pub const TERMINAL_NOTIFICATION_METHODS: [&str; 4] = [
 ];
 
 /// Event kinds this client accepts.
-pub const EVENT_KINDS: [&str; 16] = [
+pub const EVENT_KINDS: [&str; 17] = [
     "session.event",
     "conversation.status",
     "conversation.inbox",
@@ -244,6 +257,7 @@ pub const EVENT_KINDS: [&str; 16] = [
     "decisions.question",
     "decisions.projection",
     "monitor.updated",
+    "subagents.event",
 ];
 
 /// Shutdown report step names, in report order.

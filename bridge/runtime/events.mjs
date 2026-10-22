@@ -21,9 +21,20 @@ export class SubscriptionHub {
    *   session: object,
    *   nonce: string,
    *   nonceRequired: boolean,
+   *   authorizeChild?: (address: object) => Promise<object>,
    * }} options - host wiring.
    */
-  constructor({ ctx, writer, runtimeId, generation, rootSessionId, session, nonce, nonceRequired }) {
+  constructor({
+    ctx,
+    writer,
+    runtimeId,
+    generation,
+    rootSessionId,
+    session,
+    nonce,
+    nonceRequired,
+    authorizeChild,
+  }) {
     this.ctx = ctx
     this.writer = writer
     this.runtimeId = runtimeId
@@ -32,6 +43,7 @@ export class SubscriptionHub {
     this.session = session
     this.nonce = nonce
     this.nonceRequired = nonceRequired
+    this.authorizeChild = authorizeChild
     this.subscriptions = new Map()
     this.counter = 0
     this.closed = false
@@ -47,10 +59,10 @@ export class SubscriptionHub {
     if (this.closed) throw new RpcError('nano/closed', 'host is shutting down')
     const { address, kinds, fromSeq } = params
     if (signal?.aborted) throw new RpcError('nano/cancelled', 'subscription was cancelled')
-    validateAddress(address, this.rootSessionId)
+    const target = await this.resolveAddress(address)
     validateKinds(kinds)
 
-    const baseline = this.session.seq
+    const baseline = target.baseline
     const start = fromSeq === undefined ? baseline : fromSeq
     if (!Number.isInteger(start) || start < 0) {
       throw new RpcError('jsonrpc/invalid-params', 'fromSeq must be a non-negative integer')
@@ -67,7 +79,7 @@ export class SubscriptionHub {
 
     const subscription = {
       id: `sub-${String(++this.counter)}-${randomBytes(4).toString('hex')}`,
-      address: { rootSessionId: this.rootSessionId },
+      address: target.address,
       sequence: 0,
       paused: true,
       buffer: [],
@@ -77,7 +89,11 @@ export class SubscriptionHub {
     this.subscriptions.set(subscription.id, subscription)
     try {
       if (clamped < baseline && subscription.kinds.includes('session.event')) {
-        await this.replay(subscription, clamped, baseline, signal)
+        if (target.childSessionId === undefined) {
+          await this.replay(subscription, clamped, baseline, signal)
+        } else {
+          await this.replayChild(target.childSessionId, subscription, clamped, baseline, signal)
+        }
       }
       const delivered = subscription.delivered ?? new Set()
       for (const payload of subscription.buffer) {
@@ -105,7 +121,85 @@ export class SubscriptionHub {
       subscriptionId: subscription.id,
       address: subscription.address,
       seq: baseline,
-      header: this.session.header,
+      header: target.header,
+    }
+  }
+
+  /**
+   * Resolve one subscription address to its official baseline. Root
+   * subscriptions use the live session; child subscriptions are authorized
+   * against the official parent catalog and observed through the official
+   * Session query without activating the child.
+   * @param {object} address - wire address.
+   * @returns {Promise<{address: object, baseline: number, header: object, childSessionId?: string}>} target.
+   */
+  async resolveAddress(address) {
+    const normalized = validateAddress(address, this.rootSessionId)
+    if (normalized.childSessionId === undefined) {
+      return {
+        address: normalized,
+        baseline: this.session.seq,
+        header: this.session.header,
+      }
+    }
+    if (this.authorizeChild === undefined) {
+      throw new RpcError('nano/subagents/unavailable', 'child subscriptions are not served by this generation')
+    }
+    const authorized = await this.authorizeChild(normalized)
+    const query = this.ctx.get('sessionQuery')
+    if (query?.observeSession === undefined) {
+      throw new RpcError('nano/subagents/unavailable', 'the official session query service is not composed')
+    }
+    const observation = await query.observeSession(normalized.childSessionId)
+    try {
+      const cursor = Number.isInteger(observation.cursor) ? observation.cursor : -1
+      return {
+        address: authorized,
+        baseline: cursor + 1,
+        header: observation.header,
+        childSessionId: normalized.childSessionId,
+      }
+    } finally {
+      try {
+        observation?.[Symbol.dispose]?.()
+      } catch {
+        // lease release is best-effort
+      }
+    }
+  }
+
+  /**
+   * Replay one child's durable events from the official Session query. The
+   * child log body is never read as a file; inherited fork seeds are ordinary
+   * child events and remain addressed to this child.
+   * @param {string} childSessionId - durable child id.
+   * @param {object} subscription - pending subscription.
+   * @param {number} start - first durable seq.
+   * @param {number} baseline - first live seq.
+   * @param {AbortSignal} signal - cancellation.
+   */
+  async replayChild(childSessionId, subscription, start, baseline, signal) {
+    const query = this.ctx.get('sessionQuery')
+    if (query?.observeSession === undefined) {
+      throw new RpcError('nano/subagents/unavailable', 'the official session query service is not composed')
+    }
+    if (signal?.aborted) throw new RpcError('nano/cancelled', 'subscription was cancelled')
+    const observation = await query.observeSession(childSessionId, { signal })
+    try {
+      const delivered = new Set()
+      for (const event of observation.events ?? []) {
+        if (event.seq < start || event.seq >= baseline) continue
+        delivered.add(event.seq)
+        this.deliver(subscription, sessionEventPayload(subscription.address, event))
+        if (subscription.closed) break
+      }
+      subscription.delivered = delivered
+    } finally {
+      try {
+        observation?.[Symbol.dispose]?.()
+      } catch {
+        // lease release is best-effort
+      }
     }
   }
 
@@ -170,9 +264,14 @@ export class SubscriptionHub {
 
   handleSessionEvent(subject, event) {
     if (this.closed) return
-    if (subject.id !== this.rootSessionId) return
     for (const subscription of this.subscriptions.values()) {
       if (subscription.closed) continue
+      const childSessionId = subscription.address.childSessionId
+      if (childSessionId === undefined) {
+        if (subject.id !== this.rootSessionId) continue
+      } else if (subject.id !== childSessionId) {
+        continue
+      }
       const payload = sessionEventPayload(subscription.address, event)
       if (subscription.paused) {
         subscription.buffer.push(payload)
@@ -194,6 +293,16 @@ export class SubscriptionHub {
     if (!EVENT_KINDS.has(kind)) throw new Error(`unknown event kind ${kind}`)
     for (const subscription of this.subscriptions.values()) {
       if (subscription.closed || !subscription.kinds.includes(kind)) continue
+      // A child subscription only receives frames addressed to that exact
+      // child. Root subscriptions still receive all frames and route by the
+      // payload address in the client.
+      if (
+        subscription.address.childSessionId !== undefined &&
+        payload?.address !== undefined &&
+        payload.address.childSessionId !== subscription.address.childSessionId
+      ) {
+        continue
+      }
       this.deliver(subscription, payload, kind)
     }
   }
@@ -277,8 +386,27 @@ function validateAddress(address, rootSessionId) {
   if (address.rootSessionId !== rootSessionId) {
     throw new RpcError('nano/unsupported', 'address names a root session this host does not serve')
   }
-  if (address.childSessionId !== undefined) {
-    throw new RpcError('nano/unsupported', 'child-session subscriptions belong to S12 and are not served by this generation')
+  if (address.childSessionId === undefined) {
+    if (address.parentSessionId !== undefined || address.mode !== undefined) {
+      throw new RpcError('jsonrpc/invalid-params', 'a root address cannot carry child fields')
+    }
+    return { rootSessionId }
+  }
+  if (typeof address.parentSessionId !== 'string' || address.parentSessionId === '') {
+    throw new RpcError('jsonrpc/invalid-params', 'address.parentSessionId is required for a child address')
+  }
+  if (
+    address.mode !== 'continuable' &&
+    address.mode !== 'one-shot' &&
+    address.mode !== 'unknown'
+  ) {
+    throw new RpcError('jsonrpc/invalid-params', 'address.mode must be continuable, one-shot, or unknown')
+  }
+  return {
+    rootSessionId,
+    parentSessionId: address.parentSessionId,
+    childSessionId: address.childSessionId,
+    mode: address.mode,
   }
 }
 

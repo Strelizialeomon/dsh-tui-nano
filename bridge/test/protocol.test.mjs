@@ -34,7 +34,7 @@ test('implemented methods match the contract', () => {
   assert.deepEqual([...IMPLEMENTED_METHODS].sort(), [...CONTRACT_IMPLEMENTED.keys()].sort())
   for (const [name, method] of CONTRACT_IMPLEMENTED) {
     assert.ok(
-      ['S01', 'S02', 'S03', 'S04', 'S05', 'S06', 'S07', 'S08', 'S09', 'S10', 'S11'].includes(method.owner),
+      ['S01', 'S02', 'S03', 'S04', 'S05', 'S06', 'S07', 'S08', 'S09', 'S10', 'S11', 'S12'].includes(method.owner),
       `${name} owner`,
     )
     if (method.kind === 'request') {
@@ -124,6 +124,7 @@ test('event kinds match', () => {
     'decisions.question',
     'decisions.projection',
     'monitor.updated',
+    'subagents.event',
   ])
 })
 
