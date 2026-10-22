@@ -1031,7 +1031,7 @@ fn draw_sources_panel(frame: &mut Frame, app: &App, area: Rect) {
             let state = if credentials.configured {
                 credential_source_label(credentials.source.as_deref())
             } else {
-                "未配置"
+                "未配置".to_string()
             };
             lines.push(Line::from(vec![
                 Span::styled("凭据  ", Style::default().add_modifier(Modifier::BOLD)),
@@ -1104,14 +1104,14 @@ fn draw_sources_panel(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
 
-fn credential_source_label(source: Option<&str>) -> &'static str {
+fn credential_source_label(source: Option<&str>) -> String {
     match source {
-        Some("file") => "凭据文件",
-        Some("env") => "启动环境",
-        Some("project-env") => "项目 .env",
-        Some("user-env") => "用户 .env",
-        Some(_) => "其他来源",
-        None => "来源未知",
+        Some("file") => "凭据文件".to_string(),
+        Some("env") => "启动环境".to_string(),
+        Some("project-env") => "项目 .env".to_string(),
+        Some("user-env") => "用户 .env".to_string(),
+        Some(other) => other.to_string(),
+        None => "来源未知".to_string(),
     }
 }
 
