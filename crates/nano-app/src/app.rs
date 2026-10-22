@@ -6602,8 +6602,7 @@ impl App {
         if let Some(message_id) = &self.edit_target {
             return format!("编辑队列项 {message_id}：Enter 应用，Esc 取消");
         }
-        "Enter 发送 · Alt+Enter 插话 · @ 引用文件 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除附件 · Alt+O 会话 · Alt+C 压缩 · Alt+K 技能 · Alt+R 规矩 · Ctrl+J 换行 · Esc 停止 · Ctrl+Y 复制原文 · Ctrl+C 退出"
-            .to_string()
+        String::new()
     }
 }
 

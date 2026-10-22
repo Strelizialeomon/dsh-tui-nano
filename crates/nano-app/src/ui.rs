@@ -2461,7 +2461,12 @@ fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
     };
     let visible: Vec<Line<'static>> = lines.into_iter().skip(offset).take(viewport).collect();
     frame.render_widget(Paragraph::new(Text::from(visible)), inner);
-    if sendable && app.scene.focus().input_focused() && !app.panel.is_open() && viewport > 0 {
+    if sendable
+        && app.scene.focus().input_focused()
+        && !app.panel.is_open()
+        && !app.drafts.current().text().is_empty()
+        && viewport > 0
+    {
         if let Some((row, column)) = cursor {
             let row = row.saturating_sub(offset).min(viewport.saturating_sub(1));
             let column = column.min(width.saturating_sub(2));
