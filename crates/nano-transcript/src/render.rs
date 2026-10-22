@@ -365,7 +365,11 @@ fn render_entry(entry: &Entry, width: usize, expanded: bool) -> RenderedEntry {
             }
         }
         EntryKind::Notice { text, is_error } => {
-            let color = if *is_error { Color::Red } else { Color::Yellow };
+            let color = if *is_error {
+                Color::Red
+            } else {
+                Color::DarkGray
+            };
             for row in wrap_block(text, width, MAX_BLOCK_ROWS) {
                 output
                     .lines
@@ -432,14 +436,25 @@ fn render_echo(output: &mut RenderedEntry, width: usize, text: &str, state: &str
         .fg(Color::Cyan)
         .add_modifier(Modifier::BOLD);
     let rows = wrap_block(text, width.saturating_sub(2).max(1), MAX_BLOCK_ROWS);
+    let suffix = format!("（{state}）");
+    let suffix_width = suffix.chars().map(char_width).sum::<usize>();
     let last = rows.len().saturating_sub(1);
+    let mut appended = false;
     for (index, row) in rows.into_iter().enumerate() {
         let prefix = if index == 0 { "> " } else { "  " };
+        let row_width = row.chars().map(char_width).sum::<usize>();
         let mut spans = vec![Span::styled(prefix, style), Span::styled(row, style)];
-        if index == last {
-            spans.push(Span::styled(format!("（{state}）"), muted()));
+        if index == last && 2 + row_width + suffix_width <= width {
+            spans.push(Span::styled(suffix.clone(), muted()));
+            appended = true;
         }
         output.lines.push(Line::from(spans));
+        output.hits.push(None);
+    }
+    // The state suffix never gets clipped: when the last text row has no
+    // room, it becomes its own muted line.
+    if !appended {
+        output.lines.push(Line::from(Span::styled(suffix, muted())));
         output.hits.push(None);
     }
 }
@@ -826,20 +841,23 @@ fn render_diff_line(
     let number = number
         .map(|number| format!("{number:>4}"))
         .unwrap_or_else(|| "    ".to_string());
-    let (marker, background, emphasis_background, marker_color) = match kind {
+    // Frozen dark tokens from design-contract §3; the light set is batch 2.
+    let (marker, background, emphasis_background, emphasis_foreground, marker_color) = match kind {
         DiffLineKind::Add => (
             '+',
-            Some(Color::Rgb(36, 56, 44)),
-            Some(Color::Rgb(56, 91, 66)),
-            Color::Rgb(161, 200, 170),
+            Some(Color::Rgb(0, 42, 0)),
+            Some(Color::Rgb(0, 88, 0)),
+            Color::LightGreen,
+            Color::Green,
         ),
         DiffLineKind::Delete => (
             '-',
-            Some(Color::Rgb(56, 37, 42)),
-            Some(Color::Rgb(101, 54, 65)),
-            Color::Rgb(226, 160, 170),
+            Some(Color::Rgb(48, 0, 0)),
+            Some(Color::Rgb(96, 0, 0)),
+            Color::LightRed,
+            Color::Red,
         ),
-        DiffLineKind::Context => (' ', None, None, Color::DarkGray),
+        DiffLineKind::Context => (' ', None, None, Color::Reset, Color::DarkGray),
     };
     let number_style = Style::default().fg(Color::DarkGray);
     let text_style = Style::default();
@@ -884,6 +902,7 @@ fn render_diff_line(
                 if current_bold {
                     style = style
                         .add_modifier(Modifier::BOLD)
+                        .fg(emphasis_foreground)
                         .bg(emphasis_background.unwrap_or(Color::Reset));
                 }
                 spans.push(Span::styled(std::mem::take(&mut run), style));
@@ -896,6 +915,7 @@ fn render_diff_line(
             if current_bold {
                 style = style
                     .add_modifier(Modifier::BOLD)
+                    .fg(emphasis_foreground)
                     .bg(emphasis_background.unwrap_or(Color::Reset));
             }
             spans.push(Span::styled(run, style));
@@ -1861,6 +1881,48 @@ mod tests {
         assert!(header.starts_with("▸ Bash "));
         assert!(header.ends_with("完成"));
         assert_eq!(crate::display::line_width(&header), 40);
+    }
+
+    #[test]
+    fn an_echo_state_suffix_is_never_clipped() {
+        let entry = Entry {
+            identity: "echo-1".into(),
+            fingerprint: 1,
+            kind: EntryKind::Echo {
+                text: "x".repeat(18),
+                state: "已发送".into(),
+            },
+        };
+        let rendered = render_one(entry, false, 10);
+        assert!(rendered
+            .lines
+            .iter()
+            .any(|line| line.to_string().contains("（已发送）")));
+        assert!(rendered
+            .lines
+            .iter()
+            .all(|line| crate::display::line_width(&line.to_string()) <= 10));
+    }
+
+    #[test]
+    fn a_non_error_notice_stays_muted() {
+        let entry = Entry {
+            identity: "n-1".into(),
+            fingerprint: 1,
+            kind: EntryKind::Notice {
+                text: "回合已取消".into(),
+                is_error: false,
+            },
+        };
+        let rendered = render_one(entry, false, 80);
+        let styles = rendered
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.style.fg)
+            .collect::<Vec<_>>();
+        assert!(styles.contains(&Some(Color::DarkGray)));
+        assert!(!styles.contains(&Some(Color::Yellow)));
     }
 
     #[test]

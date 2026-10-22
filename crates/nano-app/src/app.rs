@@ -5438,18 +5438,21 @@ impl App {
         false
     }
 
-    /// Send button click: exactly Enter's submit path, gated like the composer.
+    /// Send button click: exactly Enter's submit path, including the mounted
+    /// child address. A root decision card never blocks a child composer.
     pub fn click_send(&mut self) -> bool {
-        if self.decision_owns_seat() {
-            return false;
-        }
-        if self.subagent_active()
-            && !self
+        if self.subagent_active() {
+            let gate = self
                 .subagents
                 .mounted_gate()
-                .unwrap_or(ComposerGate::Resolving)
-                .can_send()
-        {
+                .unwrap_or(ComposerGate::Resolving);
+            if !gate.can_send() {
+                return false;
+            }
+            self.submit_subagent_draft(Delivery::Queue);
+            return true;
+        }
+        if self.decision_owns_seat() {
             return false;
         }
         if self.edit_target.is_some() {
@@ -6471,6 +6474,11 @@ impl App {
     /// Middle status-bar slot: connection and turn transients, truncated
     /// before either end slot when space is short.
     pub fn status_transient(&self) -> String {
+        // A concrete error is more useful than the connection label it
+        // implies; reserving the narrow middle slot for it keeps it visible.
+        if let Some(error) = &self.error {
+            return error.clone();
+        }
         let connection = match &self.connection {
             Connection::Ready => "",
             Connection::Starting => "启动中",
@@ -10172,5 +10180,27 @@ mod terminal_tests {
         app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(app.subagents.nav().list_open);
         assert_eq!(app.subagents.nav().list_selected, 1);
+    }
+
+    #[test]
+    fn the_send_button_in_a_child_view_submits_to_the_child_address() {
+        let mut app = app();
+        install_subagents(&mut app, json!([subagent_row("child", "continuable")]));
+        assert!(app.enter_subagent(0));
+        app.apply_subagent_description(&describe_child("child", "continuable"));
+        app.drafts.current_mut().set_text("child draft message");
+        // A root decision card must not block the child composer either.
+        app.decisions.apply_event(
+            "decisions.approval",
+            &json!({
+                "address": {"rootSessionId": "root"},
+                "state": "pending",
+                "requestId": "a-1",
+                "toolName": "bash"
+            }),
+        );
+        assert!(app.click_send());
+        assert!(app.error.as_deref().unwrap().contains("子代理消息未发送"));
+        assert_eq!(app.drafts.current().text(), "child draft message");
     }
 }

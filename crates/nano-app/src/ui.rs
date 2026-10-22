@@ -22,12 +22,13 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-use crate::app::{ActivityKind, App};
+use crate::app::{ActivityKind, App, Connection};
 use unicode_width::UnicodeWidthChar;
 
 /// Draw one frame.
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let full = frame.area();
+    app.send_area = Rect::default();
     if app.terminal_active() {
         draw_terminal(frame, app, full);
         return;
@@ -36,7 +37,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // both sides; the interactive terminal keeps its full grid.
     let area = inset_horizontal(full, 2);
     if app.schedule.open {
-        draw_schedule(frame, app, area);
+        draw_schedule(frame, app, full);
         return;
     }
     let child_active = app.subagent_active();
@@ -71,6 +72,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         input_height(app, area.width)
     };
+    // Ordinary state: activity sits above the composer. Decision state: the
+    // card takes the seat first, then the activity row, then the status bar.
+    let (activity_slot, bottom_slot) = if decision {
+        (bottom_height, activity_height)
+    } else {
+        (activity_height, bottom_height)
+    };
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -78,8 +86,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             Constraint::Min(3),
             Constraint::Length(queue_height),
             Constraint::Length(completion_height),
-            Constraint::Length(activity_height),
-            Constraint::Length(bottom_height),
+            Constraint::Length(activity_slot),
+            Constraint::Length(bottom_slot),
             Constraint::Length(1),
             Constraint::Length(dock_height),
         ])
@@ -107,12 +115,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if completion_height > 0 {
         draw_completion(frame, app, layout[3]);
     }
-    draw_activity(frame, app, layout[4]);
     if decision {
-        draw_decision(frame, app, layout[5]);
+        draw_decision(frame, app, layout[4]);
+        draw_activity(frame, app, layout[5]);
     } else {
         app.decision_area = Rect::default();
         app.decision_hits.clear();
+        draw_activity(frame, app, layout[4]);
         draw_input(frame, app, layout[5]);
     }
     draw_status(frame, app, layout[6], area.width);
@@ -564,7 +573,10 @@ fn draw_subagent_dock(frame: &mut Frame, app: &mut App, area: Rect) {
             Span::styled(format!(" {name}"), style),
         ];
         if let Some(suffix) = mode_suffix {
-            spans.push(Span::styled(suffix.to_string(), muted_style()));
+            spans.push(Span::styled(
+                suffix.to_string(),
+                if selected { style } else { muted_style() },
+            ));
         }
         spans.push(Span::styled(" ".repeat(pad), style));
         spans.push(Span::styled(
@@ -2354,11 +2366,15 @@ fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
         ComposerGate::Enabled
     };
     let sendable = gate.can_send();
-    let occupancy = app
-        .context
-        .as_ref()
-        .map(|meter| meter.occupancy())
-        .unwrap_or(Occupancy::Unknown);
+    let occupancy = if app.subagent_active() {
+        // The root meter does not describe the mounted child conversation.
+        Occupancy::Unknown
+    } else {
+        app.context
+            .as_ref()
+            .map(|meter| meter.occupancy())
+            .unwrap_or(Occupancy::Unknown)
+    };
     app.send_area = Rect::default();
     if area.height >= 2 {
         draw_input_border(frame, Rect { height: 1, ..area }, occupancy);
@@ -2381,6 +2397,7 @@ fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
     let width = inner.width.max(1) as usize;
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut cursor: Option<(usize, usize)> = None;
+    let mut send_start: Option<usize> = None;
     if let Some((notice, color)) = input_notice(app) {
         lines.push(Line::from(Span::styled(
             truncate(&notice, width),
@@ -2403,6 +2420,7 @@ fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
         if sendable {
             let text_width = input_text_width(area.width);
             let start = lines.len();
+            send_start = Some(start);
             if draft.is_empty() {
                 let placeholder = if app.subagent_active() {
                     app.subagents
@@ -2429,20 +2447,6 @@ fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
                 }
                 cursor = Some((start + row, 2 + column));
             }
-            if let Some(line) = lines.get_mut(start) {
-                let used = line.spans.iter().map(|span| span.width()).sum::<usize>();
-                if used < width {
-                    line.spans.push(Span::raw(" ".repeat(width - used - 1)));
-                    line.spans
-                        .push(Span::styled("↑", Style::default().fg(Color::Cyan)));
-                    app.send_area = Rect::new(
-                        inner.x.saturating_add(width as u16 - 1),
-                        inner.y.saturating_add(start as u16),
-                        1,
-                        1,
-                    );
-                }
-            }
         } else if draft.trim().is_empty() {
             lines.push(Line::from(Span::styled(
                 "只读记录 · 没有可用的输入框",
@@ -2459,12 +2463,34 @@ fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
         Some((row, _)) if viewport > 0 => row.saturating_sub(viewport.saturating_sub(1)),
         _ => 0,
     };
+    // The send button rides the first visible draft row, so a long draft that
+    // scrolls its first line out of view still shows a reachable button.
+    if let (true, Some(start)) = (sendable, send_start) {
+        if viewport > 0 {
+            let visible_row = start.saturating_sub(offset).min(viewport - 1);
+            let absolute_row = offset + visible_row;
+            if let Some(line) = lines.get_mut(absolute_row) {
+                let used = line.spans.iter().map(|span| span.width()).sum::<usize>();
+                if used < width {
+                    line.spans.push(Span::raw(" ".repeat(width - used - 1)));
+                    line.spans
+                        .push(Span::styled("↑", Style::default().fg(Color::Cyan)));
+                    app.send_area = Rect::new(
+                        inner.x.saturating_add(width as u16 - 1),
+                        inner.y.saturating_add(visible_row as u16),
+                        1,
+                        1,
+                    );
+                }
+            }
+        }
+    }
     let visible: Vec<Line<'static>> = lines.into_iter().skip(offset).take(viewport).collect();
     frame.render_widget(Paragraph::new(Text::from(visible)), inner);
     if sendable
         && app.scene.focus().input_focused()
         && !app.panel.is_open()
-        && !app.drafts.current().text().is_empty()
+        && (!app.drafts.current().text().is_empty() || app.picker.is_some())
         && viewport > 0
     {
         if let Some((row, column)) = cursor {
@@ -2577,12 +2603,25 @@ fn draw_activity(frame: &mut Frame, app: &App, area: Rect) {
 
 fn draw_status(frame: &mut Frame, app: &App, area: Rect, width: u16) {
     let width = width.max(1) as usize;
+    let transient = safe_text(&app.status_transient());
+    // A disconnected link or an error must stay visible even at 60 columns;
+    // reserve a minimum middle slot before trimming either end.
+    let critical = app.error.is_some() || !matches!(app.connection, Connection::Ready);
+    let middle_min = if critical && !transient.is_empty() {
+        12.min(width / 3)
+    } else {
+        0
+    };
     let mut left = safe_text(&app.status_permission());
-    let mut right = safe_text(&app.display_path());
     if text_width(&left) > width {
         left = truncate(&left, width);
     }
-    let right_room = width.saturating_sub(text_width(&left) + 1).max(1);
+    if middle_min > 0 {
+        left = truncate(&left, (width / 3).max(8).min(width));
+    }
+    let mut right = safe_text(&app.display_path());
+    let reserve = if middle_min > 0 { middle_min + 3 } else { 1 };
+    let right_room = width.saturating_sub(text_width(&left) + reserve).max(1);
     if text_width(&right) > right_room {
         right = elide_left(&right, right_room);
     }
@@ -2590,10 +2629,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect, width: u16) {
     let right_width = text_width(&right);
     let middle_room = width.saturating_sub(left_width + right_width + 3);
     let middle = if middle_room > 0 {
-        format!(
-            "  {}",
-            truncate(&safe_text(&app.status_transient()), middle_room)
-        )
+        format!("  {}", truncate(&transient, middle_room))
     } else {
         String::new()
     };
@@ -3383,6 +3419,57 @@ mod tests {
         let status = rows.last().expect("status row");
         assert!(status.contains("权限：子代理审批由官方拒绝"));
         assert!(!status.contains("Enter发送"));
+    }
+
+    #[test]
+    fn the_activity_row_sits_below_an_open_decision_card() {
+        let mut app = app();
+        app.decisions.apply_event(
+            "decisions.approval",
+            &serde_json::json!({
+                "address": {"rootSessionId": "root"},
+                "state": "pending",
+                "requestId": "a-1",
+                "toolName": "bash"
+            }),
+        );
+        let rows = compact(&screen(&mut app, 100, 30));
+        let activity = rows
+            .iter()
+            .position(|row| row.contains("等待你的授权"))
+            .expect("activity row");
+        let card_bottom = (app.decision_area.y + app.decision_area.height) as usize;
+        assert_eq!(activity, card_bottom, "decision card, then activity");
+        let status = rows
+            .iter()
+            .position(|row| row.contains("权限："))
+            .expect("status row");
+        assert!(status > activity);
+    }
+
+    #[test]
+    fn a_long_draft_keeps_a_visible_send_button() {
+        let mut app = app();
+        app.drafts.current_mut().set_text(
+            "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10\nline 11\nline 12",
+        );
+        let rows = screen(&mut app, 40, 24);
+        assert_eq!(app.send_area.height, 1, "send hit area is set");
+        let row = rows
+            .get(app.send_area.y as usize)
+            .expect("send row is on screen");
+        assert!(row.contains('↑'), "{row:?}");
+        assert_eq!(rows.iter().filter(|row| row.contains('↑')).count(), 1);
+    }
+
+    #[test]
+    fn a_critical_error_stays_visible_in_the_narrow_status_bar() {
+        let mut app = app();
+        app.error = Some("通信已断开（会话 root）".to_string());
+        let rows = compact(&screen(&mut app, 60, 20));
+        let status = rows.last().expect("status row");
+        assert!(status.contains("通信已断开"), "{status:?}");
+        assert!(status.contains("权限："));
     }
 
     #[test]

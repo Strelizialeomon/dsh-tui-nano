@@ -176,14 +176,17 @@ nano — 极简 DeepSeek Harness 终端界面
 
 按键：
   Enter 发送/排队；Alt+Enter 插话；Ctrl+J 换行（Shift+Enter 需终端支持键盘增强）
-  Esc 停止当前回合（保留队列）；Ctrl+Y 复制草稿原文（OSC 52）；Ctrl+C 退出
+  Esc 停止当前回合（保留队列）；Ctrl+Y 复制草稿原文（OSC 52）；Ctrl+C / Ctrl+Q 退出
   Ctrl+P 命令面板；/model 模型与推理强度；/permission 权限预设（bare 打开面板，带参数走官方命令）
+  Alt+O 会话列表；Alt+C 压缩；Ctrl+G 调度面板；Alt+L 全部子代理
   @ 引用文件，Tab 接受补全候选；Alt+A 附加图片/文件；Alt+←/→ 排序附件；Alt+Backspace 移除附件
   Ctrl+U 清空草稿与附件
   Alt+↑/↓ 选择队列项；Alt+E 编辑；Alt+D 删除；Alt+S 转为插话；Alt+X 清空并停止
   !命令 人工命令：以你的用户权限运行，不是 Agent 授权；输出作为合成上下文注入，不唤醒模型
   Ctrl+T 任务面板：↑↓ 选择，Enter 查看输出（非消费跟随），k 停止，r 刷新
   Alt+K 技能目录（↑↓ 选择、Enter 填入 /name、P 预览）；Alt+R 项目规矩来源
+  子代理 dock：↑↓ 选择、Enter/→/Space 进入、f 打开记录、k 停止、l 全部、Esc 返回
+  子代理详情：Esc 或空输入 ← 返回、Alt+K 停止本轮
   PageUp/PageDown 翻阅记录；Ctrl+End 回到底部
   F12 进入/返回交互终端；终端内 F11 关闭、F10 重新附着、F9 选择 shell
   终端内 F8 复制所选文本（OSC 52；鼠标松开也会自动复制）
@@ -202,6 +205,13 @@ mod tests {
             "Alt+Backspace",
             "Ctrl+U",
             "Tab 接受补全候选",
+            "Ctrl+Q",
+            "Alt+O",
+            "Alt+C",
+            "Ctrl+G",
+            "Alt+L",
+            "子代理 dock",
+            "子代理详情",
         ] {
             assert!(HELP.contains(key), "help is missing {key}");
         }
