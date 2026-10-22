@@ -12,8 +12,6 @@
 // A permission switch is never `permissionPresets.set()`: it is the official
 // `/permission <preset>` command, which appends the durable identity and
 // injects the changed-by-user notice.
-import { installModelSelection } from '@deepseek-ai/dsh-agent'
-import { buildModelCatalog as buildOfficialModelCatalog } from '@deepseek-ai/dsh-api-session-controller'
 import { RpcError } from '../runtime/errors.mjs'
 
 /** Durable session events that advance the model-selection fold. */
@@ -32,15 +30,19 @@ export class ControlsService {
    *   agent: object,
    *   session: object,
    *   rootSessionId: string,
-   * }} options - host wiring.
+   *   official?: { installModelSelection?: Function, buildModelCatalog?: Function },
+   * }} options - host wiring. `official` is loaded by the host at startup so
+   * this module can be imported by unit tests without the profile's installed
+   * official packages.
    */
-  constructor({ ctx, hub, agent, session, rootSessionId }) {
+  constructor({ ctx, hub, agent, session, rootSessionId, official = {} }) {
     this.ctx = ctx
     this.hub = hub
     this.agent = agent
     this.session = session
     this.rootSessionId = rootSessionId
     this.address = { rootSessionId }
+    this.official = official
     this.disposers = []
     this.closed = false
     this.modelFold = initialModelFold(session)
@@ -97,6 +99,8 @@ export class ControlsService {
   installSelectionHooks() {
     if (this.ctx.get('sessionController') !== undefined) return
     if (this.agent.ctx === undefined || typeof this.agent.ctx.on !== 'function') return
+    const installModelSelection = this.official.installModelSelection
+    if (typeof installModelSelection !== 'function') return
     try {
       const dispose = installModelSelection(this.agent.ctx, this.selection)
       if (typeof dispose === 'function') this.disposers.push(dispose)
@@ -170,7 +174,11 @@ export class ControlsService {
       throw new RpcError('nano/controls/unavailable', 'the official model registry is not composed')
     }
     try {
-      return await buildCatalogInjected(this.ctx, defaults.currentSelection())
+      return await buildCatalogInjected(
+        this.ctx,
+        defaults.currentSelection(),
+        this.official.buildModelCatalog,
+      )
     } catch (error) {
       throw mapOfficialError(error, 'nano/controls/unavailable')
     }
@@ -395,7 +403,10 @@ export class ControlsService {
  * @param {object} defaultSelection - deployment default passed explicitly.
  * @returns {Promise<object>} provider-grouped catalog.
  */
-async function buildCatalogInjected(ctx, defaultSelection) {
+async function buildCatalogInjected(ctx, defaultSelection, buildOfficialModelCatalog) {
+  if (typeof buildOfficialModelCatalog !== 'function') {
+    throw new ModelUnavailableError('the official model catalog builder is not available')
+  }
   if (typeof ctx.inject !== 'function') {
     return buildOfficialModelCatalog(ctx, defaultSelection)
   }
