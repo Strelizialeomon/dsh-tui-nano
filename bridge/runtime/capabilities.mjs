@@ -82,9 +82,20 @@ export function buildCapabilities(ctx, config, facts = {}) {
   capabilities.schedule = facts.schedule === true
     ? { status: 'supported', detail: '官方 schedule 服务已按根会话隔离挂载' }
     : { status: 'unsupported', detail: 'the schedule backend is not mounted' }
+  // S10 observes the official job registry and delivers through the official
+  // Agent followup/inject surface. It needs a live, non-consuming read path:
+  // an absent event stream would leave a created monitor permanently blind.
+  const jobs = ctx.get('jobs')
+  const monitorReady =
+    jobs !== undefined &&
+    typeof jobs.readAt === 'function' &&
+    typeof jobs.events?.subscribe === 'function' &&
+    ctx.get('agents') !== undefined
   capabilities.monitor = {
-    status: 'unsupported',
-    detail: 'the Monitor backend belongs to S10',
+    status: monitorReady ? 'supported' : 'unsupported',
+    detail: monitorReady
+      ? 'bounded job-output observation; followup/inject delivery'
+      : 'the official job registry lacks live readAt/events observation, or the Agent service is not composed',
   }
 
   // S05 reads the official registry; when the registry row is absent the

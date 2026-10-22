@@ -24,6 +24,7 @@ import { AttachmentService } from '../attachments/service.mjs'
 import { SessionsService } from '../sessions/service.mjs'
 import { ShellService } from '../shell/service.mjs'
 import { JobsService } from '../jobs/service.mjs'
+import { MonitorService } from '../monitor/service.mjs'
 import { ControlsService } from '../controls/service.mjs'
 import { SkillsService } from '../skills/service.mjs'
 import { buildCapabilities } from './capabilities.mjs'
@@ -73,6 +74,7 @@ export function startHost(ctx, config) {
     sessions: undefined,
     shell: undefined,
     jobs: undefined,
+    monitor: undefined,
     controls: undefined,
     skills: undefined,
     agentHandle: undefined,
@@ -311,6 +313,13 @@ async function runStartup(state, config) {
   state.jobs = new JobsService({
     ctx,
     hub: state.hub,
+    session,
+    rootSessionId: state.config.rootSessionId,
+  })
+  state.monitor = new MonitorService({
+    ctx,
+    hub: state.hub,
+    agent: state.agentHandle.agent,
     session,
     rootSessionId: state.config.rootSessionId,
   })
@@ -859,6 +868,22 @@ async function dispatchRequest(state, frame) {
       await sendResult(state, id, state.jobs.kill(params))
       return undefined
     }
+    case 'nano.monitor.create': {
+      await sendResult(state, id, state.monitor.create(params))
+      return undefined
+    }
+    case 'nano.monitor.list': {
+      await sendResult(state, id, state.monitor.list(params))
+      return undefined
+    }
+    case 'nano.monitor.stop': {
+      await sendResult(state, id, state.monitor.stop(params))
+      return undefined
+    }
+    case 'nano.monitor.resetBudget': {
+      await sendResult(state, id, state.monitor.resetBudget(params))
+      return undefined
+    }
     case 'nano.controls.state': {
       await sendResult(state, id, state.controls.state())
       return undefined
@@ -989,6 +1014,8 @@ async function runShutdown(state, reason) {
     state.shell = undefined
     state.jobs?.close()
     state.jobs = undefined
+    state.monitor?.close()
+    state.monitor = undefined
     state.hub?.closeAll(reason)
   }, faults))
 
@@ -1189,6 +1216,14 @@ async function failStartup(state, error) {
       state.jobs = undefined
     } catch (cleanupError) {
       cleanupFailures.push(`jobs: ${describe(cleanupError)}`)
+    }
+  }
+  if (state.monitor !== undefined) {
+    try {
+      state.monitor.close()
+      state.monitor = undefined
+    } catch (cleanupError) {
+      cleanupFailures.push(`monitor: ${describe(cleanupError)}`)
     }
   }
   if (state.hub !== undefined) {

@@ -86,6 +86,8 @@ pub enum EntryKind {
         text: String,
         /// Synthetic bash rather than an injected notice.
         bash: bool,
+        /// S10 Monitor line notification; user-role, `source.kind=monitor`.
+        monitor: bool,
     },
     /// One tool call and its result.
     Tool(ToolRecord),
@@ -400,10 +402,17 @@ impl TranscriptModel {
             MessageKind::SyntheticBash => EntryKind::Context {
                 text: message.text.clone(),
                 bash: true,
+                monitor: false,
+            },
+            MessageKind::Monitor => EntryKind::Context {
+                text: message.text.clone(),
+                bash: false,
+                monitor: true,
             },
             MessageKind::Injected => EntryKind::Context {
                 text: message.text.clone(),
                 bash: false,
+                monitor: false,
             },
             MessageKind::ToolResult => EntryKind::Notice {
                 text: message.text.clone(),
@@ -1040,10 +1049,15 @@ fn fingerprint(entry: &Entry) -> u64 {
             text.hash(&mut hasher);
             is_error.hash(&mut hasher);
         }
-        EntryKind::Context { text, bash } => {
+        EntryKind::Context {
+            text,
+            bash,
+            monitor,
+        } => {
             3u8.hash(&mut hasher);
             text.hash(&mut hasher);
             bash.hash(&mut hasher);
+            monitor.hash(&mut hasher);
         }
         EntryKind::Tool(record) => {
             4u8.hash(&mut hasher);

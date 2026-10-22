@@ -1,0 +1,462 @@
+
+===== 启动：已连接（临时 DSH_HOME，真实凭据副本） =====
+ nano 已连接 · 空闲 · seq 3 · 队列 0 · ctx 未知 · 参考
+输入消息后按 Enter 发送。
+
+┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除附件 · Ctrl+J 换行 · Ctrl+T 任务 ─────────────────────────────────┐
+│                                                                                                                                                              │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+issue-13 · 权限 workspace-write · 已连接官方会话
+
+===== 模型已启动后台任务并回复 job id =====
+ nano 已连接 · 空闲 · seq 44 · 队列 0 · ctx 19.8k/1000k (1%) · 参考 · 任务 0/1
+你
+只做一件事：用 bash 工具运行命令 `sh -c 'sleep 4; echo monitor-line-1; echo noise-ignore-me; sleep 1; echo monitor-line-2; sleep 1; echo monitor-line-3; printf
+monitor-line-tail'`，并把 run_in_background 设为 true。不要运行其他命令，不要读写文件。启动后用一句很短的话回复 job id，然后结束这一轮。
+
+上下文 · 点击展开
+<system-reminder>
+  … 还有 218 行 · 点击展开
+
+上下文 · 点击展开
+Current runtime context. This snapshot supersedes earlier runtime-context snapshots.
+  … 还有 7 行 · 点击展开
+
+上下文 · 点击展开
+<system-reminder>
+  … 还有 233 行 · 点击展开
+
+思考 319ms · 展开
+
+命令 结果未知 · Run background monitor command
+› sh -c 'sleep 4; echo monitor-line-1; echo noise-ignore-me; sleep 1; echo monitor-line-2; sleep 1; echo monitor-line-3; printf monitor-line-tail'
+  started background job bash-e4b8af217cc84cf9
+  退出码未知
+
+助手
+我已启动后台任务 bash-e4b8af217cc84cf9。
+
+上下文 · 点击展开
+background job bash-e4b8af217cc84cf9 (bash: sh -c 'sleep 4; echo monitor-line-1; echo noise-ignore-me; sleep 1; echo monitor-line-2; sleep 1; echo monitor-line-
+  … 还有 1 行 · 点击展开
+
+思考 361ms · 展开
+
+工具 job_output · 完成
+  monitor-line-1
+  noise-ignore-me
+  monitor-line-2
+  … 还有 3 行 · 点击展开
+
+助手
+任务 bash-e4b8af217cc84cf9 已完成，退出码为 0，输出共五行：monitor-line-1、noise-ignore-me、monitor-line-2、monitor-line-3、monitor-line-tail。
+
+┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除附件 · Ctrl+J 换行 · Ctrl+T 任务 ─────────────────────────────────┐
+│                                                                                                                                                              │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+issue-13 · 权限 workspace-write · 任务 bash-e4b8af217cc84cf9 完成（exit code: 0）
+
+===== 任务面板：官方 jobs 列表 =====
+ nano 已连接 · 空闲 · seq 44 · 队列 0 · ctx 19.8k/1000k (1%) · 参考 · 任务 0/1 · 任务面板
+┌ 任务 · 官方 jobs · 1 个（0 运行中） · ↑↓ 选择，Enter 详情，m 监听，k 停止，r 刷新，Esc 关闭 ─────────────────────────────────────────────────────────────────┐
+│▶ [bash] sh -c 'sleep 4; echo monitor-line-1; echo noise-ignore-me; sleep 1; echo monitor-line-2; sleep … · 完成 · exit code: 0 · bash-e4b8af217cc84cf9 · 调用│
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除附件 · Ctrl+J 换行 · Ctrl+T 任务 ─────────────────────────────────┐
+│                                                                                                                                                              │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+issue-13 · 权限 workspace-write · 任务面板 · ↑↓ 选择 · Enter 详情 · k 停止 · r 刷新 · Esc 关闭
+
+===== 按 m：附着监听表单，显示已有 N 字节未读与范围/模式选择 =====
+ nano 已连接 · 空闲 · seq 44 · 队列 0 · ctx 19.8k/1000k (1%) · 参考 · 任务 0/1 · 任务面板
+┌ 监听 · 附着到 sh -c 'sleep 4; echo monitor-line-1; echo noise… · n 新输出 / a 从开头 / t 模式 / f 过滤 / r 正则 / Enter 创建 / Esc 取消 ─────────────────────┐
+│附着监听 · sh -c 'sleep 4; echo monitor-line-1; echo noise-ignore-me; sleep 1; echo monitor-line-2; sleep 1; echo monitor-line-3; printf monitor-line-tail'   │
+│任务 bash-e4b8af217cc84cf9                                                                                                                                    │
+│已有 78 字节未读；先选范围：n 只看新输出（跳过这些字节） / a 从开头（重放 retained head）                                                                     │
+│当前范围：只看新输出；附着后不会重放已有字节。                                                                                                                │
+│模式：notify（官方 followup；唤醒 Agent，会产生模型调用和费用）                                                                                               │
+│过滤：无（每行都是候选）                                                                                                                                      │
+│t 模式 · f 编辑过滤 · r 字面/正则 · Enter 创建 · Esc 取消                                                                                                     │
+│提示：同一任务已有活动监听时返回现有监听；停止监听不会停止任务。                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除附件 · Ctrl+J 换行 · Ctrl+T 任务 ─────────────────────────────────┐
+│                                                                                                                                                              │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+issue-13 · 权限 workspace-write · 任务面板 · ↑↓ 选择 · Enter 详情 · k 停止 · r 刷新 · Esc 关闭
+
+===== 选择从开头、quiet 模式、字面过滤 monitor-line =====
+ nano 已连接 · 空闲 · seq 44 · 队列 0 · ctx 19.8k/1000k (1%) · 参考 · 任务 0/1 · 任务面板
+┌ 监听 · 附着到 sh -c 'sleep 4; echo monitor-line-1; echo noise… · n 新输出 / a 从开头 / t 模式 / f 过滤 / r 正则 / Enter 创建 / Esc 取消 ─────────────────────┐
+│附着监听 · sh -c 'sleep 4; echo monitor-line-1; echo noise-ignore-me; sleep 1; echo monitor-line-2; sleep 1; echo monitor-line-3; printf monitor-line-tail'   │
+│任务 bash-e4b8af217cc84cf9                                                                                                                                    │
+│已有 78 字节未读；先选范围：n 只看新输出（跳过这些字节） / a 从开头（重放 retained head）                                                                     │
+│当前范围：从开头；被 ring 裁掉的旧字节会标「已裁剪」，不会拼接假连续内容。                                                                                    │
+│模式：quiet（官方 inject；不唤醒 Agent，空闲时可能一直等待；仍需 durable user/message 才算收件）                                                              │
+│过滤：字面「monitor-line」                                                                                                                                    │
+│t 模式 · f 编辑过滤 · r 字面/正则 · Enter 创建 · Esc 取消                                                                                                     │
+│提示：同一任务已有活动监听时返回现有监听；停止监听不会停止任务。                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除附件 · Ctrl+J 换行 · Ctrl+T 任务 ─────────────────────────────────┐
+│                                                                                                                                                              │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+issue-13 · 权限 workspace-write · 任务面板 · ↑↓ 选择 · Enter 详情 · k 停止 · r 刷新 · Esc 关闭
+
+===== 创建监听：quiet 模式、官方回执状态与预算；终态只进 UI =====
+ nano 已连接 · 空闲 · seq 45 · 队列 1 · ctx 19.8k/1000k (1%) · 参考 · 任务 0/1 · 监听 0/1 · 任务面板
+┌ 监听 · bash-e4b8af217cc84cf9 · quiet（不唤醒；空闲时可能一直等待） · ↑↓ 切换，s 停止监听，b 重置预算，r 刷新，Esc 返回 ──────────────────────────────────────┐
+│监听 bash-e4b8af217cc84cf9 · stream-ended（流结束；不代表条件满足）                                                                                           │
+│role=user / source=monitor（user-role 消息，不是 Agent 授权）                                                                                                 │
+│quiet（不唤醒；空闲时可能一直等待）                                                                                                                           │
+│范围：从开头（retained head） · 初始偏移 0 · 当前 78 · 附着时已有 78 字节未读 · 选择跳过的字节 0                                                              │
+│合并窗口 800 ms · 过滤：字面「monitor-line」                                                                                                                  │
+│通知 1/50 · 行 4 · 字节 106 · 估算 token 27                                                                                                                   │
+│流结束原因：exit code: 0                                                                                                                                      │
+│投递回执：submitted/inserted/claimed 都不证明模型收到；只有 durable user/message 是 accepted。                                                                │
+│· 已入队（不证明模型收到） · 4 行 · 0..61 · b1979b48-da89-4f5f-be12-0d2350ac1986                                                                              │
+│  已入队；quiet 不唤醒，空闲时可能一直等待                                                                                                                    │
+│s 停止监听（不停止任务） · b 重置预算 · r 刷新 · Esc 返回                                                                                                     │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ 队列 · 官方 inbox · 1 项（Alt+↑↓ 选择，Alt+E 编辑，Alt+D 删除，Alt+S 插话，Alt+X 清空并停止） ─────────────────────────────────────────────────────────────────
+▶ [待下一步] [monitor] job=bash-e4b8af217cc84cf9 matched=4 first@0: monitor-line-1 last@61: monitor-line-tail omitted=2
+┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除附件 · Ctrl+J 换行 · Ctrl+T 任务 ─────────────────────────────────┐
+│                                                                                                                                                              │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+issue-13 · 权限 workspace-write · 监听已创建
+
+===== 返回对话；监听消息已入队但 quiet 未唤醒 =====
+ nano 已连接 · 空闲 · seq 45 · 队列 1 · ctx 19.8k/1000k (1%) · 参考 · 任务 0/1 · 监听 0/1
+你
+只做一件事：用 bash 工具运行命令 `sh -c 'sleep 4; echo monitor-line-1; echo noise-ignore-me; sleep 1; echo monitor-line-2; sleep 1; echo monitor-line-3; printf
+monitor-line-tail'`，并把 run_in_background 设为 true。不要运行其他命令，不要读写文件。启动后用一句很短的话回复 job id，然后结束这一轮。
+
+上下文 · 点击展开
+<system-reminder>
+  … 还有 218 行 · 点击展开
+
+上下文 · 点击展开
+Current runtime context. This snapshot supersedes earlier runtime-context snapshots.
+  … 还有 7 行 · 点击展开
+
+上下文 · 点击展开
+<system-reminder>
+  … 还有 233 行 · 点击展开
+
+思考 319ms · 展开
+
+命令 结果未知 · Run background monitor command
+› sh -c 'sleep 4; echo monitor-line-1; echo noise-ignore-me; sleep 1; echo monitor-line-2; sleep 1; echo monitor-line-3; printf monitor-line-tail'
+  started background job bash-e4b8af217cc84cf9
+  退出码未知
+
+助手
+我已启动后台任务 bash-e4b8af217cc84cf9。
+
+上下文 · 点击展开
+background job bash-e4b8af217cc84cf9 (bash: sh -c 'sleep 4; echo monitor-line-1; echo noise-ignore-me; sleep 1; echo monitor-line-2; sleep 1; echo monitor-line-
+  … 还有 1 行 · 点击展开
+
+思考 361ms · 展开
+
+工具 job_output · 完成
+  monitor-line-1
+  noise-ignore-me
+  monitor-line-2
+  … 还有 3 行 · 点击展开
+
+助手
+任务 bash-e4b8af217cc84cf9 已完成，退出码为 0，输出共五行：monitor-line-1、noise-ignore-me、monitor-line-2、monitor-line-3、monitor-line-tail。
+
+ 队列 · 官方 inbox · 1 项（Alt+↑↓ 选择，Alt+E 编辑，Alt+D 删除，Alt+S 插话，Alt+X 清空并停止） ─────────────────────────────────────────────────────────────────
+▶ [待下一步] [monitor] job=bash-e4b8af217cc84cf9 matched=4 first@0: monitor-line-1 last@61: monitor-line-tail omitted=2
+┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除附件 · Ctrl+J 换行 · Ctrl+T 任务 ─────────────────────────────────┐
+│                                                                                                                                                              │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+issue-13 · 权限 workspace-write · Enter 发送 · Alt+Enter 插话 · @ 引用文件 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除附件 · Alt+O 会话 · Alt+C 压缩 · Alt+…
+
+===== 普通用户回合唤醒后：模型看到注入内容并回答数字 =====
+ nano 已连接 · 空闲 · seq 56 · 队列 0 · ctx 20.4k/1000k (2%) · 参考 · 任务 0/1 · 监听 0/1
+Current runtime context. This snapshot supersedes earlier runtime-context snapshots.
+  … 还有 7 行 · 点击展开
+
+上下文 · 点击展开
+<system-reminder>
+  … 还有 233 行 · 点击展开
+
+思考 319ms · 展开
+
+命令 结果未知 · Run background monitor command
+› sh -c 'sleep 4; echo monitor-line-1; echo noise-ignore-me; sleep 1; echo monitor-line-2; sleep 1; echo monitor-line-3; printf monitor-line-tail'
+  started background job bash-e4b8af217cc84cf9
+  退出码未知
+
+助手
+我已启动后台任务 bash-e4b8af217cc84cf9。
+
+上下文 · 点击展开
+background job bash-e4b8af217cc84cf9 (bash: sh -c 'sleep 4; echo monitor-line-1; echo noise-ignore-me; sleep 1; echo monitor-line-2; sleep 1; echo monitor-line-
+  … 还有 1 行 · 点击展开
+
+思考 361ms · 展开
+
+工具 job_output · 完成
+  monitor-line-1
+  noise-ignore-me
+  monitor-line-2
+  … 还有 3 行 · 点击展开
+
+助手
+任务 bash-e4b8af217cc84cf9 已完成，退出码为 0，输出共五行：monitor-line-1、noise-ignore-me、monitor-line-2、monitor-line-3、monitor-line-tail。
+
+monitor · role=user · 点击展开
+[monitor] job=bash-e4b8af217cc84cf9 matched=4
+  … 还有 3 行 · 点击展开
+
+你
+刚才的监听通知里出现了哪些 monitor-line 行？只列出数字，不要调用工具。
+
+思考 2.2s · 展开
+助手
+1、2、3：一共 4 行，最后一行是 monitor-line-tail，没有数字。
+
+┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除附件 · Ctrl+J 换行 · Ctrl+T 任务 ─────────────────────────────────┐
+│                                                                                                                                                              │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+issue-13 · 权限 workspace-write · 已接收
+
+===== 重新打开监听：durable user/message 回执 accepted；role=user / source=monitor =====
+ nano 已连接 · 空闲 · seq 56 · 队列 0 · ctx 20.4k/1000k (2%) · 参考 · 任务 0/1 · 监听 0/1 · 任务面板
+┌ 监听 · bash-e4b8af217cc84cf9 · quiet（不唤醒；空闲时可能一直等待） · ↑↓ 切换，s 停止监听，b 重置预算，r 刷新，Esc 返回 ──────────────────────────────────────┐
+│监听 bash-e4b8af217cc84cf9 · stream-ended（流结束；不代表条件满足）                                                                                           │
+│role=user / source=monitor（user-role 消息，不是 Agent 授权）                                                                                                 │
+│quiet（不唤醒；空闲时可能一直等待）                                                                                                                           │
+│范围：从开头（retained head） · 初始偏移 0 · 当前 78 · 附着时已有 78 字节未读 · 选择跳过的字节 0                                                              │
+│合并窗口 800 ms · 过滤：字面「monitor-line」                                                                                                                  │
+│通知 1/50 · 行 4 · 字节 106 · 估算 token 27                                                                                                                   │
+│流结束原因：exit code: 0                                                                                                                                      │
+│投递回执：submitted/inserted/claimed 都不证明模型收到；只有 durable user/message 是 accepted。                                                                │
+│· 已收件（durable user/message） · 4 行 · 0..61 · b1979b48-da89-4f5f-be12-0d2350ac1986                                                                        │
+│  durable user/message：官方记录已接受该用户回合                                                                                                              │
+│s 停止监听（不停止任务） · b 重置预算 · r 刷新 · Esc 返回                                                                                                     │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除附件 · Ctrl+J 换行 · Ctrl+T 任务 ─────────────────────────────────┐
+│                                                                                                                                                              │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+issue-13 · 权限 workspace-write · 任务面板 · ↑↓ 选择 · Enter 详情 · k 停止 · r 刷新 · Esc 关闭
+
+===== 按 s 停止监听：任务未受影响，监听记录保留 =====
+ nano 已连接 · 空闲 · seq 56 · 队列 0 · ctx 20.4k/1000k (2%) · 参考 · 任务 0/1 · 监听 0/1 · 任务面板
+┌ 监听 · bash-e4b8af217cc84cf9 · quiet（不唤醒；空闲时可能一直等待） · ↑↓ 切换，s 停止监听，b 重置预算，r 刷新，Esc 返回 ──────────────────────────────────────┐
+│监听 bash-e4b8af217cc84cf9 · stream-ended（流结束；不代表条件满足）                                                                                           │
+│role=user / source=monitor（user-role 消息，不是 Agent 授权）                                                                                                 │
+│quiet（不唤醒；空闲时可能一直等待）                                                                                                                           │
+│范围：从开头（retained head） · 初始偏移 0 · 当前 78 · 附着时已有 78 字节未读 · 选择跳过的字节 0                                                              │
+│合并窗口 800 ms · 过滤：字面「monitor-line」                                                                                                                  │
+│通知 1/50 · 行 4 · 字节 106 · 估算 token 27                                                                                                                   │
+│用户已停止监听；被观察任务未受影响。                                                                                                                          │
+│流结束原因：exit code: 0                                                                                                                                      │
+│投递回执：submitted/inserted/claimed 都不证明模型收到；只有 durable user/message 是 accepted。                                                                │
+│· 已收件（durable user/message） · 4 行 · 0..61 · b1979b48-da89-4f5f-be12-0d2350ac1986                                                                        │
+│  durable user/message：官方记录已接受该用户回合                                                                                                              │
+│s 停止监听（不停止任务） · b 重置预算 · r 刷新 · Esc 返回                                                                                                     │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除附件 · Ctrl+J 换行 · Ctrl+T 任务 ─────────────────────────────────┐
+│                                                                                                                                                              │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+issue-13 · 权限 workspace-write · 监听已停止；被观察任务未受影响
+
+===== 已发送 Ctrl+C，退出后的 pane =====
+nano: installing the dsh-tui-nano profile (first launch or --install)
+nano: profile ready at /var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s10-pty.HagGwl/dsh/profiles/dsh-tui-nano (installed: true)
+EXIT:0

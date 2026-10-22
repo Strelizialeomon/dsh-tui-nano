@@ -323,6 +323,19 @@ test(
     const snapshot = await call('nano.jobs.snapshot', { address })
     assert.deepEqual(snapshot.result.jobs, [])
 
+    // S10 is wired into this generation and answers an absolute, empty list.
+    const monitors = await call('nano.monitor.list', { address })
+    assert.equal(monitors.error, undefined)
+    assert.equal(typeof monitors.result.seq, 'number')
+    assert.deepEqual(monitors.result.monitors, [])
+    const missingMonitor = await call('nano.monitor.create', {
+      address,
+      jobId: 'bash-0123456789abcdef',
+      from: 'new',
+      mode: 'notify',
+    })
+    assert.equal(missingMonitor.error.code, 1028)
+
     const exec = await call('nano.shell.exec', {
       address,
       command: "printf 'hello\\n'; printf 'oops\\n' >&2; exit 7",

@@ -81,7 +81,7 @@ pub const LIFECYCLE_TRANSITIONS: [(&str, &str); 15] = [
 ];
 
 /// Error code names shared with the bridge contract.
-pub const ERROR_CODE_NAMES: [(&str, i64); 61] = [
+pub const ERROR_CODE_NAMES: [(&str, i64); 66] = [
     ("jsonrpc/parse-error", -32700),
     ("jsonrpc/invalid-request", -32600),
     ("jsonrpc/method-not-found", -32601),
@@ -143,10 +143,15 @@ pub const ERROR_CODE_NAMES: [(&str, i64); 61] = [
     ("nano/terminal/input-full", 1054),
     ("nano/terminal/closed-id", 1055),
     ("nano/terminal/failed", 1056),
+    ("nano/monitor/unavailable", 1057),
+    ("nano/monitor/not-found", 1058),
+    ("nano/monitor/filter-invalid", 1059),
+    ("nano/monitor/budget-invalid", 1060),
+    ("nano/monitor/limit-reached", 1061),
 ];
 
 /// Method names implemented by this generation.
-pub const IMPLEMENTED_METHODS: [&str; 61] = [
+pub const IMPLEMENTED_METHODS: [&str; 65] = [
     "nano.hello",
     "nano.startupError",
     "nano.shutdown",
@@ -189,6 +194,10 @@ pub const IMPLEMENTED_METHODS: [&str; 61] = [
     "nano.jobs.snapshot",
     "nano.jobs.follow",
     "nano.jobs.kill",
+    "nano.monitor.create",
+    "nano.monitor.list",
+    "nano.monitor.stop",
+    "nano.monitor.resetBudget",
     "nano.approval.answer",
     "nano.question.answer",
     "nano.decisions.snapshot",
@@ -218,7 +227,7 @@ pub const TERMINAL_NOTIFICATION_METHODS: [&str; 4] = [
 ];
 
 /// Event kinds this client accepts.
-pub const EVENT_KINDS: [&str; 15] = [
+pub const EVENT_KINDS: [&str; 16] = [
     "session.event",
     "conversation.status",
     "conversation.inbox",
@@ -234,6 +243,7 @@ pub const EVENT_KINDS: [&str; 15] = [
     "decisions.approval",
     "decisions.question",
     "decisions.projection",
+    "monitor.updated",
 ];
 
 /// Shutdown report step names, in report order.
