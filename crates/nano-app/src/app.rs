@@ -509,6 +509,8 @@ pub struct App {
     pub terminal: Option<TerminalState>,
     /// Screen area used by terminal mouse coordinates, set by the draw pass.
     pub terminal_screen_area: Rect,
+    /// Resolved Nano data root, kept across host restarts for terminal rebinding.
+    pub terminal_data_root: Option<PathBuf>,
 }
 
 impl App {
@@ -616,14 +618,27 @@ impl App {
             compact_maybe_running: false,
             terminal: None,
             terminal_screen_area: Rect::new(0, 0, 0, 0),
+            terminal_data_root: None,
         }
     }
 
     /// Attach the host link and open the terminal identity store under the
     /// resolved Nano data root.
     pub fn attach_link(&mut self, link: HostLink) {
-        let data_root = link.data_root();
+        self.terminal_data_root = Some(link.data_root());
         let root_session_id = self.model.address().root_session_id.clone();
+        self.bind_terminal(root_session_id);
+        self.link = Some(link);
+    }
+
+    /// Rebuild the terminal feature for one root session. S07 owns the switch;
+    /// the old host shuts its terminals down, and the view must never carry the
+    /// old screen or attachment into the new session.
+    fn bind_terminal(&mut self, root_session_id: String) {
+        let Some(data_root) = self.terminal_data_root.clone() else {
+            self.terminal = None;
+            return;
+        };
         self.terminal = Some(match TerminalStore::open(&data_root, &root_session_id) {
             Ok(store) => {
                 let mut terminal = TerminalState::new(store, (80, 24));
@@ -632,7 +647,7 @@ impl App {
             }
             Err(error) => TerminalState::unavailable(error, (80, 24)),
         });
-        self.link = Some(link);
+        self.terminal_screen_area = Rect::new(0, 0, 0, 0);
     }
 
     /// Whether the terminal scene is the active main scene.
@@ -1065,10 +1080,6 @@ impl App {
             self.dispatch_terminal(commands);
             return true;
         }
-        if is_toggle_key(&key) {
-            self.open_terminal();
-            return true;
-        }
         self.clear_transient_status();
         if key.modifiers.contains(KeyModifiers::CONTROL)
             && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('q'))
@@ -1098,6 +1109,10 @@ impl App {
             // A switch owns the host lifecycle; new work waits for it.
             self.notice = Some(self.switch.state().label());
             return false;
+        }
+        if is_toggle_key(&key) {
+            self.open_terminal();
+            return true;
         }
         if self.schedule.open {
             if key.modifiers.contains(KeyModifiers::CONTROL)
@@ -1536,6 +1551,9 @@ impl App {
                 true
             }
             LinkEvent::Switched { link } => {
+                self.terminal_data_root = Some(link.data_root());
+                let root_session_id = self.model.address().root_session_id.clone();
+                self.bind_terminal(root_session_id);
                 self.link = Some(link);
                 self.restart_rx = None;
                 self.switch.host_started();
@@ -1561,6 +1579,10 @@ impl App {
 
     /// Enter the explicit "no usable host" state after a failed switch.
     fn fail_switch(&mut self, code: Option<String>, holder_pid: Option<u32>, message: String) {
+        if let Some(terminal) = self.terminal.as_mut() {
+            let commands = terminal.disconnect("会话切换失败；终端进程状态未知");
+            self.dispatch_terminal(commands);
+        }
         self.switch.fail(code, holder_pid, message.clone());
         let label = self.switch.state().label();
         self.error = Some(format!("{label}：{message}；当前没有可用宿主"));
@@ -5140,6 +5162,8 @@ impl App {
         self.view.scroll_mut().to_bottom();
         self.replay_truncated = false;
         self.sessions_panel.close();
+        let root_session_id = address.root_session_id.clone();
+        self.bind_terminal(root_session_id);
     }
 
     /// Read the official context-occupancy projection.
@@ -7693,6 +7717,22 @@ mod terminal_tests {
         assert!(app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)));
         assert!(!app.should_quit);
         assert!(app.handle_key(toggle));
+        assert!(!app.terminal_active());
+    }
+
+    #[test]
+    fn switching_root_sessions_rebinds_the_terminal_view() {
+        let mut app = terminal_app();
+        app.terminal_data_root = Some(
+            std::env::temp_dir().join(format!("nano-app-terminal-switch-{}", std::process::id())),
+        );
+        if let Some(terminal) = app.terminal.as_mut() {
+            terminal.set_root_session_id("root".to_string());
+        }
+        app.reset_for_target(&SessionAddress::root("other".to_string()));
+        let terminal = app.terminal.as_ref().expect("terminal rebound");
+        assert_eq!(terminal.root_session_id(), "other");
+        assert_eq!(terminal.phase(), nano_terminal::Phase::Idle);
         assert!(!app.terminal_active());
     }
 

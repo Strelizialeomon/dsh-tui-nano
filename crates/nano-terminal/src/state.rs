@@ -244,6 +244,11 @@ impl TerminalState {
         self.root_session_id = session_id.into();
     }
 
+    /// Root session this terminal feature is bound to.
+    pub fn root_session_id(&self) -> &str {
+        &self.root_session_id
+    }
+
     /// Current operation epoch. Responses from an older epoch are ignored.
     pub fn epoch(&self) -> u64 {
         self.epoch

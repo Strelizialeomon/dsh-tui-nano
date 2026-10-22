@@ -138,5 +138,6 @@
 | 13 | 次要 | 进程退出但附件仍开时误标“输出未确认排空” | 已改“输出已收完”，与官方 drained 后发布 exited 的语义一致 |
 | 14 | 记录 | `--resume` 非安全 id 仍会在终端 store 校验前传给宿主 | 已修：`Cli::session` 在启动宿主前拒绝非 `[A-Za-z0-9_-]{1,128}` 的 id |
 | 15 | 记录 | 三处弱覆盖测试（选区 clamp、ack 释放、closeAll 重试） | 已补有效断言与失败路径测试 |
+| 16 | 重大 | 合入 S07 后切换根会话未重建终端，旧屏幕/attachment/store 残留 | 已修：`bind_terminal` 按新 rootSessionId 重建；`Switched`/`attach_link` 刷新数据根；`fail_switch` 标 disconnected；新增切换重绑测试 |
 
 上述验收均未执行；真实 PTY 证据见 `docs/evidence/2026-10-21-s09/`，合并前逐项勾选。
