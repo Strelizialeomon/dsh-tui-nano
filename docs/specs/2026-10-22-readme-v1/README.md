@@ -1,10 +1,10 @@
 # [2026-10-22-readme-v1] 公开 README 重写
 
 - 组标识：`2026-10-22-readme-v1`；角色：单份 spec（不拆），同时承担总纲与执行规格。
-- 状态：草案（待合入）；执行单：待开。
+- 状态：已合入（#41）；执行单：#43。
 - 上游：`2026-10-20-nano-v1` 的 S01–S12 已实现；0.1.0 发布验收未闭合；视觉对齐第一批已合入。
 - 下游：无。本份只改公开文档，不改代码、协议、桥接、官方服务或发布结论。
-- 合入前提：spec 合并后开执行 issue；实施只动 `README.md` 与新增 `README.en.md`，不新增 LICENSE / CONTRIBUTING / CI。
+- 合入前提：spec 合并后开执行 issue；实施只动 `README.md` 与新增 `README.en.md`（本 spec 头部随实施 PR 机械回填 Issue / 状态），不新增 LICENSE / CONTRIBUTING / CI。
 - 替代关系：不取代任何已合并 spec；只取代旧 README 的公开叙事。
 - ADR：见 §11；本次检索无现行 ADR 命中，不新增 ADR。
 
