@@ -22,6 +22,7 @@ use nano_conversation::{
 };
 use nano_decisions::{answers_to_wire, DecisionAction, DecisionClick, DecisionKey, DecisionsModel};
 use nano_jobs::{BashRecord, JobsModel, SHELL_NOTICE};
+use nano_monitor::MonitorModel;
 use nano_runtime::{CapabilityStatus, Hello, SessionMode};
 use nano_schedule::{ScheduleAction, ScheduleModel};
 use nano_sessions::{
@@ -195,6 +196,25 @@ pub enum Pending {
     },
     /// A human stop request.
     JobsKill {
+        /// Official job id.
+        job_id: String,
+    },
+    /// Read the monitor list.
+    MonitorList,
+    /// Create one monitor for a job.
+    MonitorCreate {
+        /// Official job id.
+        job_id: String,
+        /// Unread bytes the form showed before the request.
+        unread_bytes: u64,
+    },
+    /// Stop monitor delivery only.
+    MonitorStop {
+        /// Official job id.
+        job_id: String,
+    },
+    /// Reset one monitor's budget.
+    MonitorReset {
         /// Official job id.
         job_id: String,
     },
@@ -401,6 +421,29 @@ impl SessionPanel {
 }
 
 /// One frame of application state.
+/// One monitor attach form. The unread byte count is shown before the user
+/// chooses between "new output" and "from the retained beginning".
+#[derive(Debug, Clone)]
+pub struct MonitorForm {
+    /// Observed official job id.
+    pub job_id: String,
+    /// Job label for the form title.
+    pub job_label: String,
+    /// Bytes already retained when the form opened.
+    pub unread_bytes: u64,
+    /// Replay the retained head from `earliest`.
+    pub from_earliest: bool,
+    /// `quiet` uses `inject`; otherwise `notify` uses `followup`.
+    pub quiet: bool,
+    /// Optional literal/regex pattern.
+    pub filter: String,
+    /// Treat the pattern as a regular expression.
+    pub filter_regex: bool,
+    /// Whether typed characters edit the filter.
+    pub editing_filter: bool,
+}
+
+/// Main application state.
 pub struct App {
     /// Launch options.
     pub cli: Cli,
@@ -511,6 +554,16 @@ pub struct App {
     pub jobs_snapshot_pending: bool,
     /// Line count of the last rendered job detail, for scroll bounds.
     pub jobs_detail_lines: usize,
+    /// Official S10 monitor projections, never a second listener.
+    pub monitor: MonitorModel,
+    /// Whether the monitor sub-view owns the task panel.
+    pub monitor_open: bool,
+    /// The attach form, when the user is choosing a monitor's scope.
+    pub monitor_form: Option<MonitorForm>,
+    /// A monitor list request is in flight.
+    pub monitor_snapshot_pending: bool,
+    /// Select this job's monitor after its projection arrives.
+    pub monitor_select_after_refresh: Option<String>,
     /// Local `!` records shown until the official synthetic message is durable.
     pub bash_records: Vec<BashRecord>,
     /// Local bash record id sequence.
@@ -682,6 +735,11 @@ impl App {
             follow_dirty: std::collections::HashSet::new(),
             jobs_snapshot_pending: false,
             jobs_detail_lines: 0,
+            monitor: MonitorModel::new(address.root_session_id.clone()),
+            monitor_open: false,
+            monitor_form: None,
+            monitor_snapshot_pending: false,
+            monitor_select_after_refresh: None,
             bash_records: Vec::new(),
             bash_counter: 0,
             shell_notice_acked: false,
@@ -2285,6 +2343,30 @@ impl App {
                         changed
                     }
                     "subagents.event" => self.handle_subagents_event(&params.payload),
+                    "monitor.updated" => {
+                        let previous_notice = self.monitor.last_notice().map(str::to_string);
+                        let previous_error = self.monitor.last_error().map(str::to_string);
+                        let changed = self.monitor.apply_event(&params.kind, &params.payload);
+                        let notice = self.monitor.last_notice().map(str::to_string);
+                        let error = self.monitor.last_error().map(str::to_string);
+                        let notice_changed = notice != previous_notice;
+                        let error_changed = error != previous_error;
+                        if notice_changed {
+                            self.notice = notice;
+                        }
+                        if error_changed {
+                            self.error = error;
+                        }
+                        if notice_changed || error_changed {
+                            // Copy both diagnostics before clearing, otherwise a
+                            // projected notice would erase a simultaneous error.
+                            self.monitor.clear_diagnostics();
+                        }
+                        if changed {
+                            self.select_pending_monitor();
+                        }
+                        changed
+                    }
                     _ => self.model.apply_event(&params.kind, &params.payload),
                 };
                 if params.kind == "session.event" {
@@ -2499,6 +2581,10 @@ impl App {
                     | Pending::SubagentInterrupt { .. }
                     | Pending::SubagentSubscribe { .. }
                     | Pending::SubagentUnsubscribe
+                    | Pending::MonitorList
+                    | Pending::MonitorCreate { .. }
+                    | Pending::MonitorStop { .. }
+                    | Pending::MonitorReset { .. }
             )
         {
             self.resubscribing = false;
@@ -2635,9 +2721,11 @@ impl App {
                         self.notice = Some("订阅已重建；正在对齐官方 baseline".to_string());
                         self.refresh_snapshot();
                         self.refresh_context();
-                        // Jobs events are live-only, so re-read the official
-                        // baseline after a gap instead of trusting the old list.
+                        // Jobs and monitor events are live-only, so re-read the
+                        // official baselines after a gap instead of trusting
+                        // the old lists.
                         self.refresh_jobs_snapshot();
+                        self.refresh_monitor_snapshot();
                         self.refresh_skills();
                         self.refresh_instructions();
                     }
@@ -3563,6 +3651,123 @@ impl App {
                     }
                 }
             }
+            Pending::MonitorList => {
+                self.monitor_snapshot_pending = false;
+                if !self.ready {
+                    return;
+                }
+                match result {
+                    Ok(value) => {
+                        if let Err(message) = self.monitor.apply_list(&value) {
+                            self.error = Some(format!("监听列表无效：{message}"));
+                        } else {
+                            self.select_pending_monitor();
+                        }
+                    }
+                    Err(error) => {
+                        if matches!(error.kind, RequestErrorKind::Rpc | RequestErrorKind::Local) {
+                            self.error = Some(format!("读取监听列表失败：{}", error.message));
+                        }
+                    }
+                }
+            }
+            Pending::MonitorCreate {
+                job_id,
+                unread_bytes,
+            } => {
+                if !self.ready {
+                    return;
+                }
+                match result {
+                    Ok(value) => {
+                        let existing = value
+                            .get("existing")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false);
+                        let skipped = value
+                            .get("monitor")
+                            .and_then(|monitor| monitor.get("skippedBytes"))
+                            .and_then(Value::as_u64)
+                            .unwrap_or(unread_bytes);
+                        self.monitor_form = None;
+                        if !self.monitor.select_job(&job_id) {
+                            // The control response may overtake the live event;
+                            // select once the projection arrives.
+                            self.monitor_select_after_refresh = Some(job_id.clone());
+                        } else {
+                            self.monitor_select_after_refresh = None;
+                        }
+                        self.monitor_open = true;
+                        self.notice = Some(if existing {
+                            "已有活动监听；未重复创建".to_string()
+                        } else if skipped > unread_bytes {
+                            format!(
+                                "监听已创建；等待期间又新增 {} 字节未读，已按最新游标跳过",
+                                skipped - unread_bytes
+                            )
+                        } else {
+                            "监听已创建".to_string()
+                        });
+                        self.refresh_monitor_snapshot();
+                    }
+                    Err(error) => {
+                        let message = match error.code {
+                            Some(1028) => "任务不存在或不可见（job/not-found）".to_string(),
+                            Some(1057) => {
+                                "当前宿主不支持 Monitor（monitor/unavailable）".to_string()
+                            }
+                            Some(1059) => "过滤器无效（monitor/filter-invalid）".to_string(),
+                            Some(1060) => "预算参数无效（monitor/budget-invalid）".to_string(),
+                            Some(1061) => "监听数量已达上限（monitor/limit-reached）".to_string(),
+                            _ => format!("创建监听失败：{}", error.message),
+                        };
+                        self.error = Some(message);
+                    }
+                }
+            }
+            Pending::MonitorStop { job_id } => {
+                if !self.ready {
+                    return;
+                }
+                match result {
+                    Ok(_value) => {
+                        self.notice = Some("监听已停止；被观察任务未受影响".to_string());
+                        self.refresh_monitor_snapshot();
+                    }
+                    Err(error) => {
+                        let message = match error.code {
+                            Some(1057) => {
+                                "当前宿主不支持 Monitor（monitor/unavailable）".to_string()
+                            }
+                            Some(1058) => "监听记录不存在（monitor/not-found）".to_string(),
+                            _ => format!("停止监听失败（{}）：{}", job_id, error.message),
+                        };
+                        self.error = Some(message);
+                    }
+                }
+            }
+            Pending::MonitorReset { job_id } => {
+                if !self.ready {
+                    return;
+                }
+                match result {
+                    Ok(_value) => {
+                        self.notice = Some("监听预算已重置".to_string());
+                        self.refresh_monitor_snapshot();
+                    }
+                    Err(error) => {
+                        let message = match error.code {
+                            Some(1057) => {
+                                "当前宿主不支持 Monitor（monitor/unavailable）".to_string()
+                            }
+                            Some(1058) => "监听记录不存在（monitor/not-found）".to_string(),
+                            Some(1060) => "预算参数无效（monitor/budget-invalid）".to_string(),
+                            _ => format!("重置监听预算失败（{}）：{}", job_id, error.message),
+                        };
+                        self.error = Some(message);
+                    }
+                }
+            }
         }
         if self.schedule.take_refresh() {
             self.refresh_schedule_catalog();
@@ -3723,6 +3928,11 @@ impl App {
         self.transcript_dirty = true;
         self.jobs.clear();
         self.jobs_snapshot_pending = false;
+        self.monitor.clear();
+        self.monitor_snapshot_pending = false;
+        self.monitor_open = false;
+        self.monitor_form = None;
+        self.monitor_select_after_refresh = None;
         self.following.clear();
         self.follow_dirty.clear();
         self.jobs_scroll_back = 0;
@@ -4442,12 +4652,17 @@ impl App {
     fn toggle_jobs(&mut self) {
         if self.jobs_open {
             self.jobs_open = false;
+            self.monitor_open = false;
+            self.monitor_form = None;
             self.jobs.close_detail();
             self.jobs_scroll_back = 0;
             self.notice = Some("任务面板已关闭".to_string());
         } else {
             self.jobs_open = true;
+            self.monitor_open = false;
+            self.monitor_form = None;
             self.refresh_jobs_snapshot();
+            self.refresh_monitor_snapshot();
         }
     }
 
@@ -4483,6 +4698,12 @@ impl App {
         {
             return false;
         }
+        if self.monitor_form.is_some() {
+            return self.handle_monitor_form_key(key);
+        }
+        if self.monitor_open {
+            return self.handle_monitor_view_key(key);
+        }
         if self.jobs.detail_open() {
             return match key.code {
                 KeyCode::Esc => {
@@ -4512,6 +4733,10 @@ impl App {
                     self.kill_detail_job();
                     true
                 }
+                KeyCode::Char('m') | KeyCode::Char('M') => {
+                    self.begin_monitor_for_detail();
+                    true
+                }
                 KeyCode::Char('r') | KeyCode::Char('R') => {
                     if let Some(job_id) = self.jobs.detail_id().map(str::to_string) {
                         self.follow_job(&job_id);
@@ -4524,6 +4749,8 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 self.jobs_open = false;
+                self.monitor_open = false;
+                self.monitor_form = None;
                 self.jobs_scroll_back = 0;
                 true
             }
@@ -4547,8 +4774,13 @@ impl App {
                 self.kill_selected_job();
                 true
             }
+            KeyCode::Char('m') | KeyCode::Char('M') => {
+                self.begin_monitor_for_selected();
+                true
+            }
             KeyCode::Char('r') | KeyCode::Char('R') => {
                 self.refresh_jobs_snapshot();
+                self.refresh_monitor_snapshot();
                 true
             }
             _ => false,
@@ -4640,6 +4872,313 @@ impl App {
             }
             Err(message) => {
                 self.error = Some(format!("停止请求未能发出：{message}"));
+            }
+        }
+    }
+
+    /// Whether the connected host reports the S10 Monitor surface.
+    fn monitor_supported(&self) -> bool {
+        self.hello
+            .as_ref()
+            .is_some_and(crate::link::monitor_supported)
+    }
+
+    /// Read the monitor list. The result is an absolute projection; the model
+    /// rejects it when a newer live event already landed.
+    fn refresh_monitor_snapshot(&mut self) {
+        if !self.ready || self.monitor_snapshot_pending || !self.monitor_supported() {
+            return;
+        }
+        let params = json!({ "address": self.model.address().wire_value() });
+        let Some(link) = &self.link else {
+            return;
+        };
+        match link.request("nano.monitor.list", params) {
+            Ok(id) => {
+                self.monitor_snapshot_pending = true;
+                self.pending.insert(id, Pending::MonitorList);
+            }
+            Err(message) => {
+                self.error = Some(format!("读取监听列表失败：{message}"));
+            }
+        }
+    }
+
+    /// Start a monitor flow for the selected task row.
+    fn begin_monitor_for_selected(&mut self) {
+        let Some(job) = self.jobs.selected_job() else {
+            return;
+        };
+        let job_id = job.id.clone();
+        let label = job.label.clone();
+        let unread = job.output.total.saturating_sub(job.output.earliest);
+        self.begin_monitor_for_job(&job_id, &label, unread);
+    }
+
+    /// Start a monitor flow for the open task detail.
+    fn begin_monitor_for_detail(&mut self) {
+        let Some(job) = self.jobs.detail_job() else {
+            return;
+        };
+        let job_id = job.id.clone();
+        let label = job.label.clone();
+        let unread = job.output.total.saturating_sub(job.output.earliest);
+        self.begin_monitor_for_job(&job_id, &label, unread);
+    }
+
+    /// Open the existing monitor, or the attach form when none is active.
+    fn begin_monitor_for_job(&mut self, job_id: &str, label: &str, unread: u64) {
+        if !self.ready {
+            self.error = Some("宿主未就绪".to_string());
+            return;
+        }
+        if !self.jobs_supported() || !self.monitor_supported() {
+            self.error = Some("当前宿主不支持 Monitor".to_string());
+            return;
+        }
+        if let Some(existing) = self.monitor.monitor_for_job(job_id) {
+            if !existing.stopped_by_user {
+                self.monitor.select_job(job_id);
+                self.monitor_open = true;
+                self.monitor_form = None;
+                self.jobs_scroll_back = 0;
+                self.jobs.close_detail();
+                return;
+            }
+            // A user-stopped monitor is an inactive record. Starting a new
+            // one is an explicit fresh attach, not a silent resume.
+        }
+        self.open_monitor_form(job_id, label, unread);
+    }
+
+    /// Open the attach form. The unread byte count is always visible first.
+    fn open_monitor_form(&mut self, job_id: &str, label: &str, unread: u64) {
+        self.monitor_open = false;
+        self.jobs_scroll_back = 0;
+        self.monitor_form = Some(MonitorForm {
+            job_id: job_id.to_string(),
+            job_label: label.to_string(),
+            unread_bytes: unread,
+            from_earliest: false,
+            quiet: false,
+            filter: String::new(),
+            filter_regex: false,
+            editing_filter: false,
+        });
+    }
+
+    /// Keys while the monitor attach form owns the task panel.
+    fn handle_monitor_form_key(&mut self, key: KeyEvent) -> bool {
+        let Some(form) = self.monitor_form.as_mut() else {
+            return false;
+        };
+        if form.editing_filter {
+            return match key.code {
+                KeyCode::Esc | KeyCode::Enter => {
+                    form.editing_filter = false;
+                    true
+                }
+                KeyCode::Backspace => {
+                    form.filter.pop();
+                    true
+                }
+                KeyCode::Char(character) => {
+                    if !character.is_control() && form.filter.len() + character.len_utf8() <= 512 {
+                        form.filter.push(character);
+                    }
+                    true
+                }
+                _ => false,
+            };
+        }
+        match key.code {
+            KeyCode::Esc => {
+                self.monitor_form = None;
+                true
+            }
+            KeyCode::Enter => {
+                self.submit_monitor_form();
+                true
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') => {
+                form.from_earliest = false;
+                true
+            }
+            KeyCode::Char('a') | KeyCode::Char('A') => {
+                form.from_earliest = true;
+                true
+            }
+            KeyCode::Char('t') | KeyCode::Char('T') => {
+                form.quiet = !form.quiet;
+                true
+            }
+            KeyCode::Char('f') | KeyCode::Char('F') => {
+                form.editing_filter = true;
+                true
+            }
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                form.filter_regex = !form.filter_regex;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Select a created monitor once its projection has arrived.
+    fn select_pending_monitor(&mut self) {
+        let Some(job_id) = self.monitor_select_after_refresh.clone() else {
+            return;
+        };
+        if self.monitor.select_job(&job_id) {
+            self.monitor_select_after_refresh = None;
+        }
+    }
+
+    /// Send the attach request with the exact visible choices. The form stays
+    /// open until the host answers, so a rejection does not lose the choices.
+    fn submit_monitor_form(&mut self) {
+        let Some(form) = self.monitor_form.clone() else {
+            return;
+        };
+        if self
+            .pending
+            .values()
+            .any(|pending| matches!(pending, Pending::MonitorCreate { .. }))
+        {
+            return;
+        }
+        if !self.ready {
+            self.error = Some("宿主未就绪".to_string());
+            return;
+        }
+        let mut params = json!({
+            "address": self.model.address().wire_value(),
+            "jobId": form.job_id.clone(),
+            "from": if form.from_earliest { "earliest" } else { "new" },
+            "mode": if form.quiet { "quiet" } else { "notify" },
+            "filter": if form.filter.is_empty() {
+                Value::Null
+            } else {
+                json!({ "pattern": form.filter.clone(), "regex": form.filter_regex })
+            },
+        });
+        if form.filter.is_empty() {
+            if let Some(object) = params.as_object_mut() {
+                object.remove("filter");
+            }
+        }
+        let Some(link) = &self.link else {
+            return;
+        };
+        match link.request("nano.monitor.create", params) {
+            Ok(id) => {
+                self.pending.insert(
+                    id,
+                    Pending::MonitorCreate {
+                        job_id: form.job_id.clone(),
+                        unread_bytes: form.unread_bytes,
+                    },
+                );
+                self.notice = Some("正在创建监听…".to_string());
+            }
+            Err(message) => {
+                self.error = Some(format!("创建监听失败：{message}"));
+            }
+        }
+    }
+
+    /// Keys while the monitor detail owns the task panel.
+    fn handle_monitor_view_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Esc => {
+                self.monitor_open = false;
+                true
+            }
+            KeyCode::Up => {
+                self.monitor.select_previous();
+                true
+            }
+            KeyCode::Down => {
+                self.monitor.select_next();
+                true
+            }
+            KeyCode::Char('s') | KeyCode::Char('S') => {
+                self.stop_monitor();
+                true
+            }
+            KeyCode::Char('b') | KeyCode::Char('B') => {
+                self.reset_monitor_budget();
+                true
+            }
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                self.refresh_monitor_snapshot();
+                true
+            }
+            KeyCode::PageUp => {
+                // The monitor panel draws from the top, so PageUp moves toward
+                // the beginning (smaller offset).
+                self.jobs_scroll_back = self.jobs_scroll_back.saturating_sub(10);
+                true
+            }
+            KeyCode::PageDown => {
+                self.jobs_scroll_back = self.jobs_scroll_back.saturating_add(10);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Stop monitor delivery only; the observed task is untouched.
+    fn stop_monitor(&mut self) {
+        let Some(monitor) = self.monitor.selected_monitor() else {
+            return;
+        };
+        let job_id = monitor.job_id.clone();
+        let params = json!({
+            "address": self.model.address().wire_value(),
+            "jobId": job_id.clone(),
+        });
+        if self.send_monitor_request("nano.monitor.stop", params, Pending::MonitorStop { job_id }) {
+            self.notice = Some("正在停止监听…".to_string());
+        }
+    }
+
+    /// Reset one monitor's budget by explicit user action.
+    fn reset_monitor_budget(&mut self) {
+        let Some(monitor) = self.monitor.selected_monitor() else {
+            return;
+        };
+        let job_id = monitor.job_id.clone();
+        let params = json!({
+            "address": self.model.address().wire_value(),
+            "jobId": job_id.clone(),
+        });
+        if self.send_monitor_request(
+            "nano.monitor.resetBudget",
+            params,
+            Pending::MonitorReset { job_id },
+        ) {
+            self.notice = Some("正在重置监听预算…".to_string());
+        }
+    }
+
+    /// Shared send path for monitor requests.
+    fn send_monitor_request(&mut self, method: &str, params: Value, pending: Pending) -> bool {
+        if !self.ready {
+            self.error = Some("宿主未就绪".to_string());
+            return false;
+        }
+        let Some(link) = &self.link else {
+            return false;
+        };
+        match link.request(method, params) {
+            Ok(id) => {
+                self.pending.insert(id, pending);
+                true
+            }
+            Err(message) => {
+                self.error = Some(format!("监听请求未能发出：{message}"));
+                false
             }
         }
     }
@@ -6338,6 +6877,11 @@ impl App {
         self.view.scroll_mut().to_bottom();
         self.replay_truncated = false;
         self.sessions_panel.close();
+        self.monitor = MonitorModel::new(address.root_session_id.clone());
+        self.monitor_open = false;
+        self.monitor_form = None;
+        self.monitor_snapshot_pending = false;
+        self.monitor_select_after_refresh = None;
         let root_session_id = address.root_session_id.clone();
         self.bind_terminal(root_session_id);
     }
@@ -6830,6 +7374,288 @@ mod tests {
                 file_admission: "verbatim".into(),
             }),
         }
+    }
+
+    /// A handshake with the official jobs registry and the S10 Monitor surface.
+    fn hello_with_monitor() -> Hello {
+        use nano_runtime::protocol::Capability;
+        let mut hello = hello_with_attachments(0);
+        for name in ["jobs", "monitor"] {
+            hello.capabilities.insert(
+                name.to_string(),
+                Capability {
+                    status: CapabilityStatus::Supported,
+                    mode: None,
+                    detail: None,
+                    required: None,
+                },
+            );
+        }
+        hello
+    }
+
+    /// One official job projection with retained output bytes.
+    fn monitor_job(id: &str, total: u64, earliest: u64) -> Value {
+        json!({
+            "id": id,
+            "kind": "bash",
+            "label": "sleep 30",
+            "owner": "root",
+            "status": "running",
+            "startedAt": 1,
+            "output": {"total": total, "earliest": earliest}
+        })
+    }
+
+    /// One full monitor projection for live-event tests.
+    fn monitor_projection(job_id: &str, stopped_by_user: bool) -> Value {
+        json!({
+            "id": job_id,
+            "jobId": job_id,
+            "mode": "notify",
+            "listening": !stopped_by_user,
+            "stoppedByUser": stopped_by_user,
+            "from": "new",
+            "initialOffset": 100,
+            "offset": 120,
+            "unreadBytes": 100,
+            "skippedBytes": 100,
+            "filter": null,
+            "mergeWindowMs": 800,
+            "budgets": {
+                "maxNotifications": 50,
+                "minIntervalMs": 1000,
+                "maxLinesPerNotification": 20,
+                "maxNotificationBytes": 8192,
+                "maxNotificationTokens": 2048,
+                "expiresAt": 1000000
+            },
+            "used": {"notifications": 1, "lines": 3, "bytes": 120, "estimatedTokens": 30},
+            "exhausted": false,
+            "stream": "watching",
+            "jobStatus": "running",
+            "lossy": false,
+            "gaps": 0,
+            "heldMatches": 0,
+            "heldBytes": 0,
+            "droppedMatches": 0,
+            "deliveries": [],
+            "role": "user",
+            "source": "monitor",
+            "createdAt": 1,
+            "updatedAt": 2
+        })
+    }
+
+    #[test]
+    fn m_on_a_job_shows_the_unread_bytes_before_choosing_a_range() {
+        let mut app = app();
+        app.ready = true;
+        app.hello = Some(hello_with_monitor());
+        app.jobs
+            .apply_snapshot(&json!({
+                "seq": 1,
+                "jobs": [monitor_job("bash-a", 200, 50)]
+            }))
+            .unwrap();
+        app.jobs_open = true;
+        app.handle_key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE));
+        let form = app.monitor_form.as_ref().expect("attach form opened");
+        assert_eq!(form.unread_bytes, 150);
+        assert!(!form.from_earliest);
+        assert!(!form.quiet);
+        app.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        assert!(app.monitor_form.as_ref().unwrap().from_earliest);
+        app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
+        assert!(app.monitor_form.as_ref().unwrap().quiet);
+    }
+
+    #[test]
+    fn a_user_stopped_monitor_reopens_the_attach_form_instead_of_resuming() {
+        let mut app = app();
+        app.ready = true;
+        app.hello = Some(hello_with_monitor());
+        app.jobs
+            .apply_snapshot(&json!({
+                "seq": 1,
+                "jobs": [monitor_job("bash-a", 200, 50)]
+            }))
+            .unwrap();
+        app.monitor.apply_event(
+            "monitor.updated",
+            &json!({
+                "address": {"rootSessionId": "root"},
+                "seq": 1,
+                "monitor": monitor_projection("bash-a", true)
+            }),
+        );
+        app.begin_monitor_for_selected();
+        assert!(app.monitor_form.is_some());
+        assert!(!app.monitor_open);
+    }
+
+    #[test]
+    fn a_live_monitor_projection_updates_the_panel_without_touching_history() {
+        let mut app = app();
+        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::Event(
+            nano_runtime::protocol::EventParams {
+                runtime_id: "rt".into(),
+                generation: 1,
+                subscription_id: "sub-1".into(),
+                sequence: 2,
+                kind: "monitor.updated".into(),
+                payload: json!({
+                    "address": {"rootSessionId": "root"},
+                    "seq": 2,
+                    "monitor": monitor_projection("bash-a", false)
+                }),
+            },
+        )));
+        assert_eq!(app.monitor.len(), 1);
+        let monitor = app.monitor.selected_monitor().unwrap();
+        assert_eq!(monitor.mode, nano_monitor::MonitorMode::Notify);
+        assert_eq!(monitor.used.notifications, 1);
+        assert!(monitor
+            .identity_label()
+            .contains("role=user / source=monitor"));
+        assert!(app.model.items().is_empty());
+    }
+
+    #[test]
+    fn a_simultaneous_monitor_notice_and_error_are_both_kept() {
+        let mut app = app();
+        let mut projection = monitor_projection("bash-a", false);
+        projection["exhausted"] = json!(true);
+        projection["exhaustReason"] = json!("notifications");
+        projection["deliveries"] = json!([{
+            "messageId": "message-1",
+            "mode": "notify",
+            "state": "failed",
+            "at": 2,
+            "lines": 1,
+            "bytes": 20,
+            "estimatedTokens": 5,
+            "firstOffset": 0,
+            "lastOffset": 0,
+            "omittedLines": 0,
+            "textPreview": "[monitor] job=bash-a matched=1",
+            "detail": "投递调用失败"
+        }]);
+        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::Event(
+            nano_runtime::protocol::EventParams {
+                runtime_id: "rt".into(),
+                generation: 1,
+                subscription_id: "sub-1".into(),
+                sequence: 2,
+                kind: "monitor.updated".into(),
+                payload: json!({
+                    "address": {"rootSessionId": "root"},
+                    "seq": 2,
+                    "monitor": projection
+                }),
+            },
+        )));
+        assert!(app
+            .notice
+            .as_deref()
+            .is_some_and(|notice| notice.contains("预算已用尽")));
+        assert!(app
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("监听投递")));
+    }
+
+    #[test]
+    fn monitor_filter_editing_respects_the_utf8_byte_cap() {
+        let mut app = app();
+        app.jobs_open = true;
+        app.monitor_form = Some(MonitorForm {
+            job_id: "bash-a".into(),
+            job_label: "sleep 30".into(),
+            unread_bytes: 0,
+            from_earliest: false,
+            quiet: false,
+            filter: "a".repeat(511),
+            filter_regex: false,
+            editing_filter: true,
+        });
+        app.handle_key(KeyEvent::new(KeyCode::Char('€'), KeyModifiers::NONE));
+        assert_eq!(app.monitor_form.as_ref().unwrap().filter.len(), 511);
+    }
+
+    #[test]
+    fn monitor_page_keys_match_the_top_anchored_view() {
+        let mut app = app();
+        app.jobs_open = true;
+        app.monitor_open = true;
+        app.jobs_scroll_back = 25;
+        app.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
+        assert_eq!(app.jobs_scroll_back, 15);
+        app.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+        assert_eq!(app.jobs_scroll_back, 25);
+    }
+
+    #[test]
+    fn a_pending_monitor_selection_survives_an_event_arriving_after_create() {
+        let mut app = app();
+        app.monitor_select_after_refresh = Some("bash-a".to_string());
+        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::Event(
+            nano_runtime::protocol::EventParams {
+                runtime_id: "rt".into(),
+                generation: 1,
+                subscription_id: "sub-1".into(),
+                sequence: 2,
+                kind: "monitor.updated".into(),
+                payload: json!({
+                    "address": {"rootSessionId": "root"},
+                    "seq": 2,
+                    "monitor": monitor_projection("bash-a", false)
+                }),
+            },
+        )));
+        assert_eq!(
+            app.monitor
+                .selected_monitor()
+                .map(|monitor| monitor.job_id.as_str()),
+            Some("bash-a")
+        );
+        assert!(app.monitor_select_after_refresh.is_none());
+    }
+
+    #[test]
+    fn host_loss_drops_monitor_projections() {
+        let mut app = app();
+        app.monitor.apply_event(
+            "monitor.updated",
+            &json!({
+                "address": {"rootSessionId": "root"},
+                "seq": 1,
+                "monitor": monitor_projection("bash-a", false)
+            }),
+        );
+        assert_eq!(app.monitor.len(), 1);
+        app.handle_host_loss();
+        assert!(app.monitor.is_empty());
+        assert!(!app.monitor_open);
+        assert!(app.monitor_form.is_none());
+    }
+
+    #[test]
+    fn switching_root_sessions_drops_monitor_projections() {
+        let mut app = app();
+        app.monitor.apply_event(
+            "monitor.updated",
+            &json!({
+                "address": {"rootSessionId": "root"},
+                "seq": 1,
+                "monitor": monitor_projection("bash-a", false)
+            }),
+        );
+        app.monitor_open = true;
+        app.reset_for_target(&SessionAddress::root("other".to_string()));
+        assert!(app.monitor.is_empty());
+        assert!(!app.monitor_open);
+        assert!(app.monitor_form.is_none());
     }
 
     fn png_fixture() -> Vec<u8> {
@@ -8377,10 +9203,10 @@ mod tests {
     #[test]
     fn subscription_kinds_cover_every_contracted_event_kind() {
         let mut ours = crate::link::SUBSCRIPTION_KINDS.to_vec();
-        // Job kinds are added by `subscription_kinds` only when the host
-        // reports the capability; the full potential set must still cover the
-        // whole contract.
-        ours.extend(["jobs.event", "jobs.output"]);
+        // Job and monitor kinds are added by `subscription_kinds` only when the
+        // host reports the capability; the full potential set must still cover
+        // the whole contract.
+        ours.extend(["jobs.event", "jobs.output", "monitor.updated"]);
         ours.sort_unstable();
         let mut expected = nano_runtime::EVENT_KINDS.to_vec();
         expected.sort_unstable();

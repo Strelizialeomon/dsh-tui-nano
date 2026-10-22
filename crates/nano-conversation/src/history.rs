@@ -23,6 +23,9 @@ pub enum MessageKind {
     SyntheticBash,
     /// A user-role message from another producer, such as an injected notice.
     Injected,
+    /// An S10 Monitor line notification. User-role and `source.kind=monitor`;
+    /// never an approval or a claim that it is not a user turn.
+    Monitor,
     /// A turn-level notice such as a failure or an interruption.
     Notice,
 }
@@ -305,6 +308,8 @@ impl ConversationHistory {
             return None;
         } else if source_kind == Some("bash-mode") {
             MessageKind::SyntheticBash
+        } else if source_kind == Some("monitor") {
+            MessageKind::Monitor
         } else if source_kind == Some("user") {
             // A real user prompt is never reclassified by its text, even when
             // it discusses the Nano bash tags.
@@ -637,6 +642,26 @@ mod tests {
             panic!("expected message");
         };
         assert_eq!(message.kind, MessageKind::SyntheticBash);
+    }
+
+    #[test]
+    fn a_monitor_message_stays_a_user_role_monitor_notice() {
+        let mut history = ConversationHistory::default();
+        history.apply(&event(
+            1,
+            "user/message",
+            json!({
+                "id": "u-1",
+                "role": "user",
+                "content": [{"type": "text", "text": "[monitor] job=bash-a matched=1"}],
+                "source": {"kind": "monitor"}
+            }),
+        ));
+        let ConversationItem::Message(message) = &history.items()[0] else {
+            panic!("expected message");
+        };
+        assert_eq!(message.kind, MessageKind::Monitor);
+        assert_eq!(message.text, "[monitor] job=bash-a matched=1");
     }
 
     #[test]

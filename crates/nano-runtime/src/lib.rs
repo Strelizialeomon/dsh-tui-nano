@@ -81,7 +81,7 @@ pub const LIFECYCLE_TRANSITIONS: [(&str, &str); 15] = [
 ];
 
 /// Error code names shared with the bridge contract.
-pub const ERROR_CODE_NAMES: [(&str, i64); 69] = [
+pub const ERROR_CODE_NAMES: [(&str, i64); 74] = [
     ("jsonrpc/parse-error", -32700),
     ("jsonrpc/invalid-request", -32600),
     ("jsonrpc/method-not-found", -32601),
@@ -143,18 +143,23 @@ pub const ERROR_CODE_NAMES: [(&str, i64); 69] = [
     ("nano/terminal/input-full", 1054),
     ("nano/terminal/closed-id", 1055),
     ("nano/terminal/failed", 1056),
-    ("nano/subagents/unavailable", 1057),
-    ("nano/subagents/unauthorized", 1058),
-    ("nano/subagents/not-resumable", 1059),
-    ("nano/subagents/parent-unavailable", 1060),
-    ("nano/subagents/delivery-unavailable", 1061),
-    ("nano/subagents/attachment-invalid", 1062),
-    ("nano/subagents/capacity", 1063),
-    ("nano/subagents/invalid", 1064),
+    ("nano/monitor/unavailable", 1057),
+    ("nano/monitor/not-found", 1058),
+    ("nano/monitor/filter-invalid", 1059),
+    ("nano/monitor/budget-invalid", 1060),
+    ("nano/monitor/limit-reached", 1061),
+    ("nano/subagents/unavailable", 1062),
+    ("nano/subagents/unauthorized", 1063),
+    ("nano/subagents/not-resumable", 1064),
+    ("nano/subagents/parent-unavailable", 1065),
+    ("nano/subagents/delivery-unavailable", 1066),
+    ("nano/subagents/attachment-invalid", 1067),
+    ("nano/subagents/capacity", 1068),
+    ("nano/subagents/invalid", 1069),
 ];
 
 /// Method names implemented by this generation.
-pub const IMPLEMENTED_METHODS: [&str; 66] = [
+pub const IMPLEMENTED_METHODS: [&str; 70] = [
     "nano.hello",
     "nano.startupError",
     "nano.shutdown",
@@ -197,6 +202,10 @@ pub const IMPLEMENTED_METHODS: [&str; 66] = [
     "nano.jobs.snapshot",
     "nano.jobs.follow",
     "nano.jobs.kill",
+    "nano.monitor.create",
+    "nano.monitor.list",
+    "nano.monitor.stop",
+    "nano.monitor.resetBudget",
     "nano.approval.answer",
     "nano.question.answer",
     "nano.decisions.snapshot",
@@ -231,7 +240,7 @@ pub const TERMINAL_NOTIFICATION_METHODS: [&str; 4] = [
 ];
 
 /// Event kinds this client accepts.
-pub const EVENT_KINDS: [&str; 16] = [
+pub const EVENT_KINDS: [&str; 17] = [
     "session.event",
     "conversation.status",
     "conversation.inbox",
@@ -247,6 +256,7 @@ pub const EVENT_KINDS: [&str; 16] = [
     "decisions.approval",
     "decisions.question",
     "decisions.projection",
+    "monitor.updated",
     "subagents.event",
 ];
 

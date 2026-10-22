@@ -311,9 +311,15 @@ fn render_entry(entry: &Entry, width: usize, expanded: bool) -> RenderedEntry {
             let color = if *is_error { Color::Red } else { Color::Yellow };
             labeled_block(&mut output, width, label, color, text, false);
         }
-        EntryKind::Context { text, bash } => {
+        EntryKind::Context {
+            text,
+            bash,
+            monitor,
+        } => {
             let (label, color) = if *bash {
                 ("bash", Color::Yellow)
+            } else if *monitor {
+                ("monitor · role=user", Color::Cyan)
             } else {
                 ("上下文", Color::DarkGray)
             };
@@ -1003,6 +1009,7 @@ mod tests {
                     kind: EntryKind::Context {
                         text: "line one\nline two\nline three".into(),
                         bash: false,
+                        monitor: false,
                     },
                 })
                 .collect(),
@@ -1026,6 +1033,7 @@ mod tests {
                     kind: EntryKind::Context {
                         text: "line one\nline two\nline three".into(),
                         bash: false,
+                        monitor: false,
                     },
                 })
                 .collect(),
@@ -1201,6 +1209,24 @@ mod tests {
     }
 
     #[test]
+    fn a_monitor_message_is_labelled_as_a_user_role_monitor_notice() {
+        let entry = Entry {
+            identity: "seq-monitor".into(),
+            fingerprint: 2,
+            kind: EntryKind::Context {
+                text: "[monitor] job=bash-a matched=1".into(),
+                bash: false,
+                monitor: true,
+            },
+        };
+        let rendered = render_one(entry, false, 80);
+        assert!(rendered
+            .lines
+            .iter()
+            .any(|line| line.to_string().contains("monitor · role=user")));
+    }
+
+    #[test]
     fn injected_context_is_one_line_until_expanded() {
         let entry = Entry {
             identity: "seq-1".into(),
@@ -1208,6 +1234,7 @@ mod tests {
             kind: EntryKind::Context {
                 text: "line one\nline two\nline three".into(),
                 bash: false,
+                monitor: false,
             },
         };
         let collapsed = render_one(entry.clone(), false, 80);

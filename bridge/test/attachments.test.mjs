@@ -249,7 +249,7 @@ test('subagent prompts refuse generic file blocks before admission', () => {
   const child = { rootSessionId: ROOT, parentSessionId: ROOT, childSessionId: 'child', mode: 'continuable' }
   assert.throws(
     () => service.resolveSubagentPrompt(child, [{ type: 'file', receiptId: 'f' }], 'child-req'),
-    (error) => error.code === 1062,
+    (error) => error.code === 1067,
   )
 })
 

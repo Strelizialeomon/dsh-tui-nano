@@ -330,15 +330,26 @@ pub fn jobs_supported(hello: &Hello) -> bool {
         .is_some_and(|capability| capability.status == CapabilityStatus::Supported)
 }
 
+/// Whether the composed host reports the S10 Monitor surface as usable.
+pub fn monitor_supported(hello: &Hello) -> bool {
+    hello
+        .capabilities
+        .get("monitor")
+        .is_some_and(|capability| capability.status == CapabilityStatus::Supported)
+}
+
 /// The subscription used at handshake and after a rebuild. The stable kinds
-/// come from the shared list; job events are only requested when the composed
-/// host reports the capability, so an older bridge fails soft instead of
-/// refusing the whole subscription.
+/// come from the shared list; job and monitor events are only requested when
+/// the composed host reports the capability, so an older bridge fails soft
+/// instead of refusing the whole subscription.
 pub fn subscription_kinds(hello: &Hello) -> Vec<&'static str> {
     let mut kinds = SUBSCRIPTION_KINDS.to_vec();
     if jobs_supported(hello) {
         kinds.push("jobs.event");
         kinds.push("jobs.output");
+    }
+    if monitor_supported(hello) {
+        kinds.push("monitor.updated");
     }
     kinds
 }

@@ -278,6 +278,21 @@ fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
             app.jobs.len()
         )));
     }
+    if !app.monitor.is_empty() {
+        let colour = if app.monitor.exhausted_count() > 0 {
+            Color::Yellow
+        } else {
+            Color::DarkGray
+        };
+        spans.push(Span::styled(
+            format!(
+                " · 监听 {}/{}",
+                app.monitor.listening_count(),
+                app.monitor.len()
+            ),
+            Style::default().fg(colour),
+        ));
+    }
     if app.jobs_open {
         spans.push(Span::styled(
             " · 任务面板",
@@ -1158,11 +1173,26 @@ fn push_bash_record(lines: &mut Vec<Line<'static>>, record: &BashRecord, width: 
 }
 
 fn draw_jobs(frame: &mut Frame, app: &mut App, area: Rect) {
-    let title = if app.jobs.detail_open() {
+    let title = if app.monitor_form.is_some() {
+        let form = app.monitor_form.as_ref().expect("form is present");
+        format!(
+            " 监听 · 附着到 {} · n 新输出 / a 从开头 / t 模式 / f 过滤 / r 正则 / Enter 创建 / Esc 取消 ",
+            truncate(&form.job_label, 48)
+        )
+    } else if app.monitor_open {
+        match app.monitor.selected_monitor() {
+            Some(monitor) => format!(
+                " 监听 · {} · {} · ↑↓ 切换，s 停止监听，b 重置预算，r 刷新，Esc 返回 ",
+                monitor.job_id,
+                monitor.mode.label()
+            ),
+            None => " 监听 · 暂无记录 · Esc 返回 ".to_string(),
+        }
+    } else if app.jobs.detail_open() {
         let job = app.jobs.detail_job();
         match job {
             Some(job) => format!(
-                " 任务详情 · {} · {} · ↑↓ 滚动，k 停止，r 重读，Esc 返回 ",
+                " 任务详情 · {} · {} · ↑↓ 滚动，m 监听，k 停止，r 重读，Esc 返回 ",
                 job.id,
                 job.status_line()
             ),
@@ -1170,7 +1200,7 @@ fn draw_jobs(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     } else {
         format!(
-            " 任务 · 官方 jobs · {} 个（{} 运行中） · ↑↓ 选择，Enter 详情，k 停止，r 刷新，Esc 关闭 ",
+            " 任务 · 官方 jobs · {} 个（{} 运行中） · ↑↓ 选择，Enter 详情，m 监听，k 停止，r 刷新，Esc 关闭 ",
             app.jobs.len(),
             app.jobs.active_count()
         )
@@ -1180,7 +1210,11 @@ fn draw_jobs(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(block, area);
     let width = inner.width.max(1) as usize;
     let mut lines: Vec<Line<'static>> = Vec::new();
-    if app.jobs.detail_open() {
+    if app.monitor_form.is_some() {
+        push_monitor_form(&mut lines, app, width);
+    } else if app.monitor_open {
+        push_monitor_view(&mut lines, app, width);
+    } else if app.jobs.detail_open() {
         push_job_detail(&mut lines, app, width);
     } else if app.jobs.is_empty() {
         let message = if app.ready {
@@ -1197,7 +1231,13 @@ fn draw_jobs(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     let viewport = inner.height as usize;
     let total = lines.len();
-    let offset = if app.jobs.detail_open() {
+    let offset = if app.monitor_form.is_some() {
+        app.jobs_scroll_back = 0;
+        0
+    } else if app.monitor_open {
+        let max_scroll = total.saturating_sub(viewport);
+        app.jobs_scroll_back.min(max_scroll)
+    } else if app.jobs.detail_open() {
         app.jobs_detail_lines = total;
         let max_scroll = total.saturating_sub(viewport);
         total
@@ -1223,7 +1263,7 @@ fn push_job_list(lines: &mut Vec<Line<'static>>, app: &App) {
             .call_label()
             .map(|call| format!(" · 调用 {call}"))
             .unwrap_or_default();
-        lines.push(Line::from(vec![
+        let mut spans = vec![
             Span::styled(
                 format!("{marker} [{}] ", job.kind),
                 Style::default().fg(Color::Magenta),
@@ -1237,7 +1277,35 @@ fn push_job_list(lines: &mut Vec<Line<'static>>, app: &App) {
                 format!(" · {}{}", job.id, call),
                 Style::default().fg(Color::DarkGray),
             ),
-        ]));
+        ];
+        if let Some(monitor) = app.monitor.monitor_for_job(&job.id) {
+            let budget = if monitor.exhausted {
+                "预算用尽".to_string()
+            } else {
+                format!(
+                    "{}/{}",
+                    monitor.used.notifications, monitor.budgets.max_notifications
+                )
+            };
+            let delivery = monitor
+                .last_delivery()
+                .map(|delivery| delivery.state.short_label())
+                .unwrap_or("尚未投递");
+            spans.push(Span::styled(
+                format!(
+                    " · 监听 {} · {} · {}",
+                    monitor.mode.short_label(),
+                    budget,
+                    delivery
+                ),
+                Style::default().fg(if monitor.exhausted {
+                    Color::Yellow
+                } else {
+                    Color::Cyan
+                }),
+            ));
+        }
+        lines.push(Line::from(spans));
     }
 }
 
@@ -1279,6 +1347,28 @@ fn push_job_detail(lines: &mut Vec<Line<'static>>, app: &App, width: usize) {
             Style::default().fg(Color::Yellow),
         )));
     }
+    if let Some(monitor) = app.monitor.monitor_for_job(&job.id) {
+        lines.push(Line::from(Span::styled(
+            format!(
+                "监听 · {} · {}",
+                monitor.mode.label(),
+                monitor.stream.label()
+            ),
+            Style::default().fg(Color::Cyan),
+        )));
+        lines.push(Line::from(Span::styled(
+            monitor.budget_label(),
+            Style::default().fg(if monitor.exhausted {
+                Color::Yellow
+            } else {
+                Color::DarkGray
+            }),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("{} · {}", monitor.identity_label(), monitor.offset_label()),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
     if app.following.contains(&job.id) {
         lines.push(Line::from(Span::styled(
             "正在读取输出…",
@@ -1315,6 +1405,243 @@ fn push_job_detail(lines: &mut Vec<Line<'static>>, app: &App, width: usize) {
             Style::default().fg(Color::DarkGray),
         ))),
     }
+}
+
+fn push_monitor_form(lines: &mut Vec<Line<'static>>, app: &App, width: usize) {
+    let Some(form) = &app.monitor_form else {
+        return;
+    };
+    lines.push(Line::from(Span::styled(
+        format!("附着监听 · {}", form.job_label),
+        Style::default().fg(Color::Cyan),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("任务 {}", form.job_id),
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!(
+            "已有 {} 字节未读；先选范围：n 只看新输出（跳过这些字节） / a 从开头（重放 retained head）",
+            form.unread_bytes
+        ),
+        Style::default().fg(Color::Yellow),
+    )));
+    lines.push(Line::from(Span::styled(
+        if form.from_earliest {
+            "当前范围：从开头；被 ring 裁掉的旧字节会标「已裁剪」，不会拼接假连续内容。"
+        } else {
+            "当前范围：只看新输出；附着后不会重放已有字节。"
+        },
+        Style::default().fg(Color::Gray),
+    )));
+    lines.push(Line::from(Span::styled(
+        if form.quiet {
+            "模式：quiet（官方 inject；不唤醒 Agent，空闲时可能一直等待；仍需 durable user/message 才算收件）"
+        } else {
+            "模式：notify（官方 followup；唤醒 Agent，会产生模型调用和费用）"
+        },
+        Style::default().fg(if form.quiet { Color::DarkGray } else { Color::Yellow }),
+    )));
+    let filter = if form.filter.is_empty() {
+        "过滤：无（每行都是候选）".to_string()
+    } else if form.filter_regex {
+        format!(
+            "过滤：正则 /{}/{}",
+            form.filter,
+            if form.editing_filter {
+                "（编辑中）"
+            } else {
+                ""
+            }
+        )
+    } else {
+        format!(
+            "过滤：字面「{}」{}",
+            form.filter,
+            if form.editing_filter {
+                "（编辑中）"
+            } else {
+                ""
+            }
+        )
+    };
+    push_wrapped(lines, &filter, width, Style::default().fg(Color::Gray));
+    lines.push(Line::from(Span::styled(
+        "t 模式 · f 编辑过滤 · r 字面/正则 · Enter 创建 · Esc 取消",
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(Span::styled(
+        "提示：同一任务已有活动监听时返回现有监听；停止监听不会停止任务。",
+        Style::default().fg(Color::DarkGray),
+    )));
+}
+
+fn push_monitor_view(lines: &mut Vec<Line<'static>>, app: &App, width: usize) {
+    let Some(monitor) = app.monitor.selected_monitor() else {
+        lines.push(Line::from(Span::styled(
+            "（暂无监听。在任务列表选中任务后按 m 创建。）",
+            Style::default().fg(Color::DarkGray),
+        )));
+        return;
+    };
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("监听 {}", monitor.job_id),
+            Style::default().fg(Color::Cyan),
+        ),
+        Span::raw(" · "),
+        Span::styled(
+            monitor.stream.label(),
+            Style::default().fg(if monitor.stream.is_terminal() {
+                Color::Yellow
+            } else {
+                Color::Green
+            }),
+        ),
+    ]));
+    push_wrapped(
+        lines,
+        &monitor.identity_label(),
+        width,
+        Style::default().fg(Color::Yellow),
+    );
+    push_wrapped(
+        lines,
+        &monitor.mode.label().to_string(),
+        width,
+        Style::default().fg(Color::Gray),
+    );
+    push_wrapped(
+        lines,
+        &format!(
+            "范围：{} · {}",
+            monitor.from.label(),
+            monitor.offset_label()
+        ),
+        width,
+        Style::default().fg(Color::Gray),
+    );
+    if matches!(monitor.from, nano_monitor::MonitorFrom::Earliest) && monitor.initial_offset > 0 {
+        lines.push(Line::from(Span::styled(
+            format!(
+                "retained head 从字节 {} 开始；更早字节已被 ring 裁剪（已裁剪）。",
+                monitor.initial_offset
+            ),
+            Style::default().fg(Color::Yellow),
+        )));
+    }
+    let filter = monitor
+        .filter
+        .as_ref()
+        .map(|filter| filter.label())
+        .unwrap_or_else(|| "无（每行都是候选）".to_string());
+    push_wrapped(
+        lines,
+        &format!("合并窗口 {} ms · 过滤：{}", monitor.merge_window_ms, filter),
+        width,
+        Style::default().fg(Color::Gray),
+    );
+    let budget_color = if monitor.exhausted {
+        Color::Yellow
+    } else {
+        Color::Gray
+    };
+    push_wrapped(
+        lines,
+        &monitor.budget_label(),
+        width,
+        Style::default().fg(budget_color),
+    );
+    if monitor.exhausted {
+        lines.push(Line::from(Span::styled(
+            if monitor.exhaust_reason.as_deref() == Some("expired") {
+                "监听有效期已过：普通行投递已停止，计数保留；按 b 显式重置有效期。"
+            } else {
+                "预算已用尽：普通行投递已停止，计数保留；按 b 显式重置后恢复。"
+            },
+            Style::default().fg(Color::Yellow),
+        )));
+    }
+    if monitor.stopped_by_user {
+        lines.push(Line::from(Span::styled(
+            "用户已停止监听；被观察任务未受影响。",
+            Style::default().fg(Color::Yellow),
+        )));
+    }
+    if monitor.lossy {
+        lines.push(Line::from(Span::styled(
+            "已裁剪：监听的请求位置早于官方 ring 保留范围，更早字节不可读。",
+            Style::default().fg(Color::Yellow),
+        )));
+    }
+    if monitor.gaps > 0 {
+        lines.push(Line::from(Span::styled(
+            format!(
+                "输出缺口 {} 次：更早字节不可读，监听不会把缺口前后拼成假连续文本。",
+                monitor.gaps
+            ),
+            Style::default().fg(Color::Yellow),
+        )));
+    }
+    if let Some(detail) = &monitor.stream_detail {
+        push_wrapped(
+            lines,
+            &format!("流结束原因：{detail}"),
+            width,
+            Style::default().fg(Color::DarkGray),
+        );
+    }
+    if let Some(error) = &monitor.last_error {
+        push_wrapped(
+            lines,
+            &format!("最近错误：{error}"),
+            width,
+            Style::default().fg(Color::Red),
+        );
+    }
+    lines.push(Line::from(Span::styled(
+        "投递回执：submitted/inserted/claimed 都不证明模型收到；只有 durable user/message 是 accepted。",
+        Style::default().fg(Color::DarkGray),
+    )));
+    if monitor.deliveries.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "（还没有通知投递）",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        for delivery in monitor.deliveries.iter().rev().take(10) {
+            let color = if delivery.state.is_proven() {
+                Color::Green
+            } else if delivery.state.is_failure() {
+                Color::Red
+            } else {
+                Color::Yellow
+            };
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "· {} · {} 行 · {}..{} · {}",
+                    delivery.state.label(),
+                    delivery.lines,
+                    delivery.first_offset,
+                    delivery.last_offset,
+                    delivery.message_id
+                ),
+                Style::default().fg(color),
+            )));
+            if let Some(detail) = &delivery.detail {
+                push_wrapped(
+                    lines,
+                    &format!("  {detail}"),
+                    width,
+                    Style::default().fg(Color::DarkGray),
+                );
+            }
+        }
+    }
+    lines.push(Line::from(Span::styled(
+        "s 停止监听（不停止任务） · b 重置预算 · r 刷新 · Esc 返回",
+        Style::default().fg(Color::DarkGray),
+    )));
 }
 
 fn job_color(status: JobStatus) -> Color {
