@@ -5,3 +5,4 @@ cargo: 1.99.1 (5f94df478 2026-08-27)
 model for real evidence: deepseek-official/deepseek-flash
 base commit: a32f498
 platform: macOS (darwin), terminal evidence through a 120x40 PTY
+PR head: 3f2488f

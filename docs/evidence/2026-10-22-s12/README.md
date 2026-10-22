@@ -1,7 +1,7 @@
 # S12 子代理实施证据（2026-10-22）
 
 对应规格：`docs/specs/2026-10-20-nano-v1/S12-subagents.md`；执行单 #15。
-环境与冻结版本见 `versions.txt`：官方 dsh 0.2.1-rc.2、Node v24.18.0、Rust 1.99.1。
+环境与冻结版本见 `versions.txt`：官方 dsh 0.2.1-rc.2、Node v24.18.0、Rust 1.99.1。证据在合并 S10 Monitor 的 `origin/main` 之后重跑。
 
 ## 真实模型证据
 
@@ -14,11 +14,11 @@
 | `SNAPSHOT` / `DESCRIBED` | `nano.subagents.snapshot` 返回直接子代理，mode 为 `continuable`、activity 为 `running`；`describe` 从子会话自己的投影确认 mode，并返回 `seq`、`parentLive:true`、`settledMs`、`activeSince` |
 | `CHILD_SUBSCRIBE` | 子地址 `nano.subscribe` 成功，回放从 0 开始，返回子会话 header/seq |
 | `CHILD_END` | 官方 `subagent/end` 的 `stopReason:completed` 原样到达 |
-| `CHILD_EVENTS` | 19 条子会话持久事件（descriptor、`user/message`、`assistant/message`、`tool/call`、`tool/result`、`turn/end`）按子地址回放，含子代理正文 `S12CHILD`；`sawParentSeed:false` 证明 spawn 子代理没有父回合 seed |
+| `CHILD_EVENTS` | 25 条子会话持久事件（descriptor、`user/message`、`assistant/message`、`tool/call`、`tool/result`、`turn/end`）按子地址回放，含子代理正文 `S12CHILD`；`sawParentSeed:false` 证明 spawn 子代理没有父回合 seed |
 | `FORK_STARTED` | 真实 `fork` provider 创建本地子代理（`provider:"fork"`） |
 | `FORK_DESCRIBED` / `FORK_SUBSCRIBE` | fork 子代理同样可续聊，`seq` 与父回合历史一致；子地址订阅成功 |
 | `FORK_END` | fork 的官方终态 `completed` |
-| `FORK_EVENTS` | 68 条事件，含 `session/end-seed` 与 `S12ROOTPROMPT`（父已完成回合的 seed）；`sawForkText:true` 证明 fork 本地址的正文与 seed 同属该子地址 |
+| `FORK_EVENTS` | 78 条事件，含 `session/end-seed` 与 `S12ROOTPROMPT`（父已完成回合的 seed）；`sawForkText:true` 证明 fork 本地址的正文与 seed 同属该子地址 |
 | `FOLLOWUP` / `FOLLOWUP_END` | 人类续聊走官方 `subagents/prompt`，`accepted:true` 并返回 `messageId`；子代理再次以 `completed` 结束 |
 | `INTERRUPT` | Stop 走官方 `interruptByParent`，返回 `accepted:true`；未使用 `dispose`。该次调用发生在 FOLLOWUP_END 之后，证明的是官方路径与接收语义，不是运行中回合的排队保留 |
 | `FINAL_SNAPSHOT` / `LIST` | 两个直接子代理按父目录顺序返回；fork 行带 `lastTurnCompleted:true` 与 `settledMs`；递归列表带 `parentId`/`depth` |
@@ -40,8 +40,8 @@
 
 | 文件 | 命令 | 结果 |
 | --- | --- | --- |
-| `cargo-test.txt` | `cargo test --workspace` | 全部通过（含 S01-S11 回归、`nano-subagents` 契约测试、S12 app 交互测试） |
-| `bridge-test.txt` | `npm run test:bridge` | 240 项：235 通过、5 跳过（S10/S13 预留）、0 失败；含子代理服务、one-shot descriptor 夹具、子地址订阅回放、父/子事件隔离、可达性与容量映射 |
+| `cargo-test.txt` | `cargo test --workspace` | 全部通过（含 S01-S11/S10 回归、`nano-subagents` 契约测试、S12 app 交互测试） |
+| `bridge-test.txt` | `npm run test:bridge` | 272 项：267 通过、5 跳过（S10/S13 预留）、0 失败；含子代理服务、one-shot descriptor 夹具、子地址订阅回放、父/子事件隔离、可达性与容量映射 |
 
 S12 单元/契约覆盖：
 
