@@ -96,7 +96,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_header(frame, app, layout[0]);
     app.subagent_dock_area = Rect::default();
     app.subagent_dock_hits.clear();
-    if app.sessions_panel.open {
+    if app.sources_visible {
+        draw_sources_panel(frame, app, layout[1]);
+    } else if app.sessions_panel.open {
         draw_sessions(frame, app, layout[1]);
     } else if app.subagents.nav().list_open {
         draw_subagent_list(frame, app, layout[1]);
@@ -983,6 +985,134 @@ fn draw_skill_preview(lines: &mut Vec<Line<'static>>, app: &App, width: usize) {
         )));
     }
     wrap_block(lines, &preview.text, width, 4_000, Color::Gray);
+}
+
+/// One-time first-launch provenance panel: config patch, credential reference
+/// and source label, and the official workspace-instruction paths. It never
+/// shows a credential value.
+fn draw_sources_panel(frame: &mut Frame, app: &App, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(Span::styled(" 来源 ", Style::default().fg(Color::Cyan)));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+    let width = inner.width as usize;
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from(Span::styled(
+        "本次启动实际使用的来源；凭据只显示引用与来源，不显示值。",
+        Style::default().fg(Color::DarkGray),
+    )));
+    match app
+        .provenance
+        .as_ref()
+        .and_then(|provenance| provenance.config.as_ref())
+    {
+        Some(config) => {
+            lines.push(Line::from(Span::styled(
+                "配置",
+                Style::default().add_modifier(Modifier::BOLD),
+            )));
+            wrap_block(&mut lines, &config.path, width, 4_096, Color::Reset);
+        }
+        None => lines.push(Line::from(vec![
+            Span::styled("配置  ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("宿主未报告", Style::default().fg(Color::Yellow)),
+        ])),
+    }
+    match app
+        .provenance
+        .as_ref()
+        .and_then(|provenance| provenance.credentials.as_ref())
+    {
+        Some(credentials) => {
+            let state = if credentials.configured {
+                credential_source_label(credentials.source.as_deref())
+            } else {
+                "未配置".to_string()
+            };
+            lines.push(Line::from(vec![
+                Span::styled("凭据  ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(credentials.reference.clone()),
+                Span::styled(format!(" · {state}"), Style::default().fg(Color::DarkGray)),
+            ]));
+        }
+        None => lines.push(Line::from(vec![
+            Span::styled("凭据  ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("宿主未报告", Style::default().fg(Color::Yellow)),
+        ])),
+    }
+    if app.instructions.available {
+        lines.push(Line::from(vec![
+            Span::styled("规矩  ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(format!("{} 份", app.instructions.sources.len())),
+            Span::styled(
+                " · Alt+R 查看完整来源",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+        for source in app.instructions.sources.iter().take(4) {
+            lines.push(Line::from(Span::styled(
+                truncate(
+                    &format!("  {} {}", source.action.label(), source.path),
+                    width,
+                ),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+        if app.instructions.sources.len() > 4 {
+            lines.push(Line::from(Span::styled(
+                format!("  … 还有 {} 份", app.instructions.sources.len() - 4),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+    } else if !app.instruction_candidates.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled("规矩  ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(format!(
+                "{} 份 · 首次对话时加载",
+                app.instruction_candidates.len()
+            )),
+        ]));
+        for path in app.instruction_candidates.iter().take(4) {
+            lines.push(Line::from(Span::styled(
+                truncate(&format!("  {path}"), width),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+        if app.instruction_candidates.len() > 4 {
+            lines.push(Line::from(Span::styled(
+                format!("  … 还有 {} 份", app.instruction_candidates.len() - 4),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+    } else {
+        lines.push(Line::from(vec![
+            Span::styled("规矩  ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "尚未加载（未发现 AGENTS.md / CLAUDE.md）",
+                Style::default().fg(Color::Yellow),
+            ),
+        ]));
+    }
+    lines.push(Line::from(Span::styled(
+        "Enter / Esc 关闭",
+        Style::default().fg(Color::DarkGray),
+    )));
+    frame.render_widget(Paragraph::new(Text::from(lines)), inner);
+}
+
+fn credential_source_label(source: Option<&str>) -> String {
+    match source {
+        Some("file") => "凭据文件".to_string(),
+        Some("env") => "启动环境".to_string(),
+        Some("project-env") => "项目 .env".to_string(),
+        Some("user-env") => "用户 .env".to_string(),
+        Some(other) => other.to_string(),
+        None => "来源未知".to_string(),
+    }
 }
 
 /// Workspace-instruction sources, load time, and the official budget notice.
@@ -3165,6 +3295,30 @@ mod tests {
 
     fn app() -> App {
         App::new(crate::cli::Cli::default(), "root".to_string(), false)
+    }
+
+    #[test]
+    fn the_sources_panel_shows_sources_without_credential_values() {
+        let mut app = app();
+        app.provenance = Some(nano_runtime::Provenance {
+            config: Some(nano_runtime::ConfigSource {
+                path: "/tmp/profile/cordis.patch.yml".into(),
+            }),
+            credentials: Some(nano_runtime::CredentialSource {
+                reference: "DEEPSEEK_API_KEY".into(),
+                configured: true,
+                source: Some("env".into()),
+            }),
+        });
+        app.sources_visible = true;
+        let rows = compact(&screen(&mut app, 100, 30));
+        assert!(rows.iter().any(|row| row.contains("来源")));
+        assert!(rows
+            .iter()
+            .any(|row| row.contains("/tmp/profile/cordis.patch.yml")));
+        assert!(rows.iter().any(|row| row.contains("DEEPSEEK_API_KEY")));
+        assert!(rows.iter().any(|row| row.contains("启动环境")));
+        assert!(rows.iter().any(|row| row.contains("Enter/Esc")));
     }
 
     /// TestBackend repeats a wide character's cell as a symbol plus a blank

@@ -461,7 +461,20 @@
       "session": "sessionFacts",
       "capabilities": "capabilityMap",
       "limits": "limits",
-      "attachmentLimits": "attachmentLimits?"
+      "attachmentLimits": "attachmentLimits?",
+      "provenance": "provenance?"
+    },
+    "provenance": {
+      "config": "configSource?",
+      "credentials": "credentialSource?"
+    },
+    "configSource": {
+      "path": "string"
+    },
+    "credentialSource": {
+      "reference": "string",
+      "configured": "boolean",
+      "source": "string?"
     },
     "attachmentLimits": {
       "maxImageBytes": "integer",
@@ -966,7 +979,9 @@
           "capabilities",
           "limits"
         ],
-        "optional": []
+        "optional": [
+          "provenance"
+        ]
       }
     },
     {

@@ -103,6 +103,40 @@ export function startHost(ctx, config) {
   return state
 }
 
+/**
+ * Describe where the profile configuration and the default credential come
+ * from, without reading any secret value. The hello carries only source labels;
+ * an unavailable service stays absent so the client can say "unreported".
+ *
+ * @param {object} ctx - Host context with the official profile and credential
+ *   services.
+ * @returns {Promise<object | undefined>} additive hello provenance, or
+ *   undefined when neither source is known.
+ */
+async function describeProvenance(ctx) {
+  const patchPath = ctx.get?.('profileContext')?.patchPath
+  const credentials = ctx.get?.('credentials')
+  let credential
+  if (credentials?.describe !== undefined) {
+    try {
+      const info = await credentials.describe('DEEPSEEK_API_KEY')
+      credential = {
+        reference: 'DEEPSEEK_API_KEY',
+        configured: info?.configured === true,
+        ...(typeof info?.source === 'string' ? { source: info.source } : {}),
+      }
+    } catch {
+      // A credential provider that cannot describe a reference must not turn
+      // startup into a failure or invent a source.
+    }
+  }
+  if (typeof patchPath !== 'string' && credential === undefined) return undefined
+  return {
+    ...(typeof patchPath === 'string' ? { config: { path: patchPath } } : {}),
+    ...(credential === undefined ? {} : { credentials: credential }),
+  }
+}
+
 async function runStartup(state, config) {
   state.nonce = typeof config?.nonce === 'string' ? config.nonce : undefined
   const ctx = state.ctx
@@ -356,6 +390,7 @@ async function runStartup(state, config) {
   state.scheduleFiber = await startScheduleHost(state)
 
   const attachmentLimits = state.attachments.helloLimits()
+  const provenance = await describeProvenance(ctx)
   const hello = {
     jsonrpc: '2.0',
     method: 'nano.hello',
@@ -384,6 +419,7 @@ async function runStartup(state, config) {
         maxAttachmentChunkBytes: LIMITS.maxAttachmentChunkBytes,
       },
       ...(attachmentLimits === undefined ? {} : { attachmentLimits }),
+      ...(provenance === undefined ? {} : { provenance }),
     },
   }
   await state.writer.sendControl(

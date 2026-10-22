@@ -125,6 +125,39 @@ pub struct AttachmentLimits {
     pub file_admission: String,
 }
 
+/// Where the writable profile configuration lives.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigSource {
+    /// Absolute path to the profile patch file.
+    pub path: String,
+}
+
+/// Where the default model credential is supplied, never its value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialSource {
+    /// Credential reference (an environment-variable name).
+    pub reference: String,
+    /// Whether the reference currently resolves.
+    pub configured: bool,
+    /// Official source label (`file`, `env`, `project-env`, `user-env`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+/// Additive source labels reported in `nano.hello`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Provenance {
+    /// Writable profile configuration source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<ConfigSource>,
+    /// Default credential source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credentials: Option<CredentialSource>,
+}
+
 /// Parsed `nano.hello` payload.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -150,6 +183,9 @@ pub struct Hello {
     /// Optional deployment attachment limits (S06 minor addition).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachment_limits: Option<AttachmentLimits>,
+    /// Optional source labels for first-launch provenance (B5 addition).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<Provenance>,
 }
 
 impl Hello {
@@ -649,12 +685,45 @@ mod tests {
                 max_attachment_chunk_bytes: MAX_ATTACHMENT_CHUNK_BYTES as u64,
             },
             attachment_limits: None,
+            provenance: None,
         }
     }
 
     #[test]
     fn accepts_a_valid_hello() {
         hello().validate("rt-1", 1).unwrap();
+    }
+
+    #[test]
+    fn a_hello_may_carry_source_labels_without_values() {
+        let mut value = serde_json::to_value(hello()).unwrap();
+        value["provenance"] = json!({
+            "config": {"path": "/home/u/.dsh/profiles/dsh-tui-nano/cordis.patch.yml"},
+            "credentials": {
+                "reference": "DEEPSEEK_API_KEY",
+                "configured": true,
+                "source": "env"
+            }
+        });
+        let parsed: Hello = serde_json::from_value(value).unwrap();
+        let provenance = parsed.provenance.expect("provenance");
+        assert_eq!(
+            provenance.config.expect("config").path,
+            "/home/u/.dsh/profiles/dsh-tui-nano/cordis.patch.yml"
+        );
+        let credentials = provenance.credentials.expect("credentials");
+        assert_eq!(credentials.reference, "DEEPSEEK_API_KEY");
+        assert!(credentials.configured);
+        assert_eq!(credentials.source.as_deref(), Some("env"));
+        assert!(!serde_json::to_string(&credentials).unwrap().contains("sk-"));
+    }
+
+    #[test]
+    fn an_absent_provenance_is_optional() {
+        let mut value = serde_json::to_value(hello()).unwrap();
+        value.as_object_mut().unwrap().remove("provenance");
+        let parsed: Hello = serde_json::from_value(value).unwrap();
+        assert!(parsed.provenance.is_none());
     }
 
     #[test]
