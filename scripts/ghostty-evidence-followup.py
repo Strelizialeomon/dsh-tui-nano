@@ -80,7 +80,7 @@ def tool_events():
 
 class MockModel(BaseHTTPRequestHandler):
     count = 0
-    child_delay = 1.0
+    child_delay = 12.0
 
     def do_POST(self):
         MockModel.count += 1
@@ -307,7 +307,7 @@ if let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: An
             f"export DEEPSEEK_BASE_URL='http://127.0.0.1:{server.server_address[1]}'\n"
             + (f"export NANO_THEME='light'\n" if theme == "light" else "")
             + f"export PATH='{os.environ.get('PATH', '')}'\n"
-            f"exec '{binary}' --no-install --no-alt-screen --dsh-home '{dsh_home}' "
+            f"exec '{binary}' --no-install --dsh-home '{dsh_home}' "
             f"--data-root '{data}' --cwd '{work}' --provider deepseek-official --model deepseek-flash\n"
         )
         path.chmod(0o755)
@@ -319,28 +319,35 @@ if let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: An
         checks.append({"check": label, "ok": bool(ok), "detail": detail})
         print(f"CHECK {'ok  ' if ok else 'fail'} {label}{(' — ' + detail) if detail else ''}")
 
-    # 100-column dark run: completed dock, then cleaned dock.
+    # 100-column dark run: empty main, running dock, completed, cleaned.
     title = "nano-followup-100-dark"
     launch(title, run_script("dark", "dark"), COLS, ROWS, DARK)
+    size = capture(title, out / "01-main-100-dark.png")
+    check("main 100 dark captured", size[0] > 0, str(size))
     paste(title, PROMPT)
     osa_key(KEY_CODES["return"])
-    time.sleep(8)
-    size = capture(title, out / "02-dock-completed-100-dark.png")
+    time.sleep(5)
+    size = capture(title, out / "02-dock-running-100-dark.png")
+    check("dock running captured", size[0] > 0, str(size))
+    time.sleep(10)
+    size = capture(title, out / "03-dock-completed-100-dark.png")
     check("dock completed captured", size[0] > 0, str(size))
     time.sleep(36)
     size = capture(title, out / "04-dock-cleaned-100-dark.png")
     check("dock cleaned captured", size[0] > 0, str(size))
     check("100 dark window closed", close(title))
 
-    # 60-column dark run: dock slot and status word.
+    # 60-column dark run: empty main and running dock.
     title = "nano-followup-60-dark"
     MockModel.count = 0
     launch(title, run_script("dark60", "dark"), SMALL_COLS, SMALL_ROWS, DARK)
+    size = capture(title, out / "05-main-60-dark.png")
+    check("main 60 dark captured", size[0] > 0, str(size))
     paste(title, PROMPT)
     osa_key(KEY_CODES["return"])
-    time.sleep(8)
-    size = capture(title, out / "05-dock-60-dark.png")
-    check("dock 60 captured", size[0] > 0, str(size))
+    time.sleep(5)
+    size = capture(title, out / "06-dock-60-dark.png")
+    check("dock running 60 captured", size[0] > 0, str(size))
     check("60 dark window closed", close(title))
 
     # Light-theme run: focused dock row.
@@ -349,7 +356,7 @@ if let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: An
     launch(title, run_script("light", "light"), COLS, ROWS, LIGHT)
     paste(title, PROMPT)
     osa_key(KEY_CODES["return"])
-    time.sleep(8)
+    time.sleep(5)
     osa_key(KEY_CODES["down"])
     time.sleep(0.5)
     size = capture(title, out / "07-dock-focus-100-light.png")
