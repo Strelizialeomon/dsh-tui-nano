@@ -1,0 +1,20 @@
+{
+  "name": "dsh-tui-nano",
+  "version": "0.1.0",
+  "installedAt": "2026-10-22T03:38:40Z",
+  "installRoot": "/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s13-ghostty-2hlisz13/install",
+  "target": "/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s13-ghostty-2hlisz13/install/0.1.0",
+  "entrypoint": "/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s13-ghostty-2hlisz13/bin/nano",
+  "dataRoot": "/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s13-ghostty-2hlisz13/data",
+  "dshHome": "/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s13-ghostty-2hlisz13/dsh-home",
+  "profile": "dsh-tui-nano",
+  "profileDir": "/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-s13-ghostty-2hlisz13/dsh-home/profiles/dsh-tui-nano",
+  "official": {
+    "version": "0.2.1-rc.2",
+    "source": "https://github.com/deepseek-ai/deepseek-harness/tree/687f282e8625c6b8d11ff58211a90524be2e4317"
+  },
+  "node": "v24.18.0",
+  "bridgeVersion": "0.1.0",
+  "payloadSumsSha256": "26bbfbea4a166a96ebf8eba966796419f7c18fd6cc00f37d33f3fe64ddd4711b",
+  "replacedExistingFiles": 0
+}

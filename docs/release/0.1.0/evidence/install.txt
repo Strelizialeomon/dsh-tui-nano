@@ -1,0 +1,73 @@
+=== install (first) ===
+{
+  "name": "dsh-tui-nano",
+  "version": "0.1.0",
+  "installedAt": "2026-10-22T03:38:07Z",
+  "installRoot": "/tmp/nano-s13-install-XSke13/install",
+  "target": "/tmp/nano-s13-install-XSke13/install/0.1.0",
+  "entrypoint": "/tmp/nano-s13-install-XSke13/bin/nano",
+  "dataRoot": "/tmp/nano-s13-install-XSke13/data",
+  "dshHome": "/tmp/nano-s13-install-XSke13/dsh-home",
+  "profile": "dsh-tui-nano",
+  "profileDir": "/tmp/nano-s13-install-XSke13/dsh-home/profiles/dsh-tui-nano",
+  "official": {
+    "version": "0.2.1-rc.2",
+    "source": "https://github.com/deepseek-ai/deepseek-harness/tree/687f282e8625c6b8d11ff58211a90524be2e4317"
+  },
+  "node": "v24.18.0",
+  "bridgeVersion": "0.1.0",
+  "payloadSumsSha256": "26bbfbea4a166a96ebf8eba966796419f7c18fd6cc00f37d33f3fe64ddd4711b",
+  "replacedExistingFiles": 0
+}
+CHECK ok   entrypoint exists
+CHECK ok   receipt exists
+CHECK ok   profile composed
+CHECK ok   data root is 0700
+CHECK ok   config and credentials untouched
+CHECK ok   other profile untouched
+=== install (reinstall) ===
+{
+  "name": "dsh-tui-nano",
+  "version": "0.1.0",
+  "installedAt": "2026-10-22T03:38:08Z",
+  "installRoot": "/tmp/nano-s13-install-XSke13/install",
+  "target": "/tmp/nano-s13-install-XSke13/install/0.1.0",
+  "entrypoint": "/tmp/nano-s13-install-XSke13/bin/nano",
+  "dataRoot": "/tmp/nano-s13-install-XSke13/data",
+  "dshHome": "/tmp/nano-s13-install-XSke13/dsh-home",
+  "profile": "dsh-tui-nano",
+  "profileDir": "/tmp/nano-s13-install-XSke13/dsh-home/profiles/dsh-tui-nano",
+  "official": {
+    "version": "0.2.1-rc.2",
+    "source": "https://github.com/deepseek-ai/deepseek-harness/tree/687f282e8625c6b8d11ff58211a90524be2e4317"
+  },
+  "node": "v24.18.0",
+  "bridgeVersion": "0.1.0",
+  "payloadSumsSha256": "26bbfbea4a166a96ebf8eba966796419f7c18fd6cc00f37d33f3fe64ddd4711b",
+  "replacedExistingFiles": 0
+}
+CHECK ok   reinstall leaves config and credentials untouched
+CHECK ok   reinstall keeps entrypoint
+=== version refusal ===
+install.sh: 官方 dsh 版本不符：当前 0.2.1-rc.1，需要 0.2.1-rc.2。请安装精确版本后重试：npm install -g @deepseek-ai/dsh@0.2.1-rc.2
+CHECK ok   version mismatch exits non-zero
+CHECK ok   version mismatch names the expected version
+CHECK ok   version mismatch did not create the refused root
+=== startup refusal (Rust preflight) ===
+nano: could not spawn the host: unsupported official dsh version 0.2.1-rc.1
+CHECK ok   startup refuses an unknown official version
+CHECK ok   startup exit is non-zero
+=== uninstall (default) ===
+{"removedEntrypoint":1,"removedInstallRoot":1,"removedProfile":0,"removedDataRoot":0,"retainedDataRoot":"/tmp/nano-s13-install-XSke13/data","retainedDshHome":"/tmp/nano-s13-install-XSke13/dsh-home"}
+CHECK ok   entrypoint removed
+CHECK ok   install root removed
+CHECK ok   data root retained
+CHECK ok   profile retained by default
+CHECK ok   config and credentials retained
+=== uninstall (explicit profile and data removal) ===
+{"removedEntrypoint":0,"removedInstallRoot":0,"removedProfile":1,"removedDataRoot":1,"retainedDataRoot":"/tmp/nano-s13-install-XSke13/data","retainedDshHome":"/tmp/nano-s13-install-XSke13/dsh-home"}
+CHECK ok   profile removed explicitly
+CHECK ok   data root removed explicitly
+CHECK ok   other profile still retained
+CHECK ok   config and credentials still retained
+RESULT ok

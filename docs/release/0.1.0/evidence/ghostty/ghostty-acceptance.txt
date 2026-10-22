@@ -1,0 +1,29 @@
+CHECK ok   install succeeded
+CHECK ok   dark 100 main captured
+CHECK ok   dark 100 sessions panel captured
+CHECK ok   dark 100 skills panel captured
+CHECK ok   dark 100 instructions panel captured
+CHECK ok   dark 100 jobs panel captured
+CHECK ok   dark 100 schedule panel captured
+CHECK ok   dark 100 palette panel captured
+CHECK ok   CJK composer captured
+CHECK ok   model response captured
+CHECK ok   selection copy contains model response — nano 已连接 · 空闲 · seq 19 · 队列 0 · ctx 289/1000k (0%) · 参考
+第 5 行：滚轮与阅读位置检查。
+第 6 行：滚
+bounds -1033.0 251.0 898.0 712.0 target -584.0 607.0
+mouse (-584.0, 607.0)
+bounds -1033.0 251.0 898.0 712.0 target -584.0 607.0
+mouse (-584.0, 607.0)
+CHECK ok   wheel changed the view — diff=0.03616064725607467
+CHECK ok   window closed after Ctrl+C
+CHECK ok   no nano process remains
+CHECK ok   no shutdown error on stderr
+CHECK ok   light 60 main captured
+CHECK ok   light 60 sessions panel captured
+CHECK ok   light window closed after Ctrl+C
+CHECK ok   fullscreen capture exists
+CHECK ok   fullscreen window closed after Ctrl+C
+CHECK ok   reduced-motion main captured
+CHECK ok   reduced-motion window closed
+RESULT ok

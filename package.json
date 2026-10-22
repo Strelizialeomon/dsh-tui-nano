@@ -9,6 +9,9 @@
     "test:e2e": "cargo test --test integration -- --ignored --test-threads=1 --skip shutdown_budget_is_bounded_when_cleanup_hangs",
     "test:host": "NANO_E2E=1 node --test bridge/test/integration/*.test.mjs",
     "test:host:schedule": "NANO_E2E=1 node --test bridge/test/integration/schedule.test.mjs",
-    "test:e2e:slow": "NANO_E2E_SLOW=1 cargo test --test integration -- --ignored --exact shutdown_budget_is_bounded_when_cleanup_hangs"
+    "test:e2e:slow": "NANO_E2E_SLOW=1 cargo test --test integration -- --ignored --exact shutdown_budget_is_bounded_when_cleanup_hangs",
+    "test:e2e:cross": "NANO_E2E=1 node --test tests/e2e/*.test.mjs",
+    "release:build": "packaging/build-release.sh",
+    "release:verify": "packaging/verify-install.sh"
   }
 }
