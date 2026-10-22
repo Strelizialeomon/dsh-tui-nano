@@ -22,7 +22,7 @@ pub use model::{
     Enrichment, Entry, EntryKind, PreviewEntry, PreviewTool, TranscriptModel, TranscriptSource,
 };
 pub use render::{
-    render, Hit, HitKind, RenderCache, TranscriptRender, COMMAND_BUDGET, DIFF_BUDGET,
+    render, DiffTheme, Hit, HitKind, RenderCache, TranscriptRender, COMMAND_BUDGET, DIFF_BUDGET,
     FAILURE_BUDGET, MAX_MOUNTED_ROWS, OUTPUT_BUDGET, OVERSCAN_ROWS, THINKING_BUDGET,
 };
 pub use scroll::{Anchor, EntryOffset, ScrollState, WheelProfile};

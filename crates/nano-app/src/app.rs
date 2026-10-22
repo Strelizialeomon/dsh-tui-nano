@@ -499,6 +499,8 @@ pub struct App {
     pub feed_hits: Vec<Option<Hit>>,
     /// Feed region from the last draw.
     pub feed_area: Rect,
+    /// "回到最新" button region from the last draw.
+    pub jump_area: Rect,
     /// Decision card region from the last draw.
     pub decision_area: Rect,
     /// Decision click targets from the last draw.
@@ -721,6 +723,7 @@ impl App {
             transcript_dirty: true,
             feed_hits: Vec::new(),
             feed_area: Rect::default(),
+            jump_area: Rect::default(),
             decision_area: Rect::default(),
             decision_hits: Vec::new(),
             activity_phase: false,
@@ -5468,6 +5471,11 @@ impl App {
         if self.send_area.contains(point.into()) {
             return self.click_send();
         }
+        if self.jump_area.contains(point.into()) {
+            self.view.scroll_mut().to_bottom();
+            self.transcript_dirty = true;
+            return true;
+        }
         if self.subagent_active() && self.subagent_exit_area.contains(point.into()) {
             return self.leave_subagent();
         }
@@ -7427,6 +7435,43 @@ mod tests {
 
     fn app() -> App {
         App::new(Cli::default(), "root".to_string(), false)
+    }
+
+    #[test]
+    fn the_activity_indicator_toggles_every_500ms() {
+        let mut app = app();
+        app.decisions.apply_event(
+            "decisions.approval",
+            &json!({
+                "address": {"rootSessionId": "root"},
+                "state": "pending",
+                "requestId": "a-1",
+                "toolName": "bash"
+            }),
+        );
+        assert_eq!(app.activity_kind(), Some(ActivityKind::AwaitingApproval));
+
+        app.tick();
+        assert!(
+            !app.activity_phase,
+            "the first tick arms the timer off-screen"
+        );
+        app.activity_at = Some(Instant::now() - Duration::from_millis(1));
+        app.tick();
+        assert!(
+            app.activity_phase,
+            "the phase flips when the deadline passes"
+        );
+        let next = app.activity_at.expect("next transition is scheduled");
+        assert!(
+            next > Instant::now() + Duration::from_millis(400),
+            "the next transition is about 500ms away"
+        );
+
+        app.reduced_motion = true;
+        app.tick();
+        assert!(!app.activity_phase);
+        assert!(app.activity_at.is_none());
     }
 
     fn hello_with_attachments(max_image_bytes: u64) -> Hello {
@@ -10202,5 +10247,25 @@ mod terminal_tests {
         assert!(app.click_send());
         assert!(app.error.as_deref().unwrap().contains("子代理消息未发送"));
         assert_eq!(app.drafts.current().text(), "child draft message");
+    }
+
+    #[test]
+    fn clicking_the_jump_button_returns_to_the_bottom() {
+        let mut app = app();
+        app.view.scroll_mut().to_top(100, 10);
+        assert!(!app.view.scroll().sticky());
+        app.jump_area = Rect::new(10, 5, 10, 1);
+        assert!(app.click_at(12, 5));
+        assert!(app.view.scroll().sticky());
+    }
+
+    #[test]
+    fn ctrl_end_returns_to_the_bottom() {
+        let mut app = app();
+        app.view.scroll_mut().to_top(100, 10);
+        assert!(!app.view.scroll().sticky());
+        app.handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL));
+        assert!(app.view.scroll().sticky());
+        assert_eq!(app.view.scroll().back(), 0);
     }
 }

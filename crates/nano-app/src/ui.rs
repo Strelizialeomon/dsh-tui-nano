@@ -29,6 +29,7 @@ use unicode_width::UnicodeWidthChar;
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let full = frame.area();
     app.send_area = Rect::default();
+    app.jump_area = Rect::default();
     if app.terminal_active() {
         draw_terminal(frame, app, full);
         return;
@@ -748,6 +749,7 @@ fn lamp_glyph(lamp: Lamp, blink_on: bool) -> (&'static str, Color) {
 
 fn draw_feed(frame: &mut Frame, app: &mut App, area: Rect) {
     app.feed_area = area;
+    app.jump_area = Rect::default();
     app.feed_height = area.height as usize;
     if app.transcript_dirty || !app.active_model().previews().is_empty() {
         // The mounted child owns its own official model; the root model keeps
@@ -797,9 +799,34 @@ fn draw_feed(frame: &mut Frame, app: &mut App, area: Rect) {
             ))),
             area,
         );
-        return;
+    } else {
+        frame.render_widget(Paragraph::new(Text::from(lines)), area);
     }
-    frame.render_widget(Paragraph::new(Text::from(lines)), area);
+    if let Some(rect) = jump_button_rect(area, !app.view.scroll().sticky()) {
+        app.jump_area = rect;
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                " 回到最新 ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::REVERSED),
+            ))),
+            rect,
+        );
+    }
+}
+
+/// Bottom-right "回到最新" button, 2 cells from the right edge.
+fn jump_button_rect(area: Rect, visible: bool) -> Option<Rect> {
+    if !visible || area.height == 0 || area.width < 12 {
+        return None;
+    }
+    Some(Rect {
+        x: area.right().saturating_sub(12),
+        y: area.y.saturating_add(area.height.saturating_sub(1)),
+        width: 10,
+        height: 1,
+    })
 }
 /// Skills catalog with an optional read-only instruction preview.
 fn draw_skills_panel(frame: &mut Frame, app: &App, area: Rect) {
@@ -1614,12 +1641,19 @@ fn decision_height(app: &App, width: u16, height: u16) -> u16 {
     let max = height.saturating_sub(8).max(6);
     let desired = match app.decisions.top() {
         Some(DecisionTop::Approval(card)) => {
+            let reason = card
+                .display_reason()
+                .or(card.reason())
+                .unwrap_or("官方请求未附原因");
+            let reason_rows = display_rows(reason, width as usize).len().max(1);
             let command_rows = card
                 .command()
-                .map(|command| display_rows(command, width.saturating_sub(4) as usize).len())
-                .unwrap_or(0)
-                .min(6);
-            7 + command_rows as u16
+                .map(|command| display_rows(command, width.saturating_sub(2) as usize).len())
+                .unwrap_or(1);
+            let state_rows = usize::from(
+                matches!(card.state(), ApprovalCardState::Settled(_)) || card.notice().is_some(),
+            );
+            (1 + 1 + reason_rows + command_rows + 4 + 1 + state_rows) as u16
         }
         Some(DecisionTop::Question(card)) => question_height(card, width),
         None => 6,
@@ -1642,44 +1676,59 @@ fn question_height(card: &QuestionCard, width: u16) -> u16 {
         } else {
             0
         };
-        return 8 + plan_rows;
+        return 10 + plan_rows;
+    }
+    let mut rows = 1u16; // top accent line
+    if card.questions().len() > 1 {
+        rows += 1; // tabs
     }
     if card.page() == card.questions().len() {
-        return 6 + card.questions().len() as u16 * 2;
-    }
-    let Some(question) = card.questions().get(card.page()) else {
-        return 6;
-    };
-    let mut rows = 4u16;
-    rows += display_rows(&question.question, width.saturating_sub(4) as usize)
-        .len()
-        .min(3) as u16;
-    for (index, option) in question.options.iter().enumerate() {
-        let _ = index;
-        rows += 1;
-        if option.description.is_some() {
+        rows += 1; // submit title
+        rows += card.questions().len() as u16;
+        rows += display_rows(&submit_footer(card), width as usize).len() as u16;
+    } else if let Some(question) = card.questions().get(card.page()) {
+        rows += capped_rows(&question.question, width as usize, 3).len() as u16;
+        for option in &question.options {
             rows += 1;
+            if option.description.is_some() {
+                rows += 1;
+            }
         }
+        rows += 1; // Other row
+        rows += display_rows(&question_footer(card, question), width as usize).len() as u16;
+    } else {
+        rows += 1;
     }
-    rows += 1; // Other row
-    rows += 1; // Skip / submit
     if card.error().is_some() {
         rows += 1;
     }
-    if card.timed().remaining_ms.is_some() || card.timed().indefinite {
+    if card.notice().is_some() {
         rows += 1;
     }
-    rows.min(24)
+    rows
 }
 
 fn draw_decision(frame: &mut Frame, app: &mut App, area: Rect) {
     app.decision_area = area;
+    let flat = match app.decisions.top() {
+        Some(DecisionTop::Approval(_)) => true,
+        Some(DecisionTop::Question(card)) => {
+            card.state() != QuestionCardState::ReadOnly && card.plan_review().is_none()
+        }
+        None => false,
+    };
     let (title, lines, hits) = match app.decisions.top() {
         Some(DecisionTop::Approval(card)) => render_approval(card, area),
         Some(DecisionTop::Question(card)) => render_question(card, area),
         None => (String::new(), Vec::new(), Vec::new()),
     };
-    let block = Block::default().borders(Borders::ALL).title(title);
+    let block = if flat {
+        Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::default().fg(Color::Cyan))
+    } else {
+        Block::default().borders(Borders::ALL).title(title)
+    };
     let inner = block.inner(area);
     let visible: Vec<Line<'static>> = lines.iter().take(inner.height as usize).cloned().collect();
     app.decision_hits = map_decision_hits(&hits, inner.height, area.height);
@@ -1708,13 +1757,20 @@ fn render_approval(
     card: &nano_decisions::ApprovalCard,
     area: Rect,
 ) -> (String, Vec<Line<'static>>, Vec<Option<DecisionClick>>) {
-    let width = area.width.saturating_sub(4) as usize;
-    let title = format!(" 审批 · {} ", card.tool_name());
+    let width = area.width.max(1) as usize;
+    let title = String::new();
     let mut lines = Vec::new();
     let mut hits = Vec::new();
+    let question = if card.tool_name().eq_ignore_ascii_case("bash") {
+        "是否运行这条检查命令？".to_string()
+    } else {
+        format!("是否运行 {}？", card.tool_name())
+    };
     lines.push(Line::from(Span::styled(
-        format!("是否允许本次 {} 操作？", card.tool_name()),
-        Style::default().add_modifier(Modifier::BOLD),
+        question,
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
     )));
     hits.push(None);
     let reason = card
@@ -1728,27 +1784,24 @@ fn render_approval(
         )));
         hits.push(None);
     }
-    if let Some(command) = card.command() {
-        lines.push(Line::from(Span::styled(
-            "命令",
-            Style::default().fg(Color::DarkGray),
-        )));
-        hits.push(None);
-        let rows = display_rows(command, width);
-        let start = card.command_offset().min(rows.len());
-        for row in rows.iter().skip(start).take(5) {
+    let content_height = area.height.saturating_sub(1) as usize;
+    let option_rows = 4usize;
+    let footer_rows = 1usize;
+    let state_rows = usize::from(
+        matches!(card.state(), ApprovalCardState::Settled(_)) || card.notice().is_some(),
+    );
+    let available = content_height
+        .saturating_sub(lines.len() + option_rows + footer_rows + state_rows)
+        .max(1);
+    let command_rows = card
+        .command()
+        .map(|command| display_rows(command, width.saturating_sub(2).max(1)))
+        .unwrap_or_default();
+    if card.command().is_some() {
+        let start = card.command_offset().min(command_rows.len());
+        for row in command_rows.iter().skip(start).take(available) {
             lines.push(Line::from(Span::styled(
                 format!("  {row}"),
-                Style::default().fg(Color::Yellow),
-            )));
-            hits.push(None);
-        }
-        if rows.len() > start + 5 {
-            lines.push(Line::from(Span::styled(
-                format!(
-                    "  … 还有 {} 行（PageUp/PageDown 滚动）",
-                    rows.len() - start - 5
-                ),
                 Style::default().fg(Color::DarkGray),
             )));
             hits.push(None);
@@ -1762,24 +1815,26 @@ fn render_approval(
     }
     let allow_focused = card.focus() == ApprovalFocus::Allow;
     let reject_focused = card.focus() == ApprovalFocus::Reject;
-    lines.push(option_line(
-        allow_focused,
-        "1.",
-        "允许一次",
-        "仅本次；不更改后续权限",
-        false,
-    ));
+    lines.push(option_line(allow_focused, "1.", "允许一次", None, false));
     hits.push(Some(DecisionClick::ApprovalAllow));
-    lines.push(option_line(
-        reject_focused,
-        "2.",
-        "拒绝",
-        "不执行本次操作",
-        false,
-    ));
+    lines.push(Line::from(Span::styled(
+        "     仅本次；不更改后续权限",
+        Style::default().fg(Color::DarkGray),
+    )));
+    hits.push(Some(DecisionClick::ApprovalAllow));
+    lines.push(option_line(reject_focused, "2.", "拒绝", None, false));
     hits.push(Some(DecisionClick::ApprovalReject));
     lines.push(Line::from(Span::styled(
-        "↑↓ 切换 · Enter 确认 · 1 选允许 · 2 选拒绝 · Esc 取消（不会允许）",
+        "     不执行本次操作",
+        Style::default().fg(Color::DarkGray),
+    )));
+    hits.push(Some(DecisionClick::ApprovalReject));
+    let mut footer = String::from("↑↓ 切换 · Enter 确认 · Esc 取消");
+    if command_rows.len() > available {
+        footer.push_str(" · PgUp/PgDn");
+    }
+    lines.push(Line::from(Span::styled(
+        footer,
         Style::default().fg(Color::DarkGray),
     )));
     hits.push(None);
@@ -1799,11 +1854,47 @@ fn render_approval(
     (title, lines, hits)
 }
 
+fn capped_rows(text: &str, width: usize, max_rows: usize) -> Vec<String> {
+    let mut rows = display_rows(text, width);
+    if rows.len() > max_rows {
+        rows.truncate(max_rows);
+        if let Some(last) = rows.last_mut() {
+            *last = format!("{}…", truncate(last, width.saturating_sub(1)));
+        }
+    }
+    rows
+}
+
+fn question_footer(card: &QuestionCard, question: &nano_decisions::Question) -> String {
+    let action = if question.multi_select {
+        "空格勾选 · Enter 确认"
+    } else {
+        "Enter 选择"
+    };
+    let mut footer = format!("↑↓ 移动 · {action} · Alt+N 跳过 · Alt+T 停止计时 · Esc 收起");
+    if let Some(remaining) = card.timed().remaining_at(Instant::now()) {
+        footer.push_str(&format!(" · 剩 {}", format_duration(remaining)));
+    } else if card.timed().indefinite {
+        footer.push_str(" · 计时已停");
+    }
+    footer
+}
+
+fn submit_footer(card: &QuestionCard) -> String {
+    let mut footer = String::from("Enter 提交 · Tab/←→ 回看 · Esc 收起");
+    if let Some(remaining) = card.timed().remaining_at(Instant::now()) {
+        footer.push_str(&format!(" · 剩 {}", format_duration(remaining)));
+    } else if card.timed().indefinite {
+        footer.push_str(" · 计时已停");
+    }
+    footer
+}
+
 fn render_question(
     card: &QuestionCard,
     area: Rect,
 ) -> (String, Vec<Line<'static>>, Vec<Option<DecisionClick>>) {
-    let width = area.width.saturating_sub(4) as usize;
+    let width = area.width.max(1) as usize;
     if card.state() == QuestionCardState::ReadOnly {
         return render_read_only(card, area);
     }
@@ -1835,7 +1926,9 @@ fn render_question(
             tabs.push(Span::styled(
                 format!("{}{} ", if answered { "[x]" } else { "[ ]" }, label),
                 if current {
-                    Style::default().fg(Color::Black).bg(Color::Cyan)
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(Color::DarkGray)
                 },
@@ -1852,7 +1945,9 @@ fn render_question(
                 "提交"
             ),
             if card.page() == card.questions().len() {
-                Style::default().fg(Color::Black).bg(Color::Cyan)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::DarkGray)
             },
@@ -1892,17 +1987,21 @@ fn render_question(
             ]));
             hits.push(Some(DecisionClick::QuestionOption(index)));
         }
-        lines.push(Line::from(Span::styled(
-            "Enter 提交 · Tab/←→ 回看 · Esc 收起",
-            Style::default().fg(Color::DarkGray),
-        )));
-        hits.push(Some(DecisionClick::QuestionSubmit));
+        for row in display_rows(&submit_footer(card), width) {
+            lines.push(Line::from(Span::styled(
+                row,
+                Style::default().fg(Color::DarkGray),
+            )));
+            hits.push(Some(DecisionClick::QuestionSubmit));
+        }
     } else if let Some(question) = card.questions().get(card.page()) {
-        lines.push(Line::from(Span::styled(
-            question.question.clone(),
-            Style::default().add_modifier(Modifier::BOLD),
-        )));
-        hits.push(None);
+        for row in capped_rows(&question.question, width, 3) {
+            lines.push(Line::from(Span::styled(
+                row,
+                Style::default().add_modifier(Modifier::BOLD),
+            )));
+            hits.push(None);
+        }
         let draft = card.draft(card.page()).cloned().unwrap_or_default();
         for (index, option) in question.options.iter().enumerate() {
             let focused = card.focus() == index;
@@ -1911,22 +2010,29 @@ fn render_question(
                 focused,
                 &format!("{}.", index + 1),
                 &option.label,
-                option.description.as_deref().unwrap_or(""),
+                if question.multi_select {
+                    Some(selected)
+                } else {
+                    None
+                },
                 selected,
             ));
             hits.push(Some(DecisionClick::QuestionOption(index)));
             if let Some(description) = &option.description {
-                for row in display_rows(description, width.saturating_sub(5)) {
-                    lines.push(Line::from(Span::styled(
-                        format!("     {row}"),
-                        Style::default().fg(Color::DarkGray),
-                    )));
-                    hits.push(Some(DecisionClick::QuestionOption(index)));
+                let rows = display_rows(description, width.saturating_sub(5));
+                let mut row = rows.first().cloned().unwrap_or_default();
+                if rows.len() > 1 {
+                    row = format!("{}…", truncate(&row, width.saturating_sub(6)));
                 }
+                lines.push(Line::from(Span::styled(
+                    format!("     {row}"),
+                    Style::default().fg(Color::DarkGray),
+                )));
+                hits.push(Some(DecisionClick::QuestionOption(index)));
             }
         }
         let other_focused = card.focus() == question.options.len();
-        let caret = if other_focused { "▏" } else { "" };
+        let caret = if other_focused { "|" } else { "" };
         lines.push(Line::from(vec![
             Span::styled(
                 format!("{} ", if other_focused { ">" } else { " " }),
@@ -1943,49 +2049,18 @@ fn render_question(
             ),
         ]));
         hits.push(Some(DecisionClick::QuestionOther));
-        lines.push(Line::from(vec![
-            Span::styled("跳过本题", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                "  （Alt+N；提交空结果）",
+        for row in display_rows(&question_footer(card, question), width) {
+            lines.push(Line::from(Span::styled(
+                row,
                 Style::default().fg(Color::DarkGray),
-            ),
-        ]));
-        hits.push(Some(DecisionClick::QuestionSkip));
-        let footer = if question.multi_select {
-            "↑↓ 移动 · 空格勾选 · Enter 确认已选项"
-        } else {
-            "↑↓ 移动 · Enter 选择 · 数字直选"
-        };
-        lines.push(Line::from(Span::styled(
-            format!(
-                "{footer}{} · Alt+N 跳过 · Alt+T 停止倒计时 · Esc 收起",
-                if card.questions().len() > 1 {
-                    " · Tab 切题"
-                } else {
-                    ""
-                }
-            ),
-            Style::default().fg(Color::DarkGray),
-        )));
-        hits.push(None);
+            )));
+            hits.push(Some(DecisionClick::QuestionSkip));
+        }
     }
     if let Some(error) = card.error() {
         lines.push(Line::from(Span::styled(
             error.to_string(),
             Style::default().fg(Color::Red),
-        )));
-        hits.push(None);
-    }
-    if let Some(remaining) = card.timed().remaining_at(Instant::now()) {
-        lines.push(Line::from(Span::styled(
-            format!("剩余 {} · Alt+T 停止倒计时", format_duration(remaining)),
-            Style::default().fg(Color::Yellow),
-        )));
-        hits.push(None);
-    } else if card.timed().indefinite {
-        lines.push(Line::from(Span::styled(
-            "倒计时已停止；问题保持可回答",
-            Style::default().fg(Color::DarkGray),
         )));
         hits.push(None);
     }
@@ -2051,25 +2126,23 @@ fn render_plan_review(
         } else {
             "查看完整计划"
         },
-        "",
+        None,
         false,
     ));
     hits.push(Some(DecisionClick::PlanView));
-    lines.push(option_line(
-        changes_focused,
-        "2.",
-        "请求修改",
-        "取消本次等待，回到输入框说明修改（不提交批准）",
-        false,
-    ));
+    lines.push(option_line(changes_focused, "2.", "请求修改", None, false));
     hits.push(Some(DecisionClick::PlanRequestChanges));
-    lines.push(option_line(
-        approve_focused,
-        "3.",
-        "批准",
-        "返回官方批准标签",
-        false,
-    ));
+    lines.push(Line::from(Span::styled(
+        "     取消本次等待，回到输入框说明修改（不提交批准）",
+        Style::default().fg(Color::DarkGray),
+    )));
+    hits.push(Some(DecisionClick::PlanRequestChanges));
+    lines.push(option_line(approve_focused, "3.", "批准", None, false));
+    hits.push(Some(DecisionClick::PlanApprove));
+    lines.push(Line::from(Span::styled(
+        "     返回官方批准标签",
+        Style::default().fg(Color::DarkGray),
+    )));
     hits.push(Some(DecisionClick::PlanApprove));
     lines.push(Line::from(Span::styled(
         "↑↓ 选择 · Enter 确认 · Esc 取消（不会批准）",
@@ -2141,7 +2214,7 @@ fn option_line(
     focused: bool,
     number: &str,
     label: &str,
-    detail: &str,
+    checkbox: Option<bool>,
     selected: bool,
 ) -> Line<'static> {
     let mut spans = vec![
@@ -2150,26 +2223,25 @@ fn option_line(
             Style::default().fg(Color::Cyan),
         ),
         Span::styled(format!("{number} "), Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            format!("{} ", if selected { "[x]" } else { "[ ]" }),
-            Style::default().fg(Color::DarkGray),
-        ),
-        Span::styled(
-            label.to_string(),
-            if focused {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            },
-        ),
     ];
-    if !detail.is_empty() {
+    if let Some(checked) = checkbox {
         spans.push(Span::styled(
-            format!("  {detail}"),
+            format!("{} ", if checked { "[x]" } else { "[ ]" }),
             Style::default().fg(Color::DarkGray),
         ));
+    }
+    let label_style = if focused {
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else if selected {
+        Style::default().fg(Color::Green)
+    } else {
+        Style::default()
+    };
+    spans.push(Span::styled(label.to_string(), label_style));
+    if checkbox.is_none() && selected {
+        spans.push(Span::styled(" ✓", Style::default().fg(Color::Green)));
     }
     Line::from(spans)
 }
@@ -3074,6 +3146,9 @@ fn truncate(text: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nano_decisions::contract::parse_questions;
+    use nano_decisions::{ApprovalCard, QuestionCard, TimedState};
+    use serde_json::json;
     use std::time::Duration;
 
     #[test]
@@ -3192,6 +3267,158 @@ mod tests {
         assert!(status.contains("权限："));
         assert!(status.ends_with(&app.display_path()), "{status:?}");
         assert!(!status.contains("·权限"));
+    }
+
+    #[test]
+    fn the_jump_button_only_appears_above_the_minimum_width() {
+        let area = Rect::new(2, 0, 100, 20);
+        assert!(jump_button_rect(area, false).is_none());
+        let rect = jump_button_rect(area, true).expect("visible");
+        assert_eq!(rect.y, 19);
+        assert_eq!(rect.right(), area.right() - 2);
+        assert!(jump_button_rect(Rect::new(0, 0, 11, 20), true).is_none());
+    }
+
+    #[test]
+    fn the_jump_button_follows_the_actual_scroll_state() {
+        let mut app = app();
+        let text = (1..=40)
+            .map(|index| format!("line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let payload = json!({
+            "address": {"rootSessionId": "root"},
+            "seq": 1,
+            "type": "assistant/message",
+            "data": {
+                "turn": 1,
+                "step": 1,
+                "message": {
+                    "id": "a-1",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": text}]
+                }
+            }
+        });
+        app.model.apply_event("session.event", &payload);
+        app.view.sync(&app.model, Instant::now());
+        app.transcript_dirty = false;
+        app.view.scroll_mut().to_top(200, 10);
+        let rows = compact(&screen(&mut app, 100, 30));
+        assert!(rows.iter().any(|row| row.contains("回到最新")));
+    }
+
+    #[test]
+    fn a_single_select_question_hides_checkboxes_and_renders_the_description_once() {
+        let questions = parse_questions(Some(&json!([{
+            "id": "q",
+            "question": "Pick one",
+            "options": [
+                {"label": "A", "description": "first description"},
+                {"label": "B"}
+            ]
+        }])));
+        let card = QuestionCard::new(None, None, questions, None);
+        let (_, lines, _) = render_question(&card, Rect::new(0, 0, 60, 20));
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("Pick one"));
+        assert!(!text.contains("[ ]"));
+        assert!(!text.contains("[x]"));
+        assert_eq!(text.matches("first description").count(), 1);
+        assert!(text.contains("Alt+N 跳过"));
+        assert!(
+            lines.iter().all(|line| text_width(&line.to_string()) <= 60),
+            "card must fit 60 columns"
+        );
+    }
+
+    #[test]
+    fn a_selected_single_option_shows_a_check_mark() {
+        let single = option_line(false, "1.", "A", None, true).to_string();
+        assert!(single.contains("✓"));
+        assert!(!single.contains("[ ]"));
+        let multi = option_line(false, "1.", "A", Some(true), true).to_string();
+        assert!(multi.contains("[x]"));
+    }
+
+    #[test]
+    fn an_approval_card_uses_the_bash_question_and_shows_the_full_command() {
+        let command = "line1\nline2\nline3\nline4\nline5\nline6\nline7";
+        let card = ApprovalCard::new(
+            "r".into(),
+            "bash".into(),
+            None,
+            Default::default(),
+            None,
+            Some(command.into()),
+            Instant::now(),
+        );
+        let (_, lines, _) = render_approval(&card, Rect::new(0, 0, 60, 30));
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("是否运行这条检查命令？"));
+        assert!(text.contains("line7"), "full command, not a 5-row window");
+        assert!(!text.contains("始终允许"));
+        assert!(
+            lines.iter().all(|line| text_width(&line.to_string()) <= 60),
+            "card must fit 60 columns"
+        );
+    }
+
+    #[test]
+    fn a_timed_multi_select_footer_wraps_within_sixty_columns() {
+        let questions = parse_questions(Some(&json!([{
+            "id": "q",
+            "question": "Pick many",
+            "multi_select": true,
+            "options": [{"label": "A"}, {"label": "B"}]
+        }])));
+        let card = QuestionCard::new(
+            None,
+            None,
+            questions,
+            Some(TimedState::start(30_000, Instant::now())),
+        );
+        let (_, lines, _) = render_question(&card, Rect::new(0, 0, 60, 24));
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("Alt+T"));
+        assert!(text.contains("剩"));
+        assert!(lines.iter().all(|line| text_width(&line.to_string()) <= 60));
+    }
+
+    #[test]
+    fn a_long_question_keeps_every_option_and_the_footer_visible() {
+        let long = "很长的题目。".repeat(30);
+        let detail = "很长的描述。".repeat(20);
+        let questions = parse_questions(Some(&json!([{
+            "id": "q",
+            "question": long,
+            "options": [
+                {"label": "A", "description": detail},
+                {"label": "B", "description": detail},
+                {"label": "C", "description": detail},
+                {"label": "D", "description": detail}
+            ]
+        }])));
+        let card = QuestionCard::new(None, None, questions, None);
+        let (_, lines, _) = render_question(&card, Rect::new(0, 0, 60, 24));
+        let visible: Vec<String> = lines.iter().take(23).map(ToString::to_string).collect();
+        let text = visible.join("\n");
+        assert!(text.contains("4. D"), "fourth option stays visible");
+        assert!(text.contains("其他"));
+        assert!(text.contains("Alt+N 跳过"));
+        assert!(visible.iter().all(|line| text_width(line) <= 60));
     }
 
     #[test]

@@ -174,6 +174,10 @@ nano — 极简 DeepSeek Harness 终端界面
   --bridge-package <path>  桥接包目录
   -h, --help               显示本帮助
 
+环境变量：
+  NANO_THEME=dark|light    diff 底色主题（默认 dark，只影响差异底色）
+  NANO_REDUCED_MOTION=1    关闭忙碌指示与子代理状态灯动效
+
 按键：
   Enter 发送/排队；Alt+Enter 插话；Ctrl+J 换行（Shift+Enter 需终端支持键盘增强）
   Esc 停止当前回合（保留队列）；Ctrl+Y 复制草稿原文（OSC 52）；Ctrl+C / Ctrl+Q 退出

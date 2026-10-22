@@ -11,7 +11,7 @@ use nano_conversation::{ConversationModel, SessionAddress};
 use serde_json::Value;
 
 use crate::model::{TranscriptModel, TranscriptSource};
-use crate::render::{render, Hit, RenderCache, TranscriptRender};
+use crate::render::{render, DiffTheme, Hit, RenderCache, TranscriptRender};
 use crate::scroll::ScrollState;
 use crate::tool::QuestionRecord;
 
@@ -21,6 +21,7 @@ pub struct TranscriptView {
     model: TranscriptModel,
     cache: RenderCache,
     scroll: ScrollState,
+    theme: DiffTheme,
 }
 
 impl TranscriptView {
@@ -30,6 +31,7 @@ impl TranscriptView {
             model: TranscriptModel::new(address, source),
             cache: RenderCache::new(),
             scroll: ScrollState::default(),
+            theme: DiffTheme::from_env(),
         }
     }
 
@@ -67,6 +69,7 @@ impl TranscriptView {
             &mut self.scroll,
             width,
             viewport,
+            self.theme,
         )
     }
 
