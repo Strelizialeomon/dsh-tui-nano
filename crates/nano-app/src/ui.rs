@@ -16,6 +16,7 @@ use nano_jobs::{BashRecord, BashState, JobStatus};
 use nano_schedule::RowKind;
 use nano_sessions::{format_clock, Occupancy};
 use nano_subagents::{ComposerGate, Lamp};
+use nano_transcript::DiffTheme;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -66,7 +67,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         (dock_rows.len() + usize::from(dock_overflow > 0)) as u16 + 1
     };
-    let header_height = if child_active { 2 } else { 1 };
+    // The header reserves one blank row beneath the title, matching the
+    // design's one-line gap before the transcript.
+    let header_height = if child_active { 3 } else { 2 };
     let activity_height = u16::from(app.activity_kind().is_some());
     let bottom_height = if decision {
         decision_height(app, area.width, area.height)
@@ -521,93 +524,75 @@ fn draw_subagent_dock(frame: &mut Frame, app: &mut App, area: Rect) {
     let (rows, overflow) = app.subagents.dock();
     app.subagent_dock_area = area;
     app.subagent_dock_hits.clear();
-    let title = format!(" {} local agents ", app.subagents.local_count());
-    let block = Block::default().borders(Borders::TOP).title(title);
+    // The dock has no title: the design keeps the top edge as a plain rule and
+    // moves the count to the all-agents list.
+    let block = Block::default()
+        .borders(Borders::TOP)
+        .border_style(Style::default().fg(Color::DarkGray));
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0);
     let blink_on = app.reduced_motion || app.subagents.lifecycle().blink_on(Instant::now());
     let width = inner.width.max(1) as usize;
+    let hover = hover_background(DiffTheme::from_env());
     let mut lines: Vec<Line<'static>> = Vec::new();
     for (index, row) in rows.iter().enumerate() {
         let selected = app.subagents.nav().dock_focus && app.subagents.nav().dock_selected == index;
-        let marker = if selected { "▶" } else { " " };
-        let (dot, color) = lamp_glyph(app.subagents.lamp(row), blink_on);
-        let mut meta = row.activity.label().to_string();
-        if let Some(duration) = row.duration_ms(now_ms) {
-            meta.push_str(" · ");
-            meta.push_str(&format_duration_ms(duration));
-        }
-        let mode_suffix = match row.mode {
-            nano_subagents::AgentMode::OneShot => Some(" · 一次性"),
-            nano_subagents::AgentMode::External => Some(" · 不可进入"),
-            _ => None,
-        };
+        let marker = if selected { "›" } else { " " };
+        let lamp = app.subagents.lamp(row);
+        let (dot, color) = lamp_glyph(lamp, blink_on);
+        let meta = row_status(lamp);
         let name = safe_text(row.display_label());
         let meta_width = meta.chars().map(display_width).sum::<usize>();
-        let suffix_width = mode_suffix
-            .map(|suffix| suffix.chars().map(display_width).sum::<usize>())
-            .unwrap_or(0);
-        // marker(1) + space(1) + dot(1) + space(1) + gap(1) + meta.
-        let name_room = width
-            .saturating_sub(4 + 1 + meta_width + suffix_width)
-            .max(1);
+        // marker(1) + space(1) + dot(1) + space(1) + gap(1) + status.
+        let name_room = width.saturating_sub(4 + 1 + meta_width).max(1);
         let name = truncate(&name, name_room);
-        let left_width = 4 + name.chars().map(display_width).sum::<usize>() + suffix_width;
+        let left_width = 4 + name.chars().map(display_width).sum::<usize>();
         let pad = width.saturating_sub(left_width + meta_width).max(1);
-        let style = if selected {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
+        let row_style = if selected {
+            Style::default().bg(hover)
         } else {
             Style::default()
         };
-        let dot_style = if selected {
-            style
-        } else {
-            Style::default().fg(color)
-        };
-        let mut spans = vec![
-            Span::styled(format!("{marker} "), style),
+        let pointer_style = row_style.fg(Color::Cyan);
+        let dot_style = row_style.fg(color);
+        let status_style = row_style.fg(Color::DarkGray);
+        let spans = vec![
+            Span::styled(format!("{marker} "), pointer_style),
             Span::styled(dot.to_string(), dot_style),
-            Span::styled(format!(" {name}"), style),
+            Span::styled(format!(" {name}"), row_style),
+            Span::styled(" ".repeat(pad), row_style),
+            Span::styled(meta.to_string(), status_style),
         ];
-        if let Some(suffix) = mode_suffix {
-            spans.push(Span::styled(
-                suffix.to_string(),
-                if selected { style } else { muted_style() },
-            ));
-        }
-        spans.push(Span::styled(" ".repeat(pad), style));
-        spans.push(Span::styled(
-            meta,
-            if selected {
-                style
-            } else {
-                Style::default().fg(Color::DarkGray)
-            },
-        ));
         lines.push(Line::from(spans));
         app.subagent_dock_hits.push((index, inner.y + index as u16));
     }
     if overflow > 0 {
         let selected =
             app.subagents.nav().dock_focus && app.subagents.nav().dock_selected == rows.len();
-        let marker = if selected { "▶" } else { " " };
+        let marker = if selected { "›" } else { " " };
         let style = if selected {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
+            Style::default().fg(Color::Cyan).bg(hover)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(Color::Cyan)
         };
-        lines.push(Line::from(Span::styled(
-            format!("{marker} … 还有 {overflow} 个子代理"),
-            style,
-        )));
+        lines.push(Line::from(vec![
+            Span::styled(format!("{marker} "), style),
+            Span::styled("● ".to_string(), style),
+            Span::styled(format!("还有 {overflow} 个子代理"), style),
+        ]));
         app.subagent_dock_hits
             .push((rows.len(), inner.y + rows.len() as u16));
     }
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
+}
+
+/// Focused dock rows use the design's hover token through the same
+/// `NANO_THEME` selection as the diff tokens (batch 2 landed the read first).
+fn hover_background(theme: DiffTheme) -> Color {
+    match theme {
+        DiffTheme::Dark => Color::Rgb(36, 43, 53),
+        DiffTheme::Light => Color::Rgb(232, 232, 229),
+    }
 }
 
 fn muted_style() -> Style {
@@ -620,7 +605,10 @@ fn draw_subagent_list(frame: &mut Frame, app: &mut App, area: Rect) {
     let title = if app.subagent_list_loading {
         " 全部子代理 · 读取中… · ↑↓ 选择 · r 刷新 · Esc 关闭 ".to_string()
     } else {
-        " 全部子代理 · ↑↓ 选择 · Enter 进入 · r 刷新 · Esc 关闭 ".to_string()
+        format!(
+            " 全部子代理 · {} · ↑↓ 选择 · Enter 进入 · r 刷新 · Esc 关闭 ",
+            app.subagents.local_count()
+        )
     };
     let block = Block::default().borders(Borders::ALL).title(title);
     let inner = block.inner(area);
@@ -744,6 +732,18 @@ fn lamp_glyph(lamp: Lamp, blink_on: bool) -> (&'static str, Color) {
         Lamp::Warned => ("●", Color::Yellow),
         Lamp::Error => ("●", Color::Red),
         Lamp::Inactive => ("●", Color::DarkGray),
+    }
+}
+
+/// Right-hand status word for one dock row. The official terminal lamp is the
+/// authority; `activity` alone cannot tell a finished child from a live one.
+fn row_status(lamp: Lamp) -> &'static str {
+    match lamp {
+        Lamp::Running => "执行中",
+        Lamp::Completed => "完成",
+        Lamp::Warned => "终止",
+        Lamp::Error => "错误",
+        Lamp::Inactive => "未运行",
     }
 }
 
@@ -3146,6 +3146,7 @@ fn truncate(text: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use nano_decisions::contract::parse_questions;
     use nano_decisions::{ApprovalCard, QuestionCard, TimedState};
     use serde_json::json;
@@ -3593,7 +3594,7 @@ mod tests {
     }
 
     #[test]
-    fn the_dock_sits_below_the_status_bar_with_a_count_and_overflow() {
+    fn the_dock_sits_below_the_status_bar_without_a_title_and_counts_in_the_list() {
         let mut app = app();
         install_subagents(
             &mut app,
@@ -3607,10 +3608,7 @@ mod tests {
         );
         let rows = screen(&mut app, 100, 30);
         let rows_compact = compact(&rows);
-        let dock = rows_compact
-            .iter()
-            .position(|row| row.contains("localagents"))
-            .expect("dock title");
+        let dock = app.subagent_dock_area.y as usize;
         let status = rows_compact
             .iter()
             .position(|row| row.contains("权限："))
@@ -3618,9 +3616,17 @@ mod tests {
         assert!(status < dock, "status row stays above the dock");
         assert!(rows_compact.last().unwrap().contains("还有1个子代理"));
         let dock_text = rows_compact[dock..].join("");
-        assert!(dock_text.contains("5localagents"));
-        assert!(!dock_text.contains("↑↓选择"));
+        assert!(!dock_text.contains("localagents"), "dock has no title");
+        assert!(!dock_text.contains("用时"), "dock has no duration");
         assert!(dock_text.contains("taska"));
+        assert!(dock_text.contains("未运行"));
+
+        app.enter_subagent_overflow();
+        let list = compact(&screen(&mut app, 100, 30));
+        assert!(
+            list.iter().any(|row| row.contains("全部子代理·5·↑↓选择")),
+            "list title keeps its hints and adds the count"
+        );
     }
 
     #[test]
@@ -3722,5 +3728,61 @@ mod tests {
         assert!(child.enter_subagent(0));
         let rows = compact(&screen(&mut child, 100, 30));
         assert!(rows.iter().any(|row| row.contains("正在读取子代理历史")));
+    }
+
+    #[test]
+    fn the_header_is_followed_by_one_blank_row() {
+        let mut app = app();
+        let rows = screen(&mut app, 100, 20);
+        assert!(rows[0].starts_with("  nano"));
+        assert!(rows[1].trim().is_empty(), "{:?}", rows[1]);
+    }
+
+    #[test]
+    fn dock_status_words_follow_the_official_lamp() {
+        let mut app = app();
+        install_subagents(
+            &mut app,
+            serde_json::json!([
+                subagent_row("ok", "continuable"),
+                subagent_row("bad", "one-shot"),
+                subagent_row("stop", "continuable"),
+                subagent_row("mystery", "continuable"),
+            ]),
+        );
+        for (id, reason) in [
+            ("ok", "completed"),
+            ("bad", "error"),
+            ("stop", "aborted"),
+            ("mystery", "future-reason"),
+        ] {
+            app.subagents
+                .apply_event(&serde_json::json!({
+                    "type": "end",
+                    "childId": id,
+                    "stopReason": reason
+                }))
+                .expect("valid lifecycle event");
+        }
+        let rows = compact(&screen(&mut app, 100, 30));
+        let dock = rows[app.subagent_dock_area.y as usize..].join("");
+        assert!(dock.contains("完成"), "{dock:?}");
+        assert!(dock.contains("错误"), "{dock:?}");
+        assert!(dock.contains("终止"), "{dock:?}");
+        assert!(dock.contains("未运行"), "{dock:?}");
+
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        let rows = compact(&screen(&mut app, 100, 30));
+        let dock = rows[app.subagent_dock_area.y as usize..].join("");
+        assert!(dock.contains('›'), "{dock:?}");
+    }
+
+    #[test]
+    fn dock_hover_uses_theme_tokens() {
+        assert_eq!(hover_background(DiffTheme::Dark), Color::Rgb(36, 43, 53));
+        assert_eq!(
+            hover_background(DiffTheme::Light),
+            Color::Rgb(232, 232, 229)
+        );
     }
 }

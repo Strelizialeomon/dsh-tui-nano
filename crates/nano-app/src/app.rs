@@ -2,7 +2,8 @@
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver};
 use std::time::{Duration, Instant};
@@ -18,7 +19,7 @@ use nano_controls::{ControlsModel, ModelSelection, Panel, PanelAction, PanelMode
 use nano_conversation::{
     CommandRouter, ConversationItem, ConversationModel, ConversationStatus, Delivery, DraftStore,
     FeatureContribution, FeatureRegistry, FocusId, InputBuffer, InputEvent, InputMode,
-    InputOutcome, InputRoute, SceneId, SceneState, SessionAddress, SubmitError,
+    InputOutcome, InputRoute, MessageKind, SceneId, SceneState, SessionAddress, SubmitError,
 };
 use nano_decisions::{
     answers_to_wire, DecisionAction, DecisionClick, DecisionKey, DecisionTop, DecisionsModel,
@@ -455,6 +456,19 @@ pub struct MonitorForm {
     pub editing_filter: bool,
 }
 
+/// One in-progress Up/Down recall over submitted prompts. The snapshot is
+/// taken when browsing starts so later durable messages cannot shift the
+/// entry under the cursor; the displaced draft is restored on the way back.
+#[derive(Debug, Clone)]
+pub struct HistoryBrowse {
+    address: SessionAddress,
+    entries: Vec<String>,
+    /// Distance from the newest entry: 0 is the latest prompt.
+    index: usize,
+    saved_text: String,
+    saved_cursor: usize,
+}
+
 /// Main application state.
 pub struct App {
     /// Launch options.
@@ -463,6 +477,10 @@ pub struct App {
     pub model: ConversationModel,
     /// Per-address drafts.
     pub drafts: DraftStore,
+    /// Persistent root prompt history, resolved when the host link attaches.
+    pub history_path: Option<PathBuf>,
+    /// Up/Down history recall for the active composer.
+    pub history_browse: Option<HistoryBrowse>,
     /// Static feature registry.
     pub registry: FeatureRegistry,
     /// Main scene and focus.
@@ -704,6 +722,8 @@ impl App {
             cli,
             model: ConversationModel::new(address.clone()),
             drafts: DraftStore::new(address.clone()),
+            history_path: None,
+            history_browse: None,
             attachments: AttachmentDraftStore::new(address.clone()),
             registry,
             scene,
@@ -815,7 +835,9 @@ impl App {
     /// Attach the host link and open the terminal identity store under the
     /// resolved Nano data root.
     pub fn attach_link(&mut self, link: HostLink) {
-        self.terminal_data_root = Some(link.data_root());
+        let data_root = link.data_root();
+        self.history_path = Some(data_root.join("history.jsonl"));
+        self.terminal_data_root = Some(data_root);
         let root_session_id = self.model.address().root_session_id.clone();
         self.bind_terminal(root_session_id);
         self.link = Some(link);
@@ -1164,6 +1186,7 @@ impl App {
 
     /// Send the mounted child's draft through the official continuation path.
     pub fn submit_subagent_draft(&mut self, delivery: Delivery) {
+        self.history_browse = None;
         let Some(mounted) = self.subagents.mounted().cloned() else {
             return;
         };
@@ -1921,6 +1944,9 @@ impl App {
             return self.handle_queue_key(key);
         }
         if self.edit_target.is_none() {
+            if let Some(handled) = self.handle_history_key(key) {
+                return handled;
+            }
             if let Some(handled) = self.handle_dock_key(key) {
                 return handled;
             }
@@ -1928,6 +1954,7 @@ impl App {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('u') => {
+                    self.history_browse = None;
                     self.drafts.current_mut().clear();
                     self.attachments.current_mut().clear();
                     self.completion.clear();
@@ -1935,6 +1962,7 @@ impl App {
                 }
                 KeyCode::Char('j') => {
                     let old = self.drafts.current().text().to_string();
+                    self.history_browse = None;
                     self.drafts.current_mut().handle(&InputEvent::Newline);
                     let new = self.drafts.current().text().to_string();
                     self.shift_attachment_anchors(&old, &new);
@@ -2030,6 +2058,7 @@ impl App {
             }
             if key.modifiers.contains(KeyModifiers::SHIFT) {
                 let old = self.drafts.current().text().to_string();
+                self.history_browse = None;
                 self.drafts.current_mut().handle(&InputEvent::Newline);
                 let new = self.drafts.current().text().to_string();
                 self.shift_attachment_anchors(&old, &new);
@@ -2068,8 +2097,20 @@ impl App {
             _ => None,
         };
         if let Some(event) = event {
+            let mutates = matches!(
+                &event,
+                InputEvent::Insert(_)
+                    | InputEvent::Paste(_)
+                    | InputEvent::Newline
+                    | InputEvent::Backspace
+                    | InputEvent::Delete
+            );
             let old = self.drafts.current().text().to_string();
             let outcome = self.drafts.current_mut().handle(&event);
+            if mutates {
+                // Editing turns the recalled prompt into an ordinary draft.
+                self.history_browse = None;
+            }
             if outcome == InputOutcome::RejectedEmpty {
                 self.error = Some("内容为空，草稿已保留".to_string());
             }
@@ -5248,11 +5289,17 @@ impl App {
 
     /// Route the current input and submit it when it is an ordinary prompt.
     pub fn submit_draft(&mut self, delivery: Delivery) {
+        self.history_browse = None;
         let text = self.drafts.current().text().to_string();
         let has_attachments = !self.attachments.current().is_empty();
         if text.trim().is_empty() && !has_attachments {
             self.error = Some("内容为空，草稿已保留".to_string());
             return;
+        }
+        // Every non-empty root submission is remembered, including slash and
+        // `!` commands; a failed send still counts, matching Claude Code.
+        if !text.trim().is_empty() {
+            self.record_history_entry(&text);
         }
         // Commands, skills, and `!` are routed only for text-only input; an
         // attachment makes this an ordinary prompt.
@@ -6045,6 +6092,7 @@ impl App {
     }
 
     fn apply_queue_edit(&mut self) {
+        self.history_browse = None;
         let Some(message_id) = self.edit_target.clone() else {
             return;
         };
@@ -6287,6 +6335,309 @@ impl App {
                 true
             }
             _ => false,
+        }
+    }
+
+    /// Canonical project identity for history entries. The host cwd is
+    /// canonical; the CLI cwd is the pre-handshake fallback.
+    fn history_project(&self) -> String {
+        self.hello
+            .as_ref()
+            .map(|hello| hello.cwd.clone())
+            .or_else(|| {
+                self.cli
+                    .cwd
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().into_owned())
+            })
+            .or_else(|| {
+                std::env::current_dir()
+                    .ok()
+                    .map(|path| path.to_string_lossy().into_owned())
+            })
+            .unwrap_or_default()
+    }
+
+    /// Current root session identity, used to put this session's prompts first.
+    fn history_session_id(&self) -> String {
+        self.subagents.root_session_id().to_string()
+    }
+
+    /// Persist one submitted root prompt. A write failure never blocks the
+    /// submission and is not surfaced in the UI.
+    fn record_history_entry(&self, text: &str) {
+        let Some(path) = self.history_path.as_ref() else {
+            return;
+        };
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as u64)
+            .unwrap_or(0);
+        let value = json!({
+            "display": text,
+            "timestamp": timestamp,
+            "project": self.history_project(),
+            "sessionId": self.history_session_id(),
+        });
+        let Ok(line) = serde_json::to_string(&value) else {
+            return;
+        };
+        let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(path)
+        else {
+            return;
+        };
+        let _ = file.write_all(line.as_bytes());
+        let _ = file.write_all(b"\n");
+    }
+
+    /// Read enough of the file's tail to cover the newest matching prompts.
+    /// The newest 100 project entries are always within the last 256 lines;
+    /// reading backwards keeps a long history file from being loaded whole.
+    fn history_tail(path: &std::path::Path) -> String {
+        const CHUNK: u64 = 64 * 1024;
+        const LINE_BUDGET: usize = 256;
+        let Ok(mut file) = File::open(path) else {
+            return String::new();
+        };
+        let Ok(length) = file.metadata().map(|metadata| metadata.len()) else {
+            return String::new();
+        };
+        let mut tail: Vec<u8> = Vec::new();
+        let mut position = length;
+        loop {
+            let chunk = position.min(CHUNK);
+            position -= chunk;
+            let mut buffer = vec![0u8; chunk as usize];
+            if file.seek(SeekFrom::Start(position)).is_err()
+                || file.read_exact(&mut buffer).is_err()
+            {
+                return String::new();
+            }
+            buffer.extend_from_slice(&tail);
+            tail = buffer;
+            let newlines = tail.iter().filter(|byte| **byte == b'\n').count();
+            if position == 0 || newlines >= LINE_BUDGET {
+                break;
+            }
+        }
+        String::from_utf8_lossy(&tail).into_owned()
+    }
+
+    /// Root history: the project's submitted prompts from the file, newest
+    /// first, this session before other sessions, capped at 100, then reversed
+    /// to the oldest-first order the browser expects.
+    fn root_input_history(&self) -> Vec<String> {
+        let Some(path) = self.history_path.as_ref() else {
+            return Vec::new();
+        };
+        let text = Self::history_tail(path);
+        if text.is_empty() {
+            return Vec::new();
+        }
+        let project = self.history_project();
+        let session = self.history_session_id();
+        let mut window: Vec<(bool, String)> = Vec::new();
+        for line in text.lines().rev() {
+            let Ok(value) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            if value.get("project").and_then(Value::as_str) != Some(project.as_str()) {
+                continue;
+            }
+            let Some(display) = value.get("display").and_then(Value::as_str) else {
+                continue;
+            };
+            if display.trim().is_empty() {
+                continue;
+            }
+            let current = value.get("sessionId").and_then(Value::as_str) == Some(session.as_str());
+            window.push((current, display.to_string()));
+            if window.len() >= 100 {
+                break;
+            }
+        }
+        let mut ordered: Vec<String> = window
+            .iter()
+            .filter(|(current, _)| *current)
+            .map(|(_, text)| text.clone())
+            .collect();
+        ordered.extend(
+            window
+                .iter()
+                .filter(|(current, _)| !*current)
+                .map(|(_, text)| text.clone()),
+        );
+        ordered.reverse();
+        ordered
+    }
+
+    /// Child history: this session's user prompts for the mounted address,
+    /// filtered from the bounded durable projection plus live echoes.
+    fn child_input_history(&self) -> Vec<String> {
+        let model = self.active_model();
+        let mut entries: Vec<String> = model
+            .history()
+            .items()
+            .iter()
+            .filter_map(|item| match item {
+                ConversationItem::Message(message) if message.kind == MessageKind::User => {
+                    Some(message.text.clone())
+                }
+                _ => None,
+            })
+            .filter(|text| !text.trim().is_empty())
+            .collect();
+        for echo in model.live().echoes {
+            if !echo.text.trim().is_empty() && entries.last() != Some(&echo.text) {
+                entries.push(echo.text);
+            }
+        }
+        if entries.len() > 100 {
+            entries = entries.split_off(entries.len() - 100);
+        }
+        entries
+    }
+
+    /// Submitted prompts for the active composer, oldest first. Root prompts
+    /// come from the project history file; child prompts come from the child's
+    /// own bounded projection. Injected notices, bash records, and monitor
+    /// lines never count.
+    fn input_history(&self) -> Vec<String> {
+        if self.subagent_active() {
+            self.child_input_history()
+        } else {
+            self.root_input_history()
+        }
+    }
+
+    /// Replace the draft with one recalled prompt. History entries carry no
+    /// attachments, so anchors are shifted against the new text.
+    fn recall_history_text(&mut self, text: String, cursor_start: bool) {
+        let old = self.drafts.current().text().to_string();
+        self.drafts.current_mut().set_text(text.clone());
+        if cursor_start {
+            self.drafts.current_mut().set_cursor(0);
+        }
+        self.shift_attachment_anchors(&old, &text);
+        self.refresh_completion();
+    }
+
+    /// Up-arrow history. Stops at the oldest entry; a mid-draft cursor keeps
+    /// its ordinary line movement.
+    fn history_up(&mut self) -> Option<bool> {
+        if self.subagents.nav().dock_focus {
+            return None;
+        }
+        if self.subagent_active()
+            && !self
+                .subagents
+                .mounted_gate()
+                .unwrap_or(ComposerGate::Resolving)
+                .can_send()
+        {
+            return None;
+        }
+        let address = self.drafts.current_address().clone();
+        if self
+            .history_browse
+            .as_ref()
+            .is_some_and(|browse| browse.address != address)
+        {
+            self.history_browse = None;
+        }
+        let (line, _) = self.drafts.current().cursor_position();
+        if line != 0 {
+            return None;
+        }
+        if let Some(browse) = self.history_browse.as_ref() {
+            if browse.index + 1 < browse.entries.len() {
+                let index = browse.index + 1;
+                let text = browse.entries[browse.entries.len() - 1 - index].clone();
+                if let Some(browse) = self.history_browse.as_mut() {
+                    browse.index = index;
+                }
+                self.recall_history_text(text, true);
+            }
+            return Some(true);
+        }
+        let entries = self.input_history();
+        let Some(text) = entries.last().cloned() else {
+            return None;
+        };
+        let saved_text = self.drafts.current().text().to_string();
+        let saved_cursor = self.drafts.current().cursor();
+        self.history_browse = Some(HistoryBrowse {
+            address,
+            entries,
+            index: 0,
+            saved_text,
+            saved_cursor,
+        });
+        self.recall_history_text(text, true);
+        Some(true)
+    }
+
+    /// Down-arrow history. Returns false at the newest entry so the ordinary
+    /// cursor movement (and the dock's blank-input focus) keeps its meaning.
+    fn history_down(&mut self) -> Option<bool> {
+        if self.subagents.nav().dock_focus {
+            return None;
+        }
+        if self.subagent_active()
+            && !self
+                .subagents
+                .mounted_gate()
+                .unwrap_or(ComposerGate::Resolving)
+                .can_send()
+        {
+            return None;
+        }
+        let address = self.drafts.current_address().clone();
+        let Some(browse) = self.history_browse.as_ref() else {
+            return None;
+        };
+        if browse.address != address {
+            self.history_browse = None;
+            return None;
+        }
+        let (line, _) = self.drafts.current().cursor_position();
+        let last_line = self.drafts.current().text().matches('\n').count();
+        if line != last_line {
+            return None;
+        }
+        if browse.index > 0 {
+            let index = browse.index - 1;
+            let text = browse.entries[browse.entries.len() - 1 - index].clone();
+            if let Some(browse) = self.history_browse.as_mut() {
+                browse.index = index;
+            }
+            self.recall_history_text(text, false);
+            return Some(true);
+        }
+        let (saved_text, saved_cursor) = (browse.saved_text.clone(), browse.saved_cursor);
+        self.history_browse = None;
+        let old = self.drafts.current().text().to_string();
+        self.drafts.current_mut().set_text(saved_text.clone());
+        self.drafts.current_mut().set_cursor(saved_cursor);
+        self.shift_attachment_anchors(&old, &saved_text);
+        self.refresh_completion();
+        Some(true)
+    }
+
+    /// Route one unmodified Up/Down to history before the dock or the input
+    /// buffer sees it.
+    fn handle_history_key(&mut self, key: KeyEvent) -> Option<bool> {
+        if !key.modifiers.is_empty() {
+            return None;
+        }
+        match key.code {
+            KeyCode::Up => self.history_up(),
+            KeyCode::Down => self.history_down(),
+            _ => None,
         }
     }
 
@@ -10267,5 +10618,186 @@ mod terminal_tests {
         app.handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL));
         assert!(app.view.scroll().sticky());
         assert_eq!(app.view.scroll().back(), 0);
+    }
+
+    fn temp_history_path(prefix: &str) -> PathBuf {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "nano-history-{prefix}-{}-{stamp}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp history dir");
+        dir.join("history.jsonl")
+    }
+
+    fn append_history(path: &std::path::Path, project: &str, session: &str, display: &str) {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let line = json!({
+            "display": display,
+            "timestamp": 0,
+            "project": project,
+            "sessionId": session,
+        })
+        .to_string();
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(path)
+            .expect("history file");
+        writeln!(file, "{line}").expect("history line");
+    }
+
+    fn remove_history(path: &std::path::Path) {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::remove_dir_all(parent);
+        }
+    }
+
+    #[test]
+    fn root_history_reads_the_project_file_current_session_first() {
+        let path = temp_history_path("order");
+        let project = "/tmp/nano-history-project-a";
+        let other_project = "/tmp/nano-history-project-b";
+        append_history(&path, project, "other-session", "old-other");
+        append_history(&path, project, "root", "current-new");
+        append_history(&path, other_project, "root", "wrong-project");
+        {
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .expect("history file");
+            file.write_all(b"{bad\n").expect("bad line");
+        }
+        append_history(&path, project, "root", "current-newest");
+
+        let mut app = app();
+        app.history_path = Some(path.clone());
+        app.cli.cwd = Some(PathBuf::from(project));
+        assert_eq!(
+            app.root_input_history(),
+            vec!["old-other", "current-new", "current-newest"]
+        );
+        remove_history(&path);
+    }
+
+    #[test]
+    fn root_history_is_capped_at_the_newest_hundred_project_entries() {
+        let path = temp_history_path("cap");
+        let project = "/tmp/nano-history-cap";
+        for index in 0..150 {
+            append_history(&path, project, "root", &format!("p{index:03}"));
+        }
+        let mut app = app();
+        app.history_path = Some(path.clone());
+        app.cli.cwd = Some(PathBuf::from(project));
+        let entries = app.root_input_history();
+        assert_eq!(entries.len(), 100);
+        assert_eq!(entries.first().map(String::as_str), Some("p050"));
+        assert_eq!(entries.last().map(String::as_str), Some("p149"));
+        remove_history(&path);
+    }
+
+    #[test]
+    fn a_submitted_prompt_is_appended_with_private_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = temp_history_path("write");
+        let project = "/tmp/nano-history-write";
+        let mut app = app();
+        app.history_path = Some(path.clone());
+        app.cli.cwd = Some(PathBuf::from(project));
+        app.record_history_entry("remember me");
+        let text = std::fs::read_to_string(&path).expect("history file");
+        let value: Value = serde_json::from_str(text.trim()).expect("valid line");
+        assert_eq!(value["display"], "remember me");
+        assert_eq!(value["project"], project);
+        assert_eq!(value["sessionId"], "root");
+        let mode = std::fs::metadata(&path)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
+        remove_history(&path);
+    }
+
+    #[test]
+    fn up_recalls_file_history_and_down_restores_the_draft() {
+        let path = temp_history_path("keys");
+        let project = "/tmp/nano-history-keys";
+        append_history(&path, project, "root", "first");
+        append_history(&path, project, "root", "second");
+        let mut app = app();
+        app.history_path = Some(path.clone());
+        app.cli.cwd = Some(PathBuf::from(project));
+        app.drafts.current_mut().set_text("draft");
+        app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(app.drafts.current().text(), "second");
+        assert_eq!(app.drafts.current().cursor(), 0);
+        app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(app.drafts.current().text(), "first");
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.drafts.current().text(), "second");
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.drafts.current().text(), "draft");
+        assert_eq!(app.drafts.current().cursor(), 5);
+        // Editing a recalled entry ends the browse but keeps the text.
+        app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert_eq!(app.drafts.current().text(), "xsecond");
+        assert!(app.history_browse.is_none());
+        remove_history(&path);
+    }
+
+    #[test]
+    fn blank_up_without_history_focuses_the_dock() {
+        let mut app = app();
+        install_subagents(&mut app, json!([subagent_row("child", "continuable")]));
+        app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert!(app.subagents.nav().dock_focus);
+    }
+
+    #[test]
+    fn child_history_uses_only_user_messages_from_the_child_projection() {
+        let mut app = app();
+        install_subagents(&mut app, json!([subagent_row("child", "continuable")]));
+        assert!(app.enter_subagent(0));
+        app.apply_subagent_description(&describe_child("child", "continuable"));
+        for (seq, text, source) in [
+            (1, "child prompt", "user"),
+            (2, "injected notice", "system"),
+        ] {
+            app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::Event(
+                nano_runtime::protocol::EventParams {
+                    runtime_id: "rt".into(),
+                    generation: 1,
+                    subscription_id: "sub-child".into(),
+                    sequence: seq,
+                    kind: "session.event".into(),
+                    payload: json!({
+                        "address": {
+                            "rootSessionId": "root",
+                            "parentSessionId": "root",
+                            "childSessionId": "child",
+                            "mode": "continuable"
+                        },
+                        "seq": seq,
+                        "type": "user/message",
+                        "data": {
+                            "id": format!("message-{seq}"),
+                            "role": "user",
+                            "content": [{"type": "text", "text": text}],
+                            "source": {"kind": source, "rpcId": format!("r-{seq}")}
+                        }
+                    }),
+                },
+            )));
+        }
+        assert_eq!(app.input_history(), vec!["child prompt"]);
     }
 }

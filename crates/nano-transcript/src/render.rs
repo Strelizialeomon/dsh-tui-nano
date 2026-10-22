@@ -1024,25 +1024,29 @@ fn render_preview(output: &mut RenderedEntry, preview: &PreviewEntry, width: usi
         ]));
         output.hits.push(None);
     }
-    let mut suffix = String::new();
-    if preview.gap {
-        suffix.push_str("（预览不完整）");
-    }
-    if preview.truncated {
-        suffix.push_str("（预览已截断）");
-    }
     for row in wrap_block(&preview.text, width, MAX_BLOCK_ROWS) {
         output
             .lines
             .push(Line::from(Span::styled(row, Style::default())));
         output.hits.push(None);
     }
-    if !suffix.is_empty() {
-        output.lines.push(Line::from(Span::styled(
-            suffix,
-            Style::default().fg(Color::Yellow),
-        )));
-        output.hits.push(None);
+    // One plain-language line per condition, wrapped like the body, so a
+    // 60-column terminal never clips the explanation.
+    for message in [
+        preview
+            .gap
+            .then_some("（实时预览有缺失，完整内容以最终消息为准）"),
+        preview
+            .truncated
+            .then_some("（实时预览过长已截断，完整内容以最终消息为准）"),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        for row in wrap_block(message, width, MAX_BLOCK_ROWS) {
+            output.lines.push(Line::from(Span::styled(row, muted())));
+            output.hits.push(None);
+        }
     }
     for tool in &preview.tools {
         let name = official_name(tool.name.as_deref().unwrap_or("tool"));
@@ -2088,5 +2092,59 @@ mod tests {
             &hit.kind,
             HitKind::OpenQuestion { call_id } if call_id == "c"
         )));
+    }
+
+    fn preview_entry(gap: bool, truncated: bool) -> Entry {
+        Entry {
+            identity: "preview-a".into(),
+            fingerprint: 1,
+            kind: EntryKind::Preview(PreviewEntry {
+                attempt_id: "a".into(),
+                turn: 1,
+                step: 1,
+                text: "hello".into(),
+                reasoning: String::new(),
+                reasoning_ms: None,
+                tools: Vec::new(),
+                gap,
+                truncated,
+            }),
+        }
+    }
+
+    fn plain(rendered: &RenderedEntry) -> Vec<String> {
+        rendered
+            .lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn preview_gap_and_truncation_use_plain_lines_and_wrap_at_sixty_columns() {
+        let rendered = render_one(preview_entry(true, true), false, 60);
+        let rows = plain(&rendered);
+        assert!(rows.iter().any(|row| row.contains("实时预览有缺失")));
+        assert!(rows.iter().any(|row| row.contains("实时预览过长已截断")));
+        assert!(rows.iter().all(|row| row.chars().count() <= 60));
+        let muted = rendered
+            .lines
+            .iter()
+            .filter(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.content.contains("实时预览"))
+            })
+            .all(|line| {
+                line.spans
+                    .iter()
+                    .all(|span| span.style.fg == Some(Color::DarkGray))
+            });
+        assert!(muted, "preview notes are muted");
     }
 }

@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 use crate::model::{Activity, AgentRow};
 
 /// Dock entries linger after an official terminal event for about this long.
-pub const CLEANUP_DELAY: Duration = Duration::from_millis(1500);
+/// This mirrors Claude Code's `PANEL_GRACE_MS = 30_000`.
+pub const CLEANUP_DELAY: Duration = Duration::from_millis(30_000);
 
 /// Running lamps blink with this full period.
 pub const BLINK_PERIOD: Duration = Duration::from_millis(800);
@@ -140,16 +141,16 @@ impl Lifecycle {
                 was_hidden || was_pending || was_terminal
             }
             LifecycleEvent::End { child_id, reason } => {
-                self.apply_end(child_id, *reason, true);
+                self.apply_end(child_id, *reason);
                 true
             }
             LifecycleEvent::Changed => true,
         }
     }
 
-    /// Record one terminal edge. `hide` decides whether the dock entry ages
-    /// out; continuable children keep their entry after an ordinary turn.
-    pub fn apply_end(&mut self, child_id: &str, reason: StopReason, hide: bool) {
+    /// Record one terminal edge. The dock entry ages out after
+    /// [`CLEANUP_DELAY`]; the catalog record is never deleted here.
+    pub fn apply_end(&mut self, child_id: &str, reason: StopReason) {
         self.terminal.insert(
             child_id.to_string(),
             TerminalFact {
@@ -157,13 +158,8 @@ impl Lifecycle {
                 at: Instant::now(),
             },
         );
-        if hide {
-            self.pending_cleanup
-                .insert(child_id.to_string(), Instant::now() + CLEANUP_DELAY);
-        } else {
-            self.pending_cleanup.remove(child_id);
-            self.hidden.remove(child_id);
-        }
+        self.pending_cleanup
+            .insert(child_id.to_string(), Instant::now() + CLEANUP_DELAY);
     }
 
     /// Terminal fact for one child, if this window observed it.

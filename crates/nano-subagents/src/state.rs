@@ -174,14 +174,11 @@ impl SubagentState {
         let event = wire::parse_event(value).map_err(|error| self.remember(error))?;
         let changed = match &event {
             LifecycleEvent::End { child_id, reason } => {
-                // A continuable child's activation ends after each ordinary
-                // turn. Its durable entry stays in the dock; only one-shot and
-                // external records are one-shot dock entries.
-                let keeps_entry = self
-                    .catalog
-                    .row(child_id)
-                    .is_some_and(|row| row.mode == AgentMode::Continuable);
-                self.lifecycle.apply_end(child_id, *reason, !keeps_entry);
+                // Every official `subagent/end` removes the dock entry after
+                // the short linger, including a continuable child that has
+                // just finished an ordinary turn. The durable record stays in
+                // the all-agents list, and a later start clears the hidden set.
+                self.lifecycle.apply_end(child_id, *reason);
                 true
             }
             _ => self.lifecycle.apply(&event),

@@ -224,7 +224,7 @@ fn cleanup_hides_only_the_dock_entry_after_the_delay() {
 }
 
 #[test]
-fn continuable_end_keeps_the_dock_entry_but_one_shot_end_hides_it() {
+fn every_official_end_hides_the_dock_entry_after_the_delay() {
     let mut state = SubagentState::new("root");
     state
         .apply_snapshot(&json!({
@@ -242,12 +242,18 @@ fn continuable_end_keeps_the_dock_entry_but_one_shot_end_hides_it() {
     state
         .apply_event(&json!({"type": "end", "childId": "done", "stopReason": "completed"}))
         .unwrap();
+    assert!(!state.cleanup(Instant::now() + CLEANUP_DELAY - Duration::from_millis(1)));
+    assert_eq!(state.dock().0.len(), 2);
     assert!(state.cleanup(Instant::now() + CLEANUP_DELAY + Duration::from_millis(1)));
-    let (dock, _) = state.dock();
-    let ids: Vec<&str> = dock.iter().map(|row| row.id.as_str()).collect();
-    assert_eq!(ids, ["live"]);
-    // The one-shot record remains in the catalog/all-agents list.
+    assert!(state.dock().0.is_empty());
+    // Both records remain in the catalog/all-agents list.
+    assert!(state.list_rows().iter().any(|row| row.id == "live"));
     assert!(state.list_rows().iter().any(|row| row.id == "done"));
+    // A later activation clears the hidden marker and brings the row back.
+    state
+        .apply_event(&json!({"type": "start", "childId": "live"}))
+        .unwrap();
+    assert!(state.dock().0.iter().any(|row| row.id == "live"));
 }
 
 #[test]
