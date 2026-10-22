@@ -1,0 +1,66 @@
+CHECK ok   main 100 dark captured — (1796, 1424)
+CHECK ok   dock running captured — (1796, 1424)
+CHECK ok   dock completed captured — (1796, 1424)
+CHECK ok   dock cleaned captured — (1796, 1424)
+CHECK ok   100 dark window closed
+CHECK ok   main 60 dark captured — (1116, 1238)
+CHECK ok   dock running 60 captured — (1116, 1238)
+CHECK ok   60 dark window closed
+CHECK ok   dock focus light captured — (1796, 1424)
+CHECK ok   light window closed
+{
+  "ok": true,
+  "checks": [
+    {
+      "check": "main 100 dark captured",
+      "ok": true,
+      "detail": "(1796, 1424)"
+    },
+    {
+      "check": "dock running captured",
+      "ok": true,
+      "detail": "(1796, 1424)"
+    },
+    {
+      "check": "dock completed captured",
+      "ok": true,
+      "detail": "(1796, 1424)"
+    },
+    {
+      "check": "dock cleaned captured",
+      "ok": true,
+      "detail": "(1796, 1424)"
+    },
+    {
+      "check": "100 dark window closed",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "main 60 dark captured",
+      "ok": true,
+      "detail": "(1116, 1238)"
+    },
+    {
+      "check": "dock running 60 captured",
+      "ok": true,
+      "detail": "(1116, 1238)"
+    },
+    {
+      "check": "60 dark window closed",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "dock focus light captured",
+      "ok": true,
+      "detail": "(1796, 1424)"
+    },
+    {
+      "check": "light window closed",
+      "ok": true,
+      "detail": ""
+    }
+  ],
+  "mockRequests": 4
+}

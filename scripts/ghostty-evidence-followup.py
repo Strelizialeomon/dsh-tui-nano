@@ -80,7 +80,7 @@ def tool_events():
 
 class MockModel(BaseHTTPRequestHandler):
     count = 0
-    child_delay = 12.0
+    followup_delay = 8.0
 
     def do_POST(self):
         MockModel.count += 1
@@ -88,10 +88,10 @@ class MockModel(BaseHTTPRequestHandler):
         self.rfile.read(int(self.headers.get("content-length", "0")))
         if request == 1:
             body = sse(tool_events())
-        elif request == 2:
-            time.sleep(MockModel.child_delay)
-            body = sse(text_events("S12CHILD"))
         else:
+            # Delay every follow-up (child and parent) so the dock is still
+            # running when the first capture is taken.
+            time.sleep(MockModel.followup_delay)
             body = sse(text_events("done"))
         self.send_response(200)
         self.send_header("content-type", "text/event-stream")
@@ -134,6 +134,11 @@ def applescript(script, *args):
 
 def osa_key(code):
     return applescript(f'tell application "System Events" to key code {code}')
+
+
+def send_key(title, code):
+    focus(title)
+    return osa_key(code)
 
 
 def osa_keystroke(char, modifiers=""):
@@ -325,14 +330,14 @@ if let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: An
     size = capture(title, out / "01-main-100-dark.png")
     check("main 100 dark captured", size[0] > 0, str(size))
     paste(title, PROMPT)
-    osa_key(KEY_CODES["return"])
+    send_key(title, KEY_CODES["return"])
     time.sleep(5)
     size = capture(title, out / "02-dock-running-100-dark.png")
     check("dock running captured", size[0] > 0, str(size))
-    time.sleep(10)
+    time.sleep(15)
     size = capture(title, out / "03-dock-completed-100-dark.png")
     check("dock completed captured", size[0] > 0, str(size))
-    time.sleep(36)
+    time.sleep(35)
     size = capture(title, out / "04-dock-cleaned-100-dark.png")
     check("dock cleaned captured", size[0] > 0, str(size))
     check("100 dark window closed", close(title))
@@ -344,7 +349,7 @@ if let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: An
     size = capture(title, out / "05-main-60-dark.png")
     check("main 60 dark captured", size[0] > 0, str(size))
     paste(title, PROMPT)
-    osa_key(KEY_CODES["return"])
+    send_key(title, KEY_CODES["return"])
     time.sleep(5)
     size = capture(title, out / "06-dock-60-dark.png")
     check("dock running 60 captured", size[0] > 0, str(size))
@@ -355,9 +360,9 @@ if let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: An
     MockModel.count = 0
     launch(title, run_script("light", "light"), COLS, ROWS, LIGHT)
     paste(title, PROMPT)
-    osa_key(KEY_CODES["return"])
+    send_key(title, KEY_CODES["return"])
     time.sleep(5)
-    osa_key(KEY_CODES["down"])
+    send_key(title, KEY_CODES["down"])
     time.sleep(0.5)
     size = capture(title, out / "07-dock-focus-100-light.png")
     check("dock focus light captured", size[0] > 0, str(size))
