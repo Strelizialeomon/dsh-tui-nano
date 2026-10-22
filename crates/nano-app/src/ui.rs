@@ -22,16 +22,19 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-use crate::app::{App, Connection};
+use crate::app::{ActivityKind, App};
 use unicode_width::UnicodeWidthChar;
 
 /// Draw one frame.
 pub fn draw(frame: &mut Frame, app: &mut App) {
-    let area = frame.area();
+    let full = frame.area();
     if app.terminal_active() {
-        draw_terminal(frame, app, area);
+        draw_terminal(frame, app, full);
         return;
     }
+    // The conversation surfaces keep 2 terminal cells of breathing room on
+    // both sides; the interactive terminal keeps its full grid.
+    let area = inset_horizontal(full, 2);
     if app.schedule.open {
         draw_schedule(frame, app, area);
         return;
@@ -61,32 +64,24 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         (dock_rows.len() + usize::from(dock_overflow > 0)) as u16 + 1
     };
-    let attachment_rows = if decision || app.picker.is_some() {
-        0
-    } else {
-        attachment_lines(app).len() as u16
-    };
-    let input_rows = if app.picker.is_some() || decision {
-        1
-    } else {
-        wrapped_input_rows(app, area.width.saturating_sub(4).max(1))
-    };
-    let input_height = (attachment_rows + input_rows.min(8) as u16) + 2;
+    let header_height = if child_active { 2 } else { 1 };
+    let activity_height = u16::from(app.activity_kind().is_some());
     let bottom_height = if decision {
         decision_height(app, area.width, area.height)
     } else {
-        input_height
+        input_height(app, area.width)
     };
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),
+            Constraint::Length(header_height),
             Constraint::Min(3),
             Constraint::Length(queue_height),
             Constraint::Length(completion_height),
-            Constraint::Length(dock_height),
+            Constraint::Length(activity_height),
             Constraint::Length(bottom_height),
             Constraint::Length(1),
+            Constraint::Length(dock_height),
         ])
         .split(area);
 
@@ -112,9 +107,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if completion_height > 0 {
         draw_completion(frame, app, layout[3]);
     }
-    if dock_height > 0 {
-        draw_subagent_dock(frame, app, layout[4]);
-    }
+    draw_activity(frame, app, layout[4]);
     if decision {
         draw_decision(frame, app, layout[5]);
     } else {
@@ -123,8 +116,21 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_input(frame, app, layout[5]);
     }
     draw_status(frame, app, layout[6], area.width);
+    if dock_height > 0 {
+        draw_subagent_dock(frame, app, layout[7]);
+    }
     if app.panel.is_open() {
-        draw_panel(frame, app, area);
+        draw_panel(frame, app, full);
+    }
+}
+
+fn inset_horizontal(area: Rect, margin: u16) -> Rect {
+    let margin = margin.min(area.width / 2);
+    Rect {
+        x: area.x.saturating_add(margin),
+        y: area.y,
+        width: area.width.saturating_sub(margin.saturating_mul(2)),
+        height: area.height,
     }
 }
 
@@ -169,142 +175,61 @@ fn draw_terminal(frame: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     app.subagent_exit_area = Rect::default();
-    if let Some(mounted) = app.subagents.mounted() {
-        let gate = app
-            .subagents
-            .mounted_gate()
-            .unwrap_or(ComposerGate::Resolving);
-        let state = match gate {
-            ComposerGate::Enabled => "可输入",
-            ComposerGate::ReadOnly => "只读",
-            ComposerGate::StopOnly => "仅停止",
-            ComposerGate::Resolving => "读取历史中",
-            ComposerGate::NotNavigable => "不可进入",
-        };
-        let color = match gate {
-            ComposerGate::Enabled => Color::Green,
-            ComposerGate::StopOnly => Color::Yellow,
-            ComposerGate::ReadOnly | ComposerGate::NotNavigable => Color::DarkGray,
-            ComposerGate::Resolving => Color::Cyan,
-        };
-        let exit = "[← 返回]";
-        let exit_width = exit.chars().map(display_width).sum::<usize>();
-        // Reserve the exit button before truncating the task label so the
-        // header keeps a working exit at narrow widths.
-        let fixed = 6 + 6 + 3 + 3 + state.chars().map(display_width).sum::<usize>();
-        let label_room = (area.width as usize)
-            .saturating_sub(fixed + exit_width + 1)
-            .max(1);
-        let label = truncate(&safe_text(&mounted.label), label_room);
-        let mut spans = vec![
-            Span::styled(" nano ", Style::default().fg(Color::Black).bg(Color::Cyan)),
-            Span::styled("子代理", Style::default().fg(Color::Cyan)),
-            Span::raw(" · "),
-            Span::styled(label, Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(" · "),
-            Span::styled(state, Style::default().fg(color)),
-        ];
-        let used: usize = spans.iter().map(|span| span.width()).sum();
-        let room = (area.width as usize).saturating_sub(used + exit_width);
-        if room > 0 {
-            spans.push(Span::raw(" ".repeat(room)));
-        }
-        spans.push(Span::styled(exit, Style::default().fg(Color::DarkGray)));
-        app.subagent_exit_area = Rect::new(
-            area.x + area.width.saturating_sub(exit_width as u16),
-            area.y,
-            exit_width as u16,
-            1,
-        );
-        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    let title = Rect {
+        height: area.height.min(1),
+        ..area
+    };
+    draw_app_title(frame, app, title);
+    let Some(mounted) = app.subagents.mounted() else {
+        return;
+    };
+    if area.height < 2 {
         return;
     }
-    let status_color = match app.connection {
-        Connection::Ready => match app.model.status() {
-            nano_conversation::ConversationStatus::Running => Color::Yellow,
-            nano_conversation::ConversationStatus::Idle => Color::Green,
-        },
-        Connection::Starting => Color::Cyan,
-        Connection::Disconnected | Connection::Failed(_) => Color::Red,
+    let gate = app
+        .subagents
+        .mounted_gate()
+        .unwrap_or(ComposerGate::Resolving);
+    let (state, color) = match gate {
+        ComposerGate::Enabled => ("可输入", Color::Green),
+        ComposerGate::ReadOnly => ("只读", Color::DarkGray),
+        ComposerGate::StopOnly => ("仅停止", Color::Yellow),
+        ComposerGate::Resolving => ("读取历史中", Color::Cyan),
+        ComposerGate::NotNavigable => ("不可进入", Color::DarkGray),
     };
-    let connection_label = if app.switch.busy() {
-        "切换中"
-    } else {
-        app.connection.label()
+    // The second row keeps the main title above and adds the child identity:
+    // `← 子代理 <task> <state>`.
+    let state_width = state.chars().map(display_width).sum::<usize>();
+    let label_room = (area.width as usize)
+        .saturating_sub(2 + 7 + 1 + state_width)
+        .max(1);
+    let label = truncate(&safe_text(&mounted.label), label_room);
+    let row = Rect {
+        y: area.y.saturating_add(1),
+        height: 1,
+        ..area
     };
-    let mut spans = vec![
-        Span::styled(" nano ", Style::default().fg(Color::Black).bg(Color::Cyan)),
-        Span::styled(connection_label, Style::default().fg(status_color)),
-        Span::raw(" · "),
-        Span::styled(
-            app.model.status().label(),
-            Style::default()
-                .fg(status_color)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(format!(
-            " · seq {} · 队列 {}",
-            app.model.seq(),
-            app.model.inbox().total_count()
-        )),
+    let spans = vec![
+        Span::styled("← ", Style::default().fg(Color::Cyan)),
+        Span::styled("子代理 ", Style::default().fg(Color::DarkGray)),
+        Span::styled(label, Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(format!(" {state}"), Style::default().fg(color)),
     ];
-    if let Some(meter) = &app.context {
-        let occupancy = meter.occupancy();
-        let colour = match occupancy.percent() {
-            Some(percent) if percent >= 80 => Color::Red,
-            Some(percent) if percent >= 60 => Color::Yellow,
-            Some(_) => Color::Green,
-            None => Color::DarkGray,
-        };
-        spans.push(Span::raw(" · "));
-        spans.push(Span::styled(
-            format!("ctx {}", occupancy.label()),
-            Style::default().fg(colour),
-        ));
-        spans.push(Span::styled(
-            " · 参考",
+    frame.render_widget(Paragraph::new(Line::from(spans)), row);
+    app.subagent_exit_area = Rect::new(area.x, row.y, 2.min(area.width), 1);
+}
+
+fn draw_app_title(frame: &mut Frame, app: &App, area: Rect) {
+    let path = safe_text(&app.display_path());
+    let room = (area.width as usize).saturating_sub(6).max(1);
+    let spans = vec![
+        Span::styled("nano", Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw("  "),
+        Span::styled(
+            elide_left(&path, room),
             Style::default().fg(Color::DarkGray),
-        ));
-    } else if let Some(error) = &app.context_error {
-        spans.push(Span::styled(
-            format!(" · ctx 未知（{error}）"),
-            Style::default().fg(Color::Yellow),
-        ));
-    }
-    if !app.jobs.is_empty() {
-        spans.push(Span::raw(format!(
-            " · 任务 {}/{}",
-            app.jobs.active_count(),
-            app.jobs.len()
-        )));
-    }
-    if !app.monitor.is_empty() {
-        let colour = if app.monitor.exhausted_count() > 0 {
-            Color::Yellow
-        } else {
-            Color::DarkGray
-        };
-        spans.push(Span::styled(
-            format!(
-                " · 监听 {}/{}",
-                app.monitor.listening_count(),
-                app.monitor.len()
-            ),
-            Style::default().fg(colour),
-        ));
-    }
-    if app.jobs_open {
-        spans.push(Span::styled(
-            " · 任务面板",
-            Style::default().fg(Color::Black).bg(Color::Yellow),
-        ));
-    }
-    if app.replay_truncated {
-        spans.push(Span::styled(
-            " · 更早记录未回放",
-            Style::default().fg(Color::Yellow),
-        ));
-    }
+        ),
+    ];
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -586,35 +511,43 @@ fn draw_subagent_dock(frame: &mut Frame, app: &mut App, area: Rect) {
     let (rows, overflow) = app.subagents.dock();
     app.subagent_dock_area = area;
     app.subagent_dock_hits.clear();
-    let pill = format!("{} local agents", app.subagents.local_count());
-    let title =
-        format!(" {pill} · ↑↓ 选择 · Enter/→ 进入 · f transcript · k 停止 · l 全部 · Esc 返回 ");
+    let title = format!(" {} local agents ", app.subagents.local_count());
     let block = Block::default().borders(Borders::TOP).title(title);
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let now = Instant::now();
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0);
-    let blink_on = app.reduced_motion || app.subagents.lifecycle().blink_on(now);
+    let blink_on = app.reduced_motion || app.subagents.lifecycle().blink_on(Instant::now());
+    let width = inner.width.max(1) as usize;
     let mut lines: Vec<Line<'static>> = Vec::new();
     for (index, row) in rows.iter().enumerate() {
         let selected = app.subagents.nav().dock_focus && app.subagents.nav().dock_selected == index;
         let marker = if selected { "▶" } else { " " };
         let (dot, color) = lamp_glyph(app.subagents.lamp(row), blink_on);
-        let mut text = format!(
-            "{marker} {dot} {} · {} · {}",
-            safe_text(row.display_label()),
-            row.mode.label(),
-            row.activity.label()
-        );
-        if row.mode == nano_subagents::AgentMode::External {
-            text.push_str(" · 不可进入");
-        }
+        let mut meta = row.activity.label().to_string();
         if let Some(duration) = row.duration_ms(now_ms) {
-            text.push_str(&format!(" · {}", format_duration_ms(duration)));
+            meta.push_str(" · ");
+            meta.push_str(&format_duration_ms(duration));
         }
+        let mode_suffix = match row.mode {
+            nano_subagents::AgentMode::OneShot => Some(" · 一次性"),
+            nano_subagents::AgentMode::External => Some(" · 不可进入"),
+            _ => None,
+        };
+        let name = safe_text(row.display_label());
+        let meta_width = meta.chars().map(display_width).sum::<usize>();
+        let suffix_width = mode_suffix
+            .map(|suffix| suffix.chars().map(display_width).sum::<usize>())
+            .unwrap_or(0);
+        // marker(1) + space(1) + dot(1) + space(1) + gap(1) + meta.
+        let name_room = width
+            .saturating_sub(4 + 1 + meta_width + suffix_width)
+            .max(1);
+        let name = truncate(&name, name_room);
+        let left_width = 4 + name.chars().map(display_width).sum::<usize>() + suffix_width;
+        let pad = width.saturating_sub(left_width + meta_width).max(1);
         let style = if selected {
             Style::default().fg(Color::Black).bg(Color::Cyan)
         } else {
@@ -625,16 +558,22 @@ fn draw_subagent_dock(frame: &mut Frame, app: &mut App, area: Rect) {
         } else {
             Style::default().fg(color)
         };
-        let label_start = marker.len() + 1;
-        let mut spans = Vec::new();
+        let mut spans = vec![
+            Span::styled(format!("{marker} "), style),
+            Span::styled(dot.to_string(), dot_style),
+            Span::styled(format!(" {name}"), style),
+        ];
+        if let Some(suffix) = mode_suffix {
+            spans.push(Span::styled(suffix.to_string(), muted_style()));
+        }
+        spans.push(Span::styled(" ".repeat(pad), style));
         spans.push(Span::styled(
-            text[..label_start].to_string(),
-            if selected { style } else { Style::default() },
-        ));
-        spans.push(Span::styled(dot.to_string(), dot_style));
-        spans.push(Span::styled(
-            text[label_start + dot.len()..].to_string(),
-            style,
+            meta,
+            if selected {
+                style
+            } else {
+                Style::default().fg(Color::DarkGray)
+            },
         ));
         lines.push(Line::from(spans));
         app.subagent_dock_hits.push((index, inner.y + index as u16));
@@ -656,6 +595,10 @@ fn draw_subagent_dock(frame: &mut Frame, app: &mut App, area: Rect) {
             .push((rows.len(), inner.y + rows.len() as u16));
     }
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
+}
+
+fn muted_style() -> Style {
+    Style::default().fg(Color::DarkGray)
 }
 
 /// All-agents list: recursive descendants with parent relationships and
@@ -2325,6 +2268,83 @@ fn draw_queue(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
 
+fn input_notice(app: &App) -> Option<(String, Color)> {
+    if app.shell_confirm.is_some() {
+        Some((
+            "人工命令（用户权限，不是 Agent 授权）· Enter 执行 · Esc 取消".to_string(),
+            Color::Yellow,
+        ))
+    } else if app.picker.is_some() {
+        Some((
+            "附加文件 · 输入路径 · Enter 确认 · Esc 取消".to_string(),
+            Color::DarkGray,
+        ))
+    } else if let Some(message_id) = app.editing_queue() {
+        Some((
+            format!("编辑队列项 {message_id} · Enter 应用 · Esc 取消"),
+            Color::DarkGray,
+        ))
+    } else if app.subagent_active() {
+        let gate = app
+            .subagents
+            .mounted_gate()
+            .unwrap_or(ComposerGate::Resolving);
+        if gate.can_send() {
+            None
+        } else {
+            Some((format!("子代理 · {}", gate.hint()), Color::Yellow))
+        }
+    } else {
+        None
+    }
+}
+
+fn input_text_width(width: u16) -> usize {
+    width.saturating_sub(3).max(1) as usize
+}
+
+fn input_height(app: &App, width: u16) -> u16 {
+    let notice = u16::from(input_notice(app).is_some());
+    if app.picker.is_some() {
+        return 2 + notice + 1;
+    }
+    let attachments = attachment_lines(app).len() as u16;
+    let text_rows = wrapped_input_rows(app, input_text_width(width) as u16).clamp(1, 8) as u16;
+    (2 + notice + attachments + text_rows).min(14)
+}
+
+/// The top and bottom composer lines. The left segment shows context
+/// occupancy; the rest stays the ordinary border.
+fn draw_input_border(frame: &mut Frame, row: Rect, occupancy: Occupancy) {
+    let width = row.width as usize;
+    let (segment, style) = match occupancy {
+        Occupancy::Known { projected, window } if window > 0 => {
+            let percent = projected.saturating_mul(100) / window;
+            let color = if percent >= 95 {
+                Color::Red
+            } else if percent >= 80 {
+                Color::Yellow
+            } else {
+                Color::Cyan
+            };
+            let cells = ((width as u64).saturating_mul(projected.min(window)) / window) as usize;
+            (cells.min(width), Style::default().fg(color))
+        }
+        _ => (0, Style::default().fg(Color::DarkGray)),
+    };
+    let mut spans = Vec::new();
+    if segment > 0 {
+        spans.push(Span::styled("─".repeat(segment), style));
+    }
+    if segment < width {
+        spans.push(Span::styled(
+            "─".repeat(width - segment),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), row);
+}
+
 fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
     let gate = if app.subagent_active() {
         app.subagents
@@ -2334,82 +2354,122 @@ fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
         ComposerGate::Enabled
     };
     let sendable = gate.can_send();
-    let title = if app.shell_confirm.is_some() {
-        " 人工命令（用户权限，不是 Agent 授权）· Enter 执行，Esc 取消 ".to_string()
-    } else if app.picker.is_some() {
-        " 附加文件 · 输入路径，Enter 确认，Esc 取消 ".to_string()
-    } else if let Some(message_id) = app.editing_queue() {
-        format!(" 编辑队列项 {message_id} · Enter 应用，Esc 取消 ")
-    } else if app.subagent_active() {
-        format!(" 子代理 · {}", gate.hint())
-    } else {
-        " 输入 · Enter 发送 · Alt+Enter 插话 · @ 引用 · Alt+A 附加 · Alt+←→ 排序 · Alt+Backspace 移除附件 · Ctrl+J 换行 · Ctrl+T 任务 "
-            .to_string()
-    };
-    let block = Block::default().borders(Borders::ALL).title(title);
-    let inner = block.inner(area);
+    let occupancy = app
+        .context
+        .as_ref()
+        .map(|meter| meter.occupancy())
+        .unwrap_or(Occupancy::Unknown);
+    app.send_area = Rect::default();
+    if area.height >= 2 {
+        draw_input_border(frame, Rect { height: 1, ..area }, occupancy);
+        draw_input_border(
+            frame,
+            Rect {
+                y: area.y.saturating_add(area.height - 1),
+                height: 1,
+                ..area
+            },
+            occupancy,
+        );
+    }
+    let inner = Rect::new(
+        area.x,
+        area.y.saturating_add(1),
+        area.width,
+        area.height.saturating_sub(2),
+    );
     let width = inner.width.max(1) as usize;
     let mut lines: Vec<Line<'static>> = Vec::new();
-    let mut cursor_row = 0usize;
-    let cursor_column;
+    let mut cursor: Option<(usize, usize)> = None;
+    if let Some((notice, color)) = input_notice(app) {
+        lines.push(Line::from(Span::styled(
+            truncate(&notice, width),
+            Style::default().fg(color),
+        )));
+    }
     if let Some(picker) = &app.picker {
         let prefix = "路径：";
+        let text = format!("{prefix}{}", picker.path);
         lines.push(Line::from(vec![
-            Span::styled(prefix, Style::default().fg(Color::DarkGray)),
+            Span::styled(prefix, muted_style()),
             Span::raw(picker.path.clone()),
         ]));
-        cursor_column = prefix.chars().map(display_width).sum::<usize>()
-            + picker.path.chars().map(display_width).sum::<usize>();
+        cursor = Some((lines.len() - 1, text.chars().map(display_width).sum()));
     } else {
         for (text, color) in attachment_lines(app) {
             lines.push(Line::from(Span::styled(text, Style::default().fg(color))));
         }
-        cursor_row = lines.len();
+        let draft = app.drafts.current().text();
         if sendable {
-            let (row, column) = input_cursor(app, width);
-            cursor_row += row;
-            cursor_column = column;
-            for text in input_lines(app, width) {
-                lines.push(Line::from(text));
-            }
-        } else {
-            cursor_column = 0;
-            let draft = app.drafts.current().text();
-            if gate == ComposerGate::Resolving {
-                lines.push(Line::from(Span::styled(
-                    "正在读取子代理历史以确认可续聊性…",
-                    Style::default().fg(Color::DarkGray),
-                )));
-            } else if draft.trim().is_empty() {
-                lines.push(Line::from(Span::styled(
-                    "只读记录 · 没有可用的输入框",
-                    Style::default().fg(Color::DarkGray),
-                )));
+            let text_width = input_text_width(area.width);
+            let start = lines.len();
+            if draft.is_empty() {
+                let placeholder = if app.subagent_active() {
+                    app.subagents
+                        .mounted()
+                        .map(|mounted| format!("给 {} 发送消息…", safe_text(&mounted.label)))
+                        .unwrap_or_else(|| "继续提问…".to_string())
+                } else {
+                    "继续提问…".to_string()
+                };
+                let placeholder = truncate(&placeholder, width.saturating_sub(3));
+                lines.push(Line::from(vec![
+                    Span::styled("> ", Style::default().fg(Color::Cyan)),
+                    Span::styled(placeholder, muted_style()),
+                ]));
+                cursor = Some((start, 2));
             } else {
-                for text in input_lines(app, width) {
-                    lines.push(Line::from(text));
+                let (row, column) = input_cursor(app, text_width);
+                for (index, text) in input_lines(app, text_width).into_iter().enumerate() {
+                    let prefix = if index == 0 { "> " } else { "  " };
+                    lines.push(Line::from(vec![
+                        Span::styled(prefix, Style::default().fg(Color::Cyan)),
+                        Span::raw(text),
+                    ]));
                 }
+                cursor = Some((start + row, 2 + column));
+            }
+            if let Some(line) = lines.get_mut(start) {
+                let used = line.spans.iter().map(|span| span.width()).sum::<usize>();
+                if used < width {
+                    line.spans.push(Span::raw(" ".repeat(width - used - 1)));
+                    line.spans
+                        .push(Span::styled("↑", Style::default().fg(Color::Cyan)));
+                    app.send_area = Rect::new(
+                        inner.x.saturating_add(width as u16 - 1),
+                        inner.y.saturating_add(start as u16),
+                        1,
+                        1,
+                    );
+                }
+            }
+        } else if draft.trim().is_empty() {
+            lines.push(Line::from(Span::styled(
+                "只读记录 · 没有可用的输入框",
+                muted_style(),
+            )));
+        } else {
+            for text in input_lines(app, width) {
+                lines.push(Line::from(Span::styled(text, muted_style())));
             }
         }
     }
     let viewport = inner.height as usize;
-    let offset = if viewport == 0 {
-        0
-    } else {
-        cursor_row.saturating_sub(viewport.saturating_sub(1))
+    let offset = match cursor {
+        Some((row, _)) if viewport > 0 => row.saturating_sub(viewport.saturating_sub(1)),
+        _ => 0,
     };
     let visible: Vec<Line<'static>> = lines.into_iter().skip(offset).take(viewport).collect();
-    frame.render_widget(block, area);
     frame.render_widget(Paragraph::new(Text::from(visible)), inner);
     if sendable && app.scene.focus().input_focused() && !app.panel.is_open() && viewport > 0 {
-        let row = cursor_row
-            .saturating_sub(offset)
-            .min(viewport.saturating_sub(1));
-        let column = cursor_column.min(inner.width.saturating_sub(1) as usize);
-        frame.set_cursor_position((
-            inner.x + column.min(u16::MAX as usize) as u16,
-            inner.y + row.min(u16::MAX as usize) as u16,
-        ));
+        if let Some((row, column)) = cursor {
+            let row = row.saturating_sub(offset).min(viewport.saturating_sub(1));
+            let column = column.min(width.saturating_sub(2));
+            frame.set_cursor_position((
+                inner.x + column.min(u16::MAX as usize) as u16,
+                inner.y + row.min(u16::MAX as usize) as u16,
+            ));
+        }
     }
 }
 
@@ -2487,15 +2547,87 @@ fn draw_completion(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
 
-fn draw_status(frame: &mut Frame, app: &App, area: Rect, width: u16) {
-    let hint = app.status_line();
-    let style = if app.error.is_some() {
-        Style::default().fg(Color::Red)
-    } else {
-        Style::default().fg(Color::DarkGray)
+fn draw_activity(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(kind) = app.activity_kind() else {
+        return;
     };
-    let text = truncate(&safe_text(&hint), width as usize);
-    frame.render_widget(Paragraph::new(Line::from(Span::styled(text, style))), area);
+    if area.height == 0 {
+        return;
+    }
+    let glyph = if app.reduced_motion || !app.activity_phase {
+        "●"
+    } else {
+        "○"
+    };
+    let color = match kind {
+        ActivityKind::Running => Color::Cyan,
+        ActivityKind::AwaitingApproval | ActivityKind::AwaitingQuestion => Color::Yellow,
+    };
+    let spans = vec![
+        Span::styled(format!("{glyph} "), Style::default().fg(color)),
+        Span::styled(kind.label(), muted_style()),
+    ];
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn draw_status(frame: &mut Frame, app: &App, area: Rect, width: u16) {
+    let width = width.max(1) as usize;
+    let mut left = safe_text(&app.status_permission());
+    let mut right = safe_text(&app.display_path());
+    if text_width(&left) > width {
+        left = truncate(&left, width);
+    }
+    let right_room = width.saturating_sub(text_width(&left) + 1).max(1);
+    if text_width(&right) > right_room {
+        right = elide_left(&right, right_room);
+    }
+    let left_width = text_width(&left);
+    let right_width = text_width(&right);
+    let middle_room = width.saturating_sub(left_width + right_width + 3);
+    let middle = if middle_room > 0 {
+        format!(
+            "  {}",
+            truncate(&safe_text(&app.status_transient()), middle_room)
+        )
+    } else {
+        String::new()
+    };
+    let middle_width = text_width(&middle);
+    let pad = width.saturating_sub(left_width + middle_width + right_width);
+    let transient_color = if app.error.is_some() {
+        Color::Red
+    } else {
+        Color::DarkGray
+    };
+    let spans = vec![
+        Span::styled(left, muted_style()),
+        Span::styled(middle, Style::default().fg(transient_color)),
+        Span::raw(" ".repeat(pad)),
+        Span::styled(right, muted_style()),
+    ];
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// Keep the tail of a path when it does not fit, marking the cut with `…`.
+fn elide_left(text: &str, width: usize) -> String {
+    if text_width(text) <= width {
+        return text.to_string();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let mut tail = Vec::new();
+    let mut used = 1usize;
+    for character in text.chars().rev() {
+        let character_width = display_width(character);
+        if used + character_width > width {
+            break;
+        }
+        used += character_width;
+        tail.push(character);
+    }
+    let tail: String = tail.into_iter().rev().collect();
+    format!("…{tail}")
 }
 
 /// Draw the command palette or one selection pane over the conversation.
@@ -2748,6 +2880,10 @@ fn input_cursor(app: &App, width: usize) -> (usize, usize) {
     (rows, 0)
 }
 
+fn text_width(text: &str) -> usize {
+    text.chars().map(display_width).sum()
+}
+
 fn display_width(character: char) -> usize {
     UnicodeWidthChar::width(character).unwrap_or(0)
 }
@@ -2897,6 +3033,7 @@ fn truncate(text: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn the_window_keeps_the_selected_block_visible() {
@@ -2965,5 +3102,306 @@ mod tests {
         assert_eq!(list_offset(20, 40, 10), 11);
         assert_eq!(list_offset(39, 40, 10), 30);
         assert_eq!(list_offset(0, 3, 10), 0);
+    }
+
+    fn screen(app: &mut App, width: u16, height: u16) -> Vec<String> {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw(frame, app))
+            .expect("draw the frame");
+        let buffer = terminal.backend().buffer();
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    fn app() -> App {
+        App::new(crate::cli::Cli::default(), "root".to_string(), false)
+    }
+
+    /// TestBackend repeats a wide character's cell as a symbol plus a blank
+    /// continuation cell; compacting whitespace makes CJK text easy to match.
+    fn compact(rows: &[String]) -> Vec<String> {
+        rows.iter()
+            .map(|row| {
+                row.chars()
+                    .filter(|character| !character.is_whitespace())
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_main_screen_keeps_two_cell_margins_and_a_two_line_composer() {
+        let mut app = app();
+        let rows = screen(&mut app, 100, 30);
+        assert!(rows[0].starts_with("  nano"), "{:?}", rows[0]);
+        let quiet: Vec<&String> = rows.iter().filter(|row| row.contains('─')).collect();
+        assert_eq!(quiet.len(), 2, "composer has a top and bottom line");
+        let compact = compact(&rows);
+        assert!(compact.iter().any(|row| row.contains(">继续提问…")));
+        let status = compact.last().expect("status row");
+        assert!(status.contains("权限："));
+        assert!(status.ends_with(&app.display_path()), "{status:?}");
+        assert!(!status.contains("·权限"));
+    }
+
+    #[test]
+    fn the_status_bar_right_aligns_the_path_and_truncates_the_middle_first() {
+        let mut app = app();
+        app.notice = Some("这是一个需要先截断的中段提示".to_string());
+        let rows = screen(&mut app, 60, 20);
+        let status = compact(&rows).last().expect("status row").clone();
+        assert!(status.contains("权限："));
+        // Both ends survive; the right path keeps its tail and the middle
+        // notice is the first thing to go.
+        assert!(status.ends_with("nano-app"), "{status:?}");
+        assert!(status.contains('…'));
+        assert!(!status.contains("中段提示"));
+    }
+
+    fn meter(projected: u64, window: u64) -> nano_sessions::ContextMeter {
+        nano_sessions::ContextMeter {
+            session_id: "root".into(),
+            as_of_seq: 1,
+            approximate: true,
+            projected_tokens: Some(projected),
+            context_window: Some(window),
+            pressure_tokens: None,
+            pressure_at: None,
+            context_window_at: None,
+            token_usage: None,
+            breakdown: None,
+        }
+    }
+
+    fn border_colors(app: &mut App) -> Vec<(usize, Color)> {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        let width = 100;
+        let height = 30;
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal.draw(|frame| draw(frame, app)).expect("draw");
+        let buffer = terminal.backend().buffer();
+        let row = (0..height)
+            .find(|y| {
+                (0..width)
+                    .filter(|x| buffer[(*x, *y)].symbol() == "─")
+                    .count()
+                    > width as usize / 2
+            })
+            .expect("composer border row");
+        (2..(width as usize - 2))
+            .map(|x| (x, buffer[(x as u16, row)].fg))
+            .collect()
+    }
+
+    #[test]
+    fn the_context_line_uses_cyan_yellow_red_and_a_plain_unknown_border() {
+        let mut app = app();
+        let colors = border_colors(&mut app);
+        assert!(colors.iter().all(|(_, color)| *color == Color::DarkGray));
+
+        app.context = Some(meter(50, 100));
+        let colors = border_colors(&mut app);
+        let colored = colors
+            .iter()
+            .filter(|(_, color)| *color == Color::Cyan)
+            .count();
+        // 100 columns minus the 2ch margins on each side.
+        assert_eq!(colored, 48);
+        assert_eq!(colors[48].1, Color::DarkGray);
+
+        app.context = Some(meter(80, 100));
+        assert!(border_colors(&mut app)
+            .iter()
+            .any(|(_, color)| *color == Color::Yellow));
+        app.context = Some(meter(95, 100));
+        assert!(border_colors(&mut app)
+            .iter()
+            .any(|(_, color)| *color == Color::Red));
+    }
+
+    fn running_event() -> serde_json::Value {
+        serde_json::json!({
+            "address": {"rootSessionId": "root"},
+            "status": "running"
+        })
+    }
+
+    #[test]
+    fn the_activity_row_has_idle_running_and_waiting_states_and_a_phase() {
+        let mut base = app();
+        assert_eq!(base.activity_kind(), None);
+
+        base.model
+            .apply_event("conversation.status", &running_event());
+        assert_eq!(base.activity_kind(), Some(ActivityKind::Running));
+        assert!(base.tick());
+        assert!(!base.activity_phase);
+        base.activity_at = Some(Instant::now() - Duration::from_millis(1));
+        assert!(base.tick());
+        assert!(base.activity_phase);
+        let rows = compact(&screen(&mut base, 100, 30));
+        assert!(rows.iter().any(|row| row.contains("○正在运行…·Esc可停止")));
+
+        let mut approval = app();
+        approval.decisions.apply_event(
+            "decisions.approval",
+            &serde_json::json!({
+                "address": {"rootSessionId": "root"},
+                "state": "pending",
+                "requestId": "a-1",
+                "toolName": "bash",
+                "reason": "sandbox"
+            }),
+        );
+        assert_eq!(
+            approval.activity_kind(),
+            Some(ActivityKind::AwaitingApproval)
+        );
+        let rows = compact(&screen(&mut approval, 100, 30));
+        assert!(rows.iter().any(|row| row.contains("等待你的授权")));
+
+        let mut question = app();
+        question.decisions.apply_event(
+            "decisions.question",
+            &serde_json::json!({
+                "address": {"rootSessionId": "root"},
+                "state": "pending",
+                "requestId": "q-1",
+                "callId": "c-1",
+                "timed": false,
+                "questions": [{"id": "q1", "question": "Pick", "options": [{"label": "A"}]}]
+            }),
+        );
+        assert_eq!(
+            question.activity_kind(),
+            Some(ActivityKind::AwaitingQuestion)
+        );
+        let rows = compact(&screen(&mut question, 100, 30));
+        assert!(rows.iter().any(|row| row.contains("等待你的选择")));
+
+        base.model.apply_event(
+            "conversation.status",
+            &serde_json::json!({
+                "address": {"rootSessionId": "root"},
+                "status": "idle"
+            }),
+        );
+        base.tick();
+        assert_eq!(base.activity_kind(), None);
+        assert!(base.activity_at.is_none());
+    }
+
+    fn subagent_row(id: &str, mode: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "parentId": "root",
+            "depth": 1,
+            "mode": mode,
+            "label": format!("task {id}"),
+            "activity": "inactive",
+            "hasChildren": false
+        })
+    }
+
+    fn install_subagents(app: &mut App, agents: serde_json::Value) {
+        app.subagents
+            .apply_snapshot(&serde_json::json!({
+                "agents": agents,
+                "diagnostics": [],
+                "parentLive": true
+            }))
+            .expect("valid snapshot");
+    }
+
+    #[test]
+    fn the_dock_sits_below_the_status_bar_with_a_count_and_overflow() {
+        let mut app = app();
+        install_subagents(
+            &mut app,
+            serde_json::json!([
+                subagent_row("a", "continuable"),
+                subagent_row("b", "continuable"),
+                subagent_row("c", "continuable"),
+                subagent_row("d", "continuable"),
+                subagent_row("e", "continuable"),
+            ]),
+        );
+        let rows = screen(&mut app, 100, 30);
+        let rows_compact = compact(&rows);
+        let dock = rows_compact
+            .iter()
+            .position(|row| row.contains("localagents"))
+            .expect("dock title");
+        let status = rows_compact
+            .iter()
+            .position(|row| row.contains("权限："))
+            .expect("status row");
+        assert!(status < dock, "status row stays above the dock");
+        assert!(rows_compact.last().unwrap().contains("还有1个子代理"));
+        let dock_text = rows_compact[dock..].join("");
+        assert!(dock_text.contains("5localagents"));
+        assert!(!dock_text.contains("↑↓选择"));
+        assert!(dock_text.contains("taska"));
+    }
+
+    #[test]
+    fn the_child_view_header_keeps_the_main_title_and_adds_a_child_row() {
+        let mut app = app();
+        install_subagents(
+            &mut app,
+            serde_json::json!([subagent_row("child", "continuable")]),
+        );
+        assert!(app.enter_subagent(0));
+        app.apply_subagent_description(&serde_json::json!({
+            "id": "child",
+            "parentId": "root",
+            "mode": "continuable",
+            "label": "task child",
+            "activity": "inactive",
+            "parentLive": true,
+            "seq": 1
+        }));
+        let rows = compact(&screen(&mut app, 100, 30));
+        assert!(rows[0].starts_with("nano"));
+        assert!(rows[1].contains("←子代理taskchild"));
+        let status = rows.last().expect("status row");
+        assert!(status.contains("权限：子代理审批由官方拒绝"));
+        assert!(!status.contains("Enter发送"));
+    }
+
+    #[test]
+    fn safety_and_mode_notices_stay_visible_in_the_composer() {
+        let mut shell = app();
+        shell.shell_confirm = Some("echo hi".to_string());
+        let rows = compact(&screen(&mut shell, 100, 30));
+        assert!(rows
+            .iter()
+            .any(|row| row.contains("用户权限，不是Agent授权")));
+
+        let mut editing = app();
+        editing.edit_target = Some("m-1".to_string());
+        editing.drafts.current_mut().set_text("queued");
+        let rows = compact(&screen(&mut editing, 100, 30));
+        assert!(rows.iter().any(|row| row.contains("编辑队列项m-1")));
+
+        let mut child = app();
+        install_subagents(
+            &mut child,
+            serde_json::json!([subagent_row("child", "one-shot")]),
+        );
+        assert!(child.enter_subagent(0));
+        let rows = compact(&screen(&mut child, 100, 30));
+        assert!(rows.iter().any(|row| row.contains("正在读取子代理历史")));
     }
 }

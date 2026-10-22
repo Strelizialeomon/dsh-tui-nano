@@ -11,7 +11,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::diff::{DiffLineKind, DiffView};
-use crate::display::{elide, wrap_line};
+use crate::display::{char_width, display_text, elide, wrap_line};
 use crate::model::{Entry, EntryKind, PreviewEntry, TranscriptModel};
 use crate::scroll::{EntryOffset, ScrollState};
 use crate::tool::{
@@ -97,21 +97,91 @@ impl RenderedEntry {
     }
 }
 
+/// One display unit: single entries render one-to-one; adjacent ordinary
+/// context injections merge into a single disclosure.
+enum Unit<'a> {
+    Single(&'a Entry),
+    Context(Vec<&'a Entry>),
+}
+
+impl<'a> Unit<'a> {
+    fn identity(&self) -> &'a str {
+        match self {
+            Self::Single(entry) => &entry.identity,
+            Self::Context(entries) => &entries[0].identity,
+        }
+    }
+
+    fn fingerprint(&self) -> u64 {
+        match self {
+            Self::Single(entry) => entry.fingerprint,
+            Self::Context(entries) => entries.iter().fold(entries.len() as u64, |hash, entry| {
+                hash.wrapping_mul(1_099_511_628_211)
+                    .wrapping_add(entry.fingerprint)
+            }),
+        }
+    }
+}
+
+/// Group consecutive ordinary injected context into one display unit.
+/// Bash and monitor context keep their own labels and never join a group.
+fn units(model: &TranscriptModel) -> Vec<Unit<'_>> {
+    let mut units: Vec<Unit<'_>> = Vec::new();
+    for entry in model.entries() {
+        let ordinary = matches!(
+            &entry.kind,
+            EntryKind::Context {
+                bash: false,
+                monitor: false,
+                ..
+            }
+        );
+        if ordinary {
+            if let Some(Unit::Context(entries)) = units.last_mut() {
+                entries.push(entry);
+                continue;
+            }
+            units.push(Unit::Context(vec![entry]));
+        } else {
+            units.push(Unit::Single(entry));
+        }
+    }
+    units
+}
+
+fn render_unit(unit: &Unit<'_>, width: usize, expanded: bool) -> RenderedEntry {
+    match unit {
+        Unit::Single(entry) => render_entry(entry, width, expanded),
+        Unit::Context(entries) => {
+            let mut output = RenderedEntry::default();
+            render_context_group(&mut output, unit.identity(), entries, width, expanded);
+            output.lines.push(Line::default());
+            output.hits.push(None);
+            output
+        }
+    }
+}
+
 impl RenderCache {
     /// Empty cache.
     pub fn new() -> Self {
         Self::default()
     }
 
-    fn ensure(&mut self, entry: &Entry, width: usize, expanded: bool) -> &RenderedEntry {
-        let key = (
-            entry.identity.clone(),
-            entry.fingerprint,
-            width.max(1),
-            expanded,
-        );
+    fn ensure<F>(
+        &mut self,
+        identity: &str,
+        fingerprint: u64,
+        width: usize,
+        expanded: bool,
+        render: F,
+    ) -> &RenderedEntry
+    where
+        F: FnOnce() -> RenderedEntry,
+    {
+        let key = (identity.to_string(), fingerprint, width.max(1), expanded);
         if !self.lines.contains_key(&key) {
-            let rendered = render_entry(entry, width.max(1), expanded);
+            let rendered = render();
             self.heights.insert(key.clone(), rendered.height());
             self.order.push_back(key.clone());
             self.lines.insert(key.clone(), rendered);
@@ -120,30 +190,35 @@ impl RenderCache {
                     self.lines.remove(&oldest);
                 }
             }
-            while self.heights.len() > MAX_CACHED_ENTRIES * 4 {
+            if self.heights.len() > MAX_CACHED_ENTRIES * 4 {
                 self.heights.clear();
                 for key in &self.order {
                     if let Some(rendered) = self.lines.get(key) {
                         self.heights.insert(key.clone(), rendered.height());
                     }
                 }
-                break;
             }
         }
         self.lines.get(&key).expect("entry was just cached")
     }
 
-    fn height(&mut self, entry: &Entry, width: usize, expanded: bool) -> usize {
-        let key = (
-            entry.identity.clone(),
-            entry.fingerprint,
-            width.max(1),
-            expanded,
-        );
+    fn height<F>(
+        &mut self,
+        identity: &str,
+        fingerprint: u64,
+        width: usize,
+        expanded: bool,
+        render: F,
+    ) -> usize
+    where
+        F: FnOnce() -> RenderedEntry,
+    {
+        let key = (identity.to_string(), fingerprint, width.max(1), expanded);
         if let Some(height) = self.heights.get(&key) {
             return *height;
         }
-        self.ensure(entry, width, expanded).height()
+        self.ensure(identity, fingerprint, width, expanded, render)
+            .height()
     }
 
     /// Drop cache rows for entries that no longer exist.
@@ -167,15 +242,18 @@ pub fn render(
 ) -> TranscriptRender {
     let width = width.max(1);
     let viewport = viewport.max(1);
+    let units = units(model);
     let mut entries = Vec::new();
     let mut starts = Vec::new();
     let mut start = 0usize;
-    for entry in model.entries() {
-        let expanded = model.is_expanded(&entry.identity);
-        let height = cache.height(entry, width, expanded);
+    for unit in &units {
+        let expanded = model.is_expanded(unit.identity());
+        let height = cache.height(unit.identity(), unit.fingerprint(), width, expanded, || {
+            render_unit(unit, width, expanded)
+        });
         starts.push(start);
         entries.push(EntryOffset {
-            identity: entry.identity.clone(),
+            identity: unit.identity().to_string(),
             start,
             height,
         });
@@ -196,14 +274,18 @@ pub fn render(
     let mut lines = Vec::new();
     let mut hits = Vec::new();
     let mut base = None;
-    for (index, entry) in model.entries().iter().enumerate() {
+    for (index, unit) in units.iter().enumerate() {
         let offset = &entries[index];
         let entry_end = offset.start + offset.height;
         if entry_end <= window_start || offset.start >= window_end {
             continue;
         }
-        let expanded = model.is_expanded(&entry.identity);
-        let rendered = cache.ensure(entry, width, expanded).clone();
+        let expanded = model.is_expanded(unit.identity());
+        let rendered = cache
+            .ensure(unit.identity(), unit.fingerprint(), width, expanded, || {
+                render_unit(unit, width, expanded)
+            })
+            .clone();
         let first = window_start.saturating_sub(offset.start);
         let last = (window_end - offset.start).min(rendered.lines.len());
         if first >= last {
@@ -251,9 +333,7 @@ fn render_entry(entry: &Entry, width: usize, expanded: bool) -> RenderedEntry {
         }
     }
     match &entry.kind {
-        EntryKind::User { text } => {
-            labeled_block(&mut output, width, "你", Color::Cyan, text, false);
-        }
+        EntryKind::User { text } => render_user(&mut output, width, text),
         EntryKind::Assistant {
             text,
             reasoning,
@@ -261,96 +341,140 @@ fn render_entry(entry: &Entry, width: usize, expanded: bool) -> RenderedEntry {
             interrupted,
         } => {
             if !reasoning.trim().is_empty() {
-                let duration = reasoning_ms
-                    .map(format_duration)
-                    .unwrap_or_else(|| "用时未知".to_string());
-                let toggle = if expanded { "收起" } else { "展开" };
-                output.lines.push(Line::from(vec![
-                    Span::styled("思考 ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(duration, Style::default().fg(Color::DarkGray)),
-                    Span::styled(format!(" · {toggle}"), Style::default().fg(Color::DarkGray)),
-                ]));
-                output.hits.push(Some(Hit {
-                    identity: entry.identity.clone(),
-                    kind: HitKind::Toggle,
-                }));
-                if expanded {
-                    let rows = wrap_block(reasoning, width.saturating_sub(2), MAX_BLOCK_ROWS);
-                    for row in rows {
-                        output.lines.push(Line::from(Span::styled(
-                            format!("  {row}"),
-                            Style::default().fg(Color::DarkGray),
-                        )));
-                        output.hits.push(Some(Hit {
-                            identity: entry.identity.clone(),
-                            kind: HitKind::Toggle,
-                        }));
-                    }
+                render_thinking(
+                    &mut output,
+                    &entry.identity,
+                    reasoning,
+                    *reasoning_ms,
+                    width,
+                    expanded,
+                );
+            }
+            if !text.trim().is_empty() {
+                for row in markdown_rows(text, width) {
+                    output.lines.push(row);
+                    output.hits.push(None);
                 }
             }
-            let suffix = if *interrupted {
-                "（中断前的片段）"
-            } else {
-                ""
-            };
-            let label = if suffix.is_empty() {
-                "助手".to_string()
-            } else {
-                format!("助手{suffix}")
-            };
-            if !text.trim().is_empty() {
-                labeled_block(&mut output, width, &label, Color::Green, text, true);
+            if *interrupted {
+                output.lines.push(Line::from(Span::styled(
+                    "（中断前的片段）",
+                    Style::default().fg(Color::DarkGray),
+                )));
+                output.hits.push(None);
             }
         }
         EntryKind::Notice { text, is_error } => {
-            let label = if *is_error {
-                "回合（失败）"
-            } else {
-                "回合"
-            };
             let color = if *is_error { Color::Red } else { Color::Yellow };
-            labeled_block(&mut output, width, label, color, text, false);
+            for row in wrap_block(text, width, MAX_BLOCK_ROWS) {
+                output
+                    .lines
+                    .push(Line::from(Span::styled(row, Style::default().fg(color))));
+                output.hits.push(None);
+            }
         }
         EntryKind::Context {
             text,
             bash,
             monitor,
         } => {
-            let (label, color) = if *bash {
-                ("bash", Color::Yellow)
-            } else if *monitor {
-                ("monitor · role=user", Color::Cyan)
+            if *bash || *monitor {
+                let (label, color) = if *bash {
+                    ("bash", Color::Yellow)
+                } else {
+                    ("monitor · role=user", Color::Cyan)
+                };
+                render_labeled_context(
+                    &mut output,
+                    &entry.identity,
+                    width,
+                    label,
+                    color,
+                    text,
+                    expanded,
+                );
             } else {
-                ("上下文", Color::DarkGray)
-            };
-            render_context(
-                &mut output,
-                &entry.identity,
-                width,
-                label,
-                color,
-                text,
-                expanded,
-            );
+                render_context_group(&mut output, &entry.identity, &[entry], width, expanded);
+            }
         }
         EntryKind::Tool(record) => render_tool(&mut output, record, width, expanded),
         EntryKind::Preview(preview) => render_preview(&mut output, preview, width),
-        EntryKind::Echo { text, state } => {
-            labeled_block(
-                &mut output,
-                width,
-                &format!("你（{state}）"),
-                Color::Cyan,
-                text,
-                false,
-            );
-        }
+        EntryKind::Echo { text, state } => render_echo(&mut output, width, text, state),
     }
     // One display row between entries keeps blocks visually separate and is
     // included in the measured height for anchor math.
     output.lines.push(Line::default());
     output.hits.push(None);
     output
+}
+
+fn muted() -> Style {
+    Style::default().fg(Color::DarkGray)
+}
+
+fn render_user(output: &mut RenderedEntry, width: usize, text: &str) {
+    let style = Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD);
+    let rows = wrap_block(text, width.saturating_sub(2).max(1), MAX_BLOCK_ROWS);
+    for (index, row) in rows.into_iter().enumerate() {
+        let prefix = if index == 0 { "> " } else { "  " };
+        output.lines.push(Line::from(vec![
+            Span::styled(prefix, style),
+            Span::styled(row, style),
+        ]));
+        output.hits.push(None);
+    }
+}
+
+fn render_echo(output: &mut RenderedEntry, width: usize, text: &str, state: &str) {
+    let style = Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD);
+    let rows = wrap_block(text, width.saturating_sub(2).max(1), MAX_BLOCK_ROWS);
+    let last = rows.len().saturating_sub(1);
+    for (index, row) in rows.into_iter().enumerate() {
+        let prefix = if index == 0 { "> " } else { "  " };
+        let mut spans = vec![Span::styled(prefix, style), Span::styled(row, style)];
+        if index == last {
+            spans.push(Span::styled(format!("（{state}）"), muted()));
+        }
+        output.lines.push(Line::from(spans));
+        output.hits.push(None);
+    }
+}
+
+fn render_thinking(
+    output: &mut RenderedEntry,
+    identity: &str,
+    reasoning: &str,
+    reasoning_ms: Option<u64>,
+    width: usize,
+    expanded: bool,
+) {
+    let marker = if expanded { "▾" } else { "▸" };
+    let meta = reasoning_ms
+        .map(format_duration)
+        .unwrap_or_else(|| "用时未知".to_string());
+    let hit = Some(Hit {
+        identity: identity.to_string(),
+        kind: HitKind::Toggle,
+    });
+    push_two_column(
+        output,
+        vec![Span::styled(format!("{marker} 思考 已完成"), muted())],
+        vec![Span::styled(meta, muted())],
+        width,
+        hit.clone(),
+    );
+    if expanded {
+        for row in wrap_block(reasoning, width.saturating_sub(2).max(1), MAX_BLOCK_ROWS) {
+            output
+                .lines
+                .push(Line::from(Span::styled(format!("  {row}"), muted())));
+            output.hits.push(hit.clone());
+        }
+    }
 }
 
 fn render_tool(output: &mut RenderedEntry, record: &ToolRecord, width: usize, expanded: bool) {
@@ -363,52 +487,16 @@ fn render_tool(output: &mut RenderedEntry, record: &ToolRecord, width: usize, ex
             exit,
         } => {
             let status = record.display_status;
-            output.lines.push(Line::from(vec![
-                Span::styled("命令 ", Style::default().fg(Color::Magenta)),
-                Span::styled(status.label(), status_style(status)),
-                Span::styled(
-                    description
-                        .as_deref()
-                        .map(|description| format!(" · {description}"))
-                        .unwrap_or_default(),
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ]));
-            output.hits.push(None);
             let command_rows = command
                 .as_deref()
-                .map(|command| wrap_block(command, width.saturating_sub(2), MAX_BLOCK_ROWS))
+                .map(|command| wrap_block(command, width.saturating_sub(2).max(1), MAX_BLOCK_ROWS))
                 .unwrap_or_default();
-            let output_rows = wrap_block(body, width.saturating_sub(2), MAX_BLOCK_ROWS);
-            if expanded {
-                for row in &command_rows {
-                    output.lines.push(Line::from(vec![
-                        Span::styled("› ", Style::default().fg(Color::DarkGray)),
-                        Span::raw(row.clone()),
-                    ]));
-                    output.hits.push(toggle_hit(record));
-                }
-                for row in &output_rows {
-                    output.lines.push(Line::from(Span::styled(
-                        format!("  {row}"),
-                        Style::default().fg(Color::DarkGray),
-                    )));
-                    output.hits.push(toggle_hit(record));
-                }
+            let output_rows = wrap_block(body, width.saturating_sub(2).max(1), MAX_BLOCK_ROWS);
+            let (shown_command, shown_output): (Vec<String>, Vec<String>) = if expanded {
+                (command_rows.clone(), output_rows.clone())
             } else {
-                let shown_command = command_rows
-                    .iter()
-                    .take(COMMAND_BUDGET)
-                    .cloned()
-                    .collect::<Vec<_>>();
-                for row in &shown_command {
-                    output.lines.push(Line::from(vec![
-                        Span::styled("› ", Style::default().fg(Color::DarkGray)),
-                        Span::raw(row.clone()),
-                    ]));
-                    output.hits.push(toggle_hit(record));
-                }
-                let shown_output: Vec<String> = match status {
+                let command = command_rows.iter().take(COMMAND_BUDGET).cloned().collect();
+                let output = match status {
                     DisplayStatus::Pending => Vec::new(),
                     DisplayStatus::Failed | DisplayStatus::Interrupted => {
                         output_rows.iter().take(FAILURE_BUDGET).cloned().collect()
@@ -421,67 +509,121 @@ fn render_tool(output: &mut RenderedEntry, record: &ToolRecord, width: usize, ex
                         .cloned()
                         .collect(),
                 };
-                for row in &shown_output {
-                    output.lines.push(Line::from(Span::styled(
-                        format!("  {row}"),
-                        Style::default().fg(Color::DarkGray),
-                    )));
-                    output.hits.push(toggle_hit(record));
-                }
-                let hidden = command_rows
-                    .len()
-                    .saturating_sub(shown_command.len())
-                    .saturating_add(output_rows.len().saturating_sub(shown_output.len()));
-                if status == DisplayStatus::Pending {
-                    output.lines.push(Line::from(Span::styled(
-                        "  （等待结果；没有来源时不显示假输出）",
-                        Style::default().fg(Color::DarkGray),
-                    )));
-                    output.hits.push(toggle_hit(record));
-                } else if hidden > 0 {
-                    output.lines.push(Line::from(Span::styled(
-                        format!("  … 还有 {hidden} 行 · 点击展开"),
-                        Style::default().fg(Color::DarkGray),
-                    )));
-                    output.hits.push(toggle_hit(record));
-                }
-            }
-            let exit_style = match exit {
-                ExitStatus::Code(0) => Style::default().fg(Color::Green),
-                ExitStatus::Unknown => Style::default().fg(Color::Yellow),
-                _ => Style::default().fg(Color::Red),
+                (command, output)
             };
-            output.lines.push(Line::from(vec![
-                Span::styled("  ", Style::default()),
-                Span::styled(exit.label(), exit_style),
-            ]));
-            output.hits.push(toggle_hit(record));
+            let hidden = command_rows
+                .len()
+                .saturating_sub(shown_command.len())
+                .saturating_add(output_rows.len().saturating_sub(shown_output.len()));
+            let title = description
+                .as_deref()
+                .filter(|description| !description.trim().is_empty())
+                .map(str::to_string)
+                .or_else(|| {
+                    command
+                        .as_deref()
+                        .and_then(|command| command.lines().next())
+                        .map(str::to_string)
+                })
+                .filter(|title| !title.trim().is_empty())
+                .unwrap_or_else(|| "Bash".to_string());
+            let marker = if expanded { "▾" } else { "▸" };
+            let mut left = vec![
+                Span::styled(format!("{marker} "), muted()),
+                Span::styled("Bash", muted()),
+                Span::styled(format!(" {}", title.replace('\r', "")), muted()),
+            ];
+            if hidden > 0 {
+                left.push(Span::styled(format!(" +{hidden} 行"), muted()));
+            }
+            push_two_column(
+                output,
+                left,
+                vec![Span::styled(status.label(), process_status_style(status))],
+                width,
+                toggle_hit(record),
+            );
+            for row in &shown_command {
+                output
+                    .lines
+                    .push(Line::from(Span::styled(format!("  {row}"), muted())));
+                output.hits.push(toggle_hit(record));
+            }
+            if status == DisplayStatus::Pending && !expanded {
+                output.lines.push(Line::from(Span::styled(
+                    "  （等待结果；没有来源时不显示假输出）",
+                    muted(),
+                )));
+                output.hits.push(toggle_hit(record));
+            }
+            for row in &shown_output {
+                output
+                    .lines
+                    .push(Line::from(Span::styled(format!("  {row}"), muted())));
+                output.hits.push(toggle_hit(record));
+            }
+            if !matches!(exit, ExitStatus::Code(0)) {
+                let exit_style = match exit {
+                    ExitStatus::Code(0) => Style::default().fg(Color::Green),
+                    ExitStatus::Unknown => Style::default().fg(Color::Yellow),
+                    _ => Style::default().fg(Color::Red),
+                };
+                output.lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(exit.label(), exit_style),
+                ]));
+                output.hits.push(toggle_hit(record));
+            }
         }
         ToolDisplay::File { path, diff } => {
-            let stat = diff
-                .as_ref()
-                .map(DiffView::stat_label)
-                .unwrap_or_else(|| "±?".to_string());
-            output.lines.push(Line::from(vec![
-                Span::styled("文件 ", Style::default().fg(Color::Magenta)),
-                Span::styled(
-                    path.clone().unwrap_or_else(|| "(未知文件)".to_string()),
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(format!("  {stat}"), Style::default().fg(Color::DarkGray)),
-            ]));
-            output.hits.push(toggle_hit(record));
+            let name = official_name(&record.name);
+            let mut right = Vec::new();
+            if let Some(diff) = diff {
+                if let Some(added) = diff.added {
+                    right.push(Span::styled(
+                        format!("+{added}"),
+                        Style::default().fg(Color::Green),
+                    ));
+                }
+                if let Some(deleted) = diff.deleted {
+                    if !right.is_empty() {
+                        right.push(Span::raw(" "));
+                    }
+                    right.push(Span::styled(
+                        format!("-{deleted}"),
+                        Style::default().fg(Color::Red),
+                    ));
+                }
+                if right.is_empty() {
+                    right.push(Span::styled("±?", muted()));
+                }
+            } else {
+                right.push(Span::styled("±?", muted()));
+            }
+            let marker = if expanded { "▾" } else { "▸" };
+            let path = path.clone().unwrap_or_else(|| "(未知文件)".to_string());
+            push_two_column(
+                output,
+                vec![
+                    Span::styled(format!("{marker} "), muted()),
+                    Span::styled(format!("{name} "), muted()),
+                    Span::styled(path, Style::default().add_modifier(Modifier::BOLD)),
+                ],
+                right,
+                width,
+                toggle_hit(record),
+            );
             if let Some(diff) = diff {
                 output.lines.push(Line::from(Span::styled(
                     format!("  {}", diff.state.label()),
-                    Style::default().fg(Color::DarkGray),
+                    muted(),
                 )));
                 output.hits.push(toggle_hit(record));
                 render_diff_body(output, diff, width, expanded, record);
             } else {
                 output.lines.push(Line::from(Span::styled(
                     "  （没有可显示的差异数据）",
-                    Style::default().fg(Color::DarkGray),
+                    muted(),
                 )));
                 output.hits.push(toggle_hit(record));
             }
@@ -498,17 +640,14 @@ fn render_tool(output: &mut RenderedEntry, record: &ToolRecord, width: usize, ex
                         _ => Color::Cyan,
                     }),
                 ),
-                Span::styled(
-                    format!(" · {} 题", question.questions.len()),
-                    Style::default().fg(Color::DarkGray),
-                ),
+                Span::styled(format!(" · {} 题", question.questions.len()), muted()),
                 Span::styled(
                     if question_hit.is_some() {
                         " · 点击查看"
                     } else {
                         ""
                     },
-                    Style::default().fg(Color::DarkGray),
+                    muted(),
                 ),
             ]));
             output.hits.push(question_hit.clone());
@@ -532,41 +671,47 @@ fn render_tool(output: &mut RenderedEntry, record: &ToolRecord, width: usize, ex
                 for (offset, row) in wrap_line(&text, width).into_iter().enumerate() {
                     output.lines.push(Line::from(vec![
                         Span::styled(if offset == 0 { "  " } else { "    " }, Style::default()),
-                        Span::styled(row, Style::default().fg(Color::DarkGray)),
+                        Span::styled(row, muted()),
                     ]));
                     output.hits.push(question_hit.clone());
                 }
             }
         }
         ToolDisplay::Generic => {
-            output.lines.push(Line::from(vec![
-                Span::styled("工具 ", Style::default().fg(Color::Magenta)),
-                Span::raw(record.name.clone()),
-                Span::styled(
-                    format!(" · {}", record.display_status.label()),
-                    status_style(record.display_status),
-                ),
-            ]));
-            output.hits.push(toggle_hit(record));
+            let name = official_name(&record.name);
             let body = record.result.as_deref().unwrap_or("");
-            let rows = wrap_block(body, width.saturating_sub(2), MAX_BLOCK_ROWS);
+            let rows = wrap_block(body, width.saturating_sub(2).max(1), MAX_BLOCK_ROWS);
             let shown = if expanded {
                 rows.len()
             } else {
                 rows.len().min(FAILURE_BUDGET.max(OUTPUT_BUDGET))
             };
-            for row in rows.iter().take(shown) {
-                output.lines.push(Line::from(Span::styled(
-                    format!("  {row}"),
-                    Style::default().fg(Color::DarkGray),
-                )));
-                output.hits.push(toggle_hit(record));
+            let hidden = rows.len().saturating_sub(shown);
+            let marker = if expanded { "▾" } else { "▸" };
+            let mut left = vec![
+                Span::styled(format!("{marker} "), muted()),
+                Span::styled(name, muted()),
+            ];
+            if let Some(target) = tool_target(record) {
+                left.push(Span::styled(format!(" {target}"), muted()));
             }
-            if shown < rows.len() {
-                output.lines.push(Line::from(Span::styled(
-                    format!("  … 还有 {} 行 · 点击展开", rows.len() - shown),
-                    Style::default().fg(Color::DarkGray),
-                )));
+            if hidden > 0 {
+                left.push(Span::styled(format!(" +{hidden} 行"), muted()));
+            }
+            push_two_column(
+                output,
+                left,
+                vec![Span::styled(
+                    record.display_status.label(),
+                    process_status_style(record.display_status),
+                )],
+                width,
+                toggle_hit(record),
+            );
+            for row in rows.iter().take(shown) {
+                output
+                    .lines
+                    .push(Line::from(Span::styled(format!("  {row}"), muted())));
                 output.hits.push(toggle_hit(record));
             }
         }
@@ -585,7 +730,7 @@ fn render_approval_line(output: &mut RenderedEntry, approval: &ApprovalView, rec
         .or(approval.reason.as_deref())
         .unwrap_or("");
     output.lines.push(Line::from(vec![
-        Span::styled("  审批 ", Style::default().fg(Color::Yellow)),
+        Span::styled("  审批 ", muted()),
         Span::styled(
             approval.outcome_label(),
             Style::default().fg(match approval.outcome {
@@ -602,7 +747,7 @@ fn render_approval_line(output: &mut RenderedEntry, approval: &ApprovalView, rec
             } else {
                 format!(" · {reason}")
             },
-            Style::default().fg(Color::DarkGray),
+            muted(),
         ),
     ]));
     output.hits.push(toggle_hit(record));
@@ -646,67 +791,118 @@ fn render_diff_body(
     for row in rows.iter().take(shown) {
         match row {
             DiffRow::Separator(label) => {
-                output.lines.push(Line::from(Span::styled(
-                    format!("  {label}"),
-                    Style::default().fg(Color::DarkGray),
-                )));
+                output
+                    .lines
+                    .push(Line::from(Span::styled(format!("  {label}"), muted())));
                 output.hits.push(toggle_hit(record));
             }
             DiffRow::Line(kind, old_no, new_no, text, emphasis) => {
-                let number = (*old_no).or(*new_no);
-                let number = number
-                    .map(|number| format!("{number:>4}"))
-                    .unwrap_or_else(|| "    ".to_string());
-                let (marker, base, highlighted) = match kind {
-                    DiffLineKind::Add => (
-                        "+",
-                        Style::default().fg(Color::Green).bg(Color::Rgb(0, 42, 0)),
-                        Style::default()
-                            .fg(Color::LightGreen)
-                            .bg(Color::Rgb(0, 88, 0))
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    DiffLineKind::Delete => (
-                        "-",
-                        Style::default().fg(Color::Red).bg(Color::Rgb(48, 0, 0)),
-                        Style::default()
-                            .fg(Color::LightRed)
-                            .bg(Color::Rgb(96, 0, 0))
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    DiffLineKind::Context => {
-                        (" ", Style::default().fg(Color::DarkGray), Style::default())
-                    }
-                };
-                let rendered = format!(
-                    "{number} {} {text}",
-                    if marker == " " { " " } else { marker }
+                render_diff_line(
+                    output, *kind, *old_no, *new_no, text, *emphasis, width, record,
                 );
-                let mut char_start = 0usize;
-                for wrapped in wrap_line(&rendered, width) {
-                    let row_chars = wrapped.chars().count();
-                    let overlap = emphasis
-                        .map(|(start, end)| {
-                            // 4ch number + space + marker + space.
-                            let start = 7 + start;
-                            let end = 7 + end;
-                            char_start < end && char_start + row_chars > start
-                        })
-                        .unwrap_or(false);
-                    let style = if overlap { highlighted } else { base };
-                    output.lines.push(Line::from(Span::styled(wrapped, style)));
-                    output.hits.push(toggle_hit(record));
-                    char_start += row_chars;
-                }
             }
         }
     }
     if shown < rows.len() {
         output.lines.push(Line::from(Span::styled(
             format!("  … 还有 {} 行 · 点击展开", rows.len() - shown),
-            Style::default().fg(Color::DarkGray),
+            muted(),
         )));
         output.hits.push(toggle_hit(record));
+    }
+}
+
+fn render_diff_line(
+    output: &mut RenderedEntry,
+    kind: DiffLineKind,
+    old_no: Option<u64>,
+    new_no: Option<u64>,
+    text: &str,
+    emphasis: Option<(usize, usize)>,
+    width: usize,
+    record: &ToolRecord,
+) {
+    let number = old_no.or(new_no);
+    let number = number
+        .map(|number| format!("{number:>4}"))
+        .unwrap_or_else(|| "    ".to_string());
+    let (marker, background, emphasis_background, marker_color) = match kind {
+        DiffLineKind::Add => (
+            '+',
+            Some(Color::Rgb(36, 56, 44)),
+            Some(Color::Rgb(56, 91, 66)),
+            Color::Rgb(161, 200, 170),
+        ),
+        DiffLineKind::Delete => (
+            '-',
+            Some(Color::Rgb(56, 37, 42)),
+            Some(Color::Rgb(101, 54, 65)),
+            Color::Rgb(226, 160, 170),
+        ),
+        DiffLineKind::Context => (' ', None, None, Color::DarkGray),
+    };
+    let number_style = Style::default().fg(Color::DarkGray);
+    let text_style = Style::default();
+    let (number_style, text_style) = match background {
+        Some(background) => (number_style.bg(background), text_style.bg(background)),
+        None => (number_style, text_style),
+    };
+    let marker_style = Style::default().fg(marker_color);
+    let marker_style = match background {
+        Some(background) => marker_style.bg(background),
+        None => marker_style,
+    };
+    let blank_style = match background {
+        Some(background) => Style::default().bg(background),
+        None => Style::default(),
+    };
+    let text_width = width.saturating_sub(7).max(1);
+    let mut text_offset = 0usize;
+    for (row_index, row) in wrap_line(text, text_width).into_iter().enumerate() {
+        let mut spans = Vec::new();
+        if row_index == 0 {
+            spans.push(Span::styled(number.clone(), number_style));
+            spans.push(Span::styled(" ", blank_style));
+            spans.push(Span::styled(marker.to_string(), marker_style));
+            spans.push(Span::styled(" ", blank_style));
+        } else {
+            spans.push(Span::styled(" ".repeat(7), blank_style));
+        }
+        let mut run = String::new();
+        let mut current_bold = emphasis
+            .map(|(start, end)| text_offset >= start && text_offset < end)
+            .unwrap_or(false);
+        for (index, character) in row.chars().enumerate() {
+            let bold = emphasis
+                .map(|(start, end)| {
+                    let index = text_offset + index;
+                    index >= start && index < end
+                })
+                .unwrap_or(false);
+            if bold != current_bold && !run.is_empty() {
+                let mut style = text_style;
+                if current_bold {
+                    style = style
+                        .add_modifier(Modifier::BOLD)
+                        .bg(emphasis_background.unwrap_or(Color::Reset));
+                }
+                spans.push(Span::styled(std::mem::take(&mut run), style));
+                current_bold = bold;
+            }
+            run.push(character);
+        }
+        if !run.is_empty() {
+            let mut style = text_style;
+            if current_bold {
+                style = style
+                    .add_modifier(Modifier::BOLD)
+                    .bg(emphasis_background.unwrap_or(Color::Reset));
+            }
+            spans.push(Span::styled(run, style));
+        }
+        output.lines.push(Line::from(spans));
+        output.hits.push(toggle_hit(record));
+        text_offset += row.chars().count();
     }
 }
 
@@ -722,6 +918,26 @@ enum DiffRow {
 }
 
 fn render_preview(output: &mut RenderedEntry, preview: &PreviewEntry, width: usize) {
+    if !preview.reasoning.trim().is_empty() {
+        output.lines.push(Line::from(vec![
+            Span::styled("▸ 思考 进行中…", muted()),
+            Span::styled(
+                if preview.reasoning_ms.is_some() {
+                    format!(
+                        " · {}",
+                        preview
+                            .reasoning_ms
+                            .map(format_duration)
+                            .unwrap_or_default()
+                    )
+                } else {
+                    String::new()
+                },
+                muted(),
+            ),
+        ]));
+        output.hits.push(None);
+    }
     let mut suffix = String::new();
     if preview.gap {
         suffix.push_str("（预览不完整）");
@@ -729,48 +945,84 @@ fn render_preview(output: &mut RenderedEntry, preview: &PreviewEntry, width: usi
     if preview.truncated {
         suffix.push_str("（预览已截断）");
     }
-    output.lines.push(Line::from(vec![
-        Span::styled("助手（流式） ", Style::default().fg(Color::Green)),
-        Span::styled(suffix, Style::default().fg(Color::Yellow)),
-    ]));
-    output.hits.push(None);
-    if !preview.reasoning.trim().is_empty() {
-        let duration = preview
-            .reasoning_ms
-            .map(format_duration)
-            .unwrap_or_else(|| "思考中".to_string());
-        output.lines.push(Line::from(Span::styled(
-            format!("思考 {duration}"),
-            Style::default().fg(Color::DarkGray),
-        )));
+    for row in wrap_block(&preview.text, width, MAX_BLOCK_ROWS) {
+        output
+            .lines
+            .push(Line::from(Span::styled(row, Style::default())));
         output.hits.push(None);
     }
-    for row in wrap_block(&preview.text, width, MAX_BLOCK_ROWS) {
+    if !suffix.is_empty() {
         output.lines.push(Line::from(Span::styled(
-            row,
-            Style::default().fg(Color::Green),
+            suffix,
+            Style::default().fg(Color::Yellow),
         )));
         output.hits.push(None);
     }
     for tool in &preview.tools {
-        let name = tool.name.as_deref().unwrap_or("tool");
+        let name = official_name(tool.name.as_deref().unwrap_or("tool"));
         let state = if tool.complete {
             "参数完成"
         } else {
             "参数流入"
         };
-        output.lines.push(Line::from(vec![
-            Span::styled("  工具 ", Style::default().fg(Color::Magenta)),
-            Span::styled(
-                format!("{name} · {state}"),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]));
+        output.lines.push(Line::from(Span::styled(
+            format!("▸ {name} {state}"),
+            muted(),
+        )));
         output.hits.push(None);
     }
 }
 
-fn render_context(
+/// The merged disclosure for consecutive ordinary injected context.
+fn render_context_group(
+    output: &mut RenderedEntry,
+    identity: &str,
+    entries: &[&Entry],
+    width: usize,
+    expanded: bool,
+) {
+    let count = entries.len();
+    let label = if count > 1 {
+        format!("上下文 {count} 段")
+    } else {
+        "上下文".to_string()
+    };
+    output.lines.push(Line::from(vec![
+        Span::styled(label, muted()),
+        Span::styled(
+            if expanded {
+                " · 已展开"
+            } else {
+                " · 点击展开"
+            },
+            muted(),
+        ),
+    ]));
+    let hit = Some(Hit {
+        identity: identity.to_string(),
+        kind: HitKind::Toggle,
+    });
+    output.hits.push(hit.clone());
+    if !expanded {
+        return;
+    }
+    for (index, entry) in entries.iter().enumerate() {
+        if index > 0 {
+            output.lines.push(Line::default());
+            output.hits.push(hit.clone());
+        }
+        let EntryKind::Context { text, .. } = &entry.kind else {
+            continue;
+        };
+        for row in wrap_block(text, width, MAX_BLOCK_ROWS) {
+            output.lines.push(Line::from(Span::styled(row, muted())));
+            output.hits.push(hit.clone());
+        }
+    }
+}
+
+/// Bash and monitor context keep their own labels and never merge.
+fn render_labeled_context(
     output: &mut RenderedEntry,
     identity: &str,
     width: usize,
@@ -788,13 +1040,14 @@ fn render_context(
             } else {
                 " · 点击展开"
             },
-            Style::default().fg(Color::DarkGray),
+            muted(),
         ),
     ]));
-    output.hits.push(Some(Hit {
+    let hit = Some(Hit {
         identity: identity.to_string(),
         kind: HitKind::Toggle,
-    }));
+    });
+    output.hits.push(hit.clone());
     if rows.is_empty() {
         return;
     }
@@ -808,73 +1061,257 @@ fn render_context(
             row.clone(),
             Style::default().fg(color),
         )));
-        output.hits.push(Some(Hit {
-            identity: identity.to_string(),
-            kind: HitKind::Toggle,
-        }));
+        output.hits.push(hit.clone());
     }
     if shown < rows.len() {
         output.lines.push(Line::from(Span::styled(
             format!("  … 还有 {} 行 · 点击展开", rows.len() - shown),
-            Style::default().fg(Color::DarkGray),
+            muted(),
         )));
-        output.hits.push(Some(Hit {
-            identity: identity.to_string(),
-            kind: HitKind::Toggle,
-        }));
+        output.hits.push(hit);
     }
 }
 
-fn labeled_block(
-    output: &mut RenderedEntry,
-    width: usize,
-    label: &str,
-    color: Color,
-    text: &str,
-    markdown: bool,
-) {
-    output.lines.push(Line::from(Span::styled(
-        label.to_string(),
-        Style::default().fg(color),
-    )));
-    output.hits.push(None);
-    let rows = if markdown {
-        markdown_rows(text, width)
-    } else {
-        wrap_block(text, width, MAX_BLOCK_ROWS)
-            .into_iter()
-            .map(Line::from)
-            .collect()
-    };
-    for row in rows {
-        output.lines.push(row);
-        output.hits.push(None);
-    }
-}
-
+/// Minimal Markdown: headings lose their marker and turn bold, a leading
+/// paragraph acts as the answer's lead, list items use `-`, and `**…**`
+/// turns bold inline. No third-party parser is involved.
 fn markdown_rows(text: &str, width: usize) -> Vec<Line<'static>> {
-    let mut rows = Vec::new();
+    let text = display_text(text);
+    let mut blocks: Vec<Vec<&str>> = Vec::new();
+    let mut current: Vec<&str> = Vec::new();
     for line in text.split('\n') {
-        let is_heading = line
-            .trim_start()
-            .chars()
-            .take_while(|character| *character == '#')
-            .count()
-            > 0
-            && line.trim_start().contains(' ');
-        let is_bold = line.trim().starts_with("**") && line.trim().ends_with("**");
-        let style = if is_heading || is_bold {
-            Style::default().add_modifier(Modifier::BOLD)
+        if line.trim().is_empty() {
+            if !current.is_empty() {
+                blocks.push(std::mem::take(&mut current));
+            }
         } else {
-            Style::default()
-        };
-        for segment in wrap_line(&line.replace('\r', ""), width) {
-            rows.push(Line::from(Span::styled(segment, style)));
+            current.push(line);
+        }
+    }
+    if !current.is_empty() {
+        blocks.push(current);
+    }
+    let mut rows = Vec::new();
+    for (block_index, block) in blocks.iter().enumerate() {
+        if block_index > 0 {
+            rows.push(Line::default());
+        }
+        let lead = block_index == 0;
+        for line in block {
+            let line = line.trim_end();
+            let trimmed = line.trim_start();
+            if let Some(heading) = heading_text(trimmed) {
+                for row in inline_rows(
+                    heading,
+                    width,
+                    Style::default().add_modifier(Modifier::BOLD),
+                ) {
+                    rows.push(row);
+                }
+            } else if let Some(item) = list_item(trimmed) {
+                let item_rows = inline_rows(item, width.saturating_sub(2).max(1), Style::default());
+                for (index, row) in item_rows.into_iter().enumerate() {
+                    let prefix = if index == 0 { "- " } else { "  " };
+                    let mut spans = vec![Span::styled(prefix, muted())];
+                    spans.extend(row.spans);
+                    rows.push(Line::from(spans));
+                }
+            } else {
+                let style = if lead {
+                    Style::default().add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                for row in inline_rows(line, width, style) {
+                    rows.push(row);
+                }
+            }
         }
     }
     rows
 }
 
+fn heading_text(line: &str) -> Option<&str> {
+    let hashes = line
+        .chars()
+        .take_while(|character| *character == '#')
+        .count();
+    if hashes == 0 {
+        return None;
+    }
+    let rest = line[hashes..].trim_start();
+    if rest.is_empty() {
+        None
+    } else {
+        Some(rest)
+    }
+}
+
+fn list_item(line: &str) -> Option<&str> {
+    let mut characters = line.chars();
+    let marker = characters.next()?;
+    if marker != '-' && marker != '*' {
+        return None;
+    }
+    let rest = &line[marker.len_utf8()..];
+    rest.strip_prefix(' ')
+}
+
+/// Wrap one logical line, styling `**…**` runs bold on top of `base`.
+fn inline_rows(text: &str, width: usize, base: Style) -> Vec<Line<'static>> {
+    let (plain, bold_flags) = strip_inline_bold(text);
+    let mut rows = Vec::new();
+    let mut offset = 0usize;
+    for row in wrap_line(&plain, width.max(1)) {
+        let count = row.chars().count();
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        let mut run = String::new();
+        let mut current_bold = bold_flags.get(offset).copied().unwrap_or(false);
+        for (index, character) in row.chars().enumerate() {
+            let bold = bold_flags.get(offset + index).copied().unwrap_or(false);
+            if bold != current_bold && !run.is_empty() {
+                let mut style = base;
+                if current_bold {
+                    style = style.add_modifier(Modifier::BOLD);
+                }
+                spans.push(Span::styled(std::mem::take(&mut run), style));
+                current_bold = bold;
+            }
+            run.push(character);
+        }
+        if !run.is_empty() {
+            let mut style = base;
+            if current_bold {
+                style = style.add_modifier(Modifier::BOLD);
+            }
+            spans.push(Span::styled(run, style));
+        }
+        if spans.is_empty() {
+            spans.push(Span::styled(String::new(), base));
+        }
+        rows.push(Line::from(spans));
+        offset += count;
+    }
+    if rows.is_empty() {
+        rows.push(Line::default());
+    }
+    rows
+}
+
+/// Remove `**` markers and report which characters were emphasised.
+fn strip_inline_bold(text: &str) -> (String, Vec<bool>) {
+    let mut plain = String::new();
+    let mut flags = Vec::new();
+    let mut bold = false;
+    let mut characters = text.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character == '*' && characters.peek() == Some(&'*') {
+            characters.next();
+            bold = !bold;
+            continue;
+        }
+        plain.push(character);
+        flags.push(bold);
+    }
+    (plain, flags)
+}
+
+/// Pick the most useful argument for a generic tool's title.
+fn tool_target(record: &ToolRecord) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(&record.arguments).ok()?;
+    for key in ["file_path", "path", "pattern", "url"] {
+        if let Some(target) = value.get(key).and_then(serde_json::Value::as_str) {
+            if !target.trim().is_empty() {
+                return Some(target.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn official_name(name: &str) -> String {
+    match name.to_ascii_lowercase().as_str() {
+        "bash" => "Bash".to_string(),
+        "read" => "Read".to_string(),
+        "edit" => "Edit".to_string(),
+        "write" => "Write".to_string(),
+        "grep" => "Grep".to_string(),
+        "glob" => "Glob".to_string(),
+        "list" => "List".to_string(),
+        "ask_user_question" => "AskUserQuestion".to_string(),
+        _ => {
+            let mut characters = name.chars();
+            match characters.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + characters.as_str(),
+                None => "Tool".to_string(),
+            }
+        }
+    }
+}
+
+fn process_status_style(status: DisplayStatus) -> Style {
+    match status {
+        DisplayStatus::Failed => Style::default().fg(Color::Red),
+        DisplayStatus::Interrupted | DisplayStatus::Unknown => Style::default().fg(Color::Yellow),
+        DisplayStatus::Pending | DisplayStatus::Succeeded => muted(),
+    }
+}
+
+fn spans_width(spans: &[Span<'static>]) -> usize {
+    spans.iter().map(Span::width).sum()
+}
+
+fn truncate_spans(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
+    let mut output = Vec::new();
+    let mut used = 0usize;
+    for span in spans {
+        let style = span.style;
+        let text = span.content.to_string();
+        let mut kept = String::new();
+        for character in text.chars() {
+            let character_width = char_width(character);
+            if used + character_width > max {
+                break;
+            }
+            used += character_width;
+            kept.push(character);
+        }
+        if !kept.is_empty() {
+            output.push(Span::styled(kept, style));
+        }
+        if used >= max {
+            break;
+        }
+    }
+    output
+}
+
+/// One left-aligned row with a right-aligned status. The left side gives up
+/// width first so the status stays visible at narrow terminals.
+fn push_two_column(
+    output: &mut RenderedEntry,
+    left: Vec<Span<'static>>,
+    right: Vec<Span<'static>>,
+    width: usize,
+    hit: Option<Hit>,
+) {
+    let width = width.max(1);
+    let mut right = right;
+    if spans_width(&right) > width {
+        right = truncate_spans(right, width);
+    }
+    let right_width = spans_width(&right);
+    let left_room = width.saturating_sub(right_width + 1);
+    let mut left = truncate_spans(left, left_room);
+    let left_width = spans_width(&left);
+    let used = left_width + right_width;
+    if used < width {
+        left.push(Span::raw(" ".repeat(width - used)));
+    }
+    left.extend(right);
+    output.lines.push(Line::from(left));
+    output.hits.push(hit);
+}
 fn wrap_block(text: &str, width: usize, cap: usize) -> Vec<String> {
     let mut rows = Vec::new();
     for line in text.split('\n') {
@@ -910,16 +1347,6 @@ fn question_hit(record: &ToolRecord) -> Option<Hit> {
         })
     } else {
         None
-    }
-}
-
-fn status_style(status: DisplayStatus) -> Style {
-    match status {
-        DisplayStatus::Pending => Style::default().fg(Color::Cyan),
-        DisplayStatus::Succeeded => Style::default().fg(Color::Green),
-        DisplayStatus::Failed => Style::default().fg(Color::Red),
-        DisplayStatus::Interrupted => Style::default().fg(Color::Yellow),
-        DisplayStatus::Unknown => Style::default().fg(Color::Yellow),
     }
 }
 
@@ -1006,10 +1433,8 @@ mod tests {
                 .map(|index| Entry {
                     identity: format!("seq-{index}"),
                     fingerprint: index as u64 + 1,
-                    kind: EntryKind::Context {
+                    kind: EntryKind::User {
                         text: "line one\nline two\nline three".into(),
-                        bash: false,
-                        monitor: false,
                     },
                 })
                 .collect(),
@@ -1030,10 +1455,8 @@ mod tests {
                 .map(|index| Entry {
                     identity: format!("seq-{index}"),
                     fingerprint: index as u64 + 1,
-                    kind: EntryKind::Context {
+                    kind: EntryKind::User {
                         text: "line one\nline two\nline three".into(),
-                        bash: false,
-                        monitor: false,
                     },
                 })
                 .collect(),
@@ -1227,7 +1650,7 @@ mod tests {
     }
 
     #[test]
-    fn injected_context_is_one_line_until_expanded() {
+    fn ordinary_context_starts_collapsed_and_expands_to_its_original_text() {
         let entry = Entry {
             identity: "seq-1".into(),
             fingerprint: 1,
@@ -1241,20 +1664,82 @@ mod tests {
         assert!(collapsed
             .lines
             .iter()
-            .any(|line| line.to_string().contains("line one")));
+            .any(|line| line.to_string().contains("上下文 · 点击展开")));
         assert!(!collapsed
             .lines
             .iter()
-            .any(|line| line.to_string().contains("line three")));
-        assert!(collapsed
-            .lines
-            .iter()
-            .any(|line| line.to_string().contains("还有 2 行")));
+            .any(|line| line.to_string().contains("line one")));
         let expanded = render_one(entry, true, 80);
         assert!(expanded
             .lines
             .iter()
+            .any(|line| line.to_string().contains("line one")));
+        assert!(expanded
+            .lines
+            .iter()
             .any(|line| line.to_string().contains("line three")));
+    }
+
+    #[test]
+    fn consecutive_ordinary_context_entries_merge_into_one_disclosure() {
+        let entries = (0..3)
+            .map(|index| Entry {
+                identity: format!("seq-{index}"),
+                fingerprint: index + 1,
+                kind: EntryKind::Context {
+                    text: format!("segment {index}\nsecond row"),
+                    bash: false,
+                    monitor: false,
+                },
+            })
+            .collect::<Vec<_>>();
+        let model = model(entries);
+        let mut cache = RenderCache::new();
+        let mut scroll = ScrollState::default();
+        let rendered = render(&model, &mut cache, &mut scroll, 80, 20);
+        let text = rendered
+            .lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        assert!(text.iter().any(|line| line.contains("上下文 3 段")));
+        assert!(!text.iter().any(|line| line.contains("segment 0")));
+        assert_eq!(
+            rendered
+                .lines
+                .iter()
+                .filter(|line| line.to_string().contains("上下文 3 段"))
+                .count(),
+            1
+        );
+        let mut cache = RenderCache::new();
+        let mut scroll = ScrollState::default();
+        let expanded = render_expanded(&model, &mut cache, &mut scroll, 80, 20);
+        for index in 0..3 {
+            assert!(expanded
+                .iter()
+                .any(|line| line.contains(&format!("segment {index}"))));
+        }
+    }
+
+    fn render_expanded(
+        model: &TranscriptModel,
+        cache: &mut RenderCache,
+        scroll: &mut ScrollState,
+        width: usize,
+        viewport: usize,
+    ) -> Vec<String> {
+        let mut model = model.clone();
+        let identities = model
+            .entries()
+            .iter()
+            .map(|entry| entry.identity.clone())
+            .collect::<Vec<_>>();
+        for identity in identities {
+            model.reveal(&identity);
+        }
+        let rendered = render(&model, cache, scroll, width, viewport);
+        rendered.lines.iter().map(ToString::to_string).collect()
     }
 
     #[test]
@@ -1308,6 +1793,74 @@ mod tests {
             .lines
             .iter()
             .any(|line| line.to_string().contains("结果未知")));
+    }
+
+    #[test]
+    fn a_user_message_uses_a_prompt_prefix_instead_of_a_label_row() {
+        let entry = Entry {
+            identity: "m-1".into(),
+            fingerprint: 1,
+            kind: EntryKind::User {
+                text: "你好世界".into(),
+            },
+        };
+        let rendered = render_one(entry, false, 80);
+        assert_eq!(rendered.lines[0].to_string(), "> 你好世界");
+        assert!(rendered.lines[0]
+            .spans
+            .iter()
+            .all(|span| span.style.add_modifier.contains(Modifier::BOLD)));
+        assert!(!rendered
+            .lines
+            .iter()
+            .any(|line| line.to_string().trim() == "你"));
+    }
+
+    #[test]
+    fn assistant_markdown_strips_markers_and_styles_lead_heading_and_list() {
+        let entry = Entry {
+            identity: "a-1".into(),
+            fingerprint: 1,
+            kind: EntryKind::Assistant {
+                text: "# 改动\n完成 **两处** 修改。\n\n- 第一项\n- 第二项".into(),
+                reasoning: String::new(),
+                reasoning_ms: None,
+                interrupted: false,
+            },
+        };
+        let rendered = render_one(entry, false, 40);
+        let rows = rendered
+            .lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        assert!(rows.iter().any(|row| row == "改动"));
+        assert!(!rows.iter().any(|row| row.contains('#')));
+        assert!(!rows.iter().any(|row| row.contains("**")));
+        let bold = rendered
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .find(|span| span.content.contains("两处"))
+            .expect("inline bold run");
+        assert!(bold.style.add_modifier.contains(Modifier::BOLD));
+        assert!(rendered
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .any(|span| span.content.contains("改动")
+                && span.style.add_modifier.contains(Modifier::BOLD)));
+        assert!(rows.iter().any(|row| row.starts_with("- 第一项")));
+    }
+
+    #[test]
+    fn tool_rows_keep_the_status_on_the_right_edge() {
+        let entry = bash_entry(ToolStatus::Succeeded, "hello", DisplayStatus::Succeeded);
+        let rendered = render_one(entry, false, 40);
+        let header = rendered.lines[0].to_string();
+        assert!(header.starts_with("▸ Bash "));
+        assert!(header.ends_with("完成"));
+        assert_eq!(crate::display::line_width(&header), 40);
     }
 
     #[test]

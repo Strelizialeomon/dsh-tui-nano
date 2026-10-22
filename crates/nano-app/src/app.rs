@@ -16,11 +16,13 @@ use nano_attachments::{
 };
 use nano_controls::{ControlsModel, ModelSelection, Panel, PanelAction, PanelMode};
 use nano_conversation::{
-    CommandRouter, ConversationItem, ConversationModel, Delivery, DraftStore, FeatureContribution,
-    FeatureRegistry, FocusId, InputBuffer, InputEvent, InputMode, InputOutcome, InputRoute,
-    SceneId, SceneState, SessionAddress, SubmitError,
+    CommandRouter, ConversationItem, ConversationModel, ConversationStatus, Delivery, DraftStore,
+    FeatureContribution, FeatureRegistry, FocusId, InputBuffer, InputEvent, InputMode,
+    InputOutcome, InputRoute, SceneId, SceneState, SessionAddress, SubmitError,
 };
-use nano_decisions::{answers_to_wire, DecisionAction, DecisionClick, DecisionKey, DecisionsModel};
+use nano_decisions::{
+    answers_to_wire, DecisionAction, DecisionClick, DecisionKey, DecisionTop, DecisionsModel,
+};
 use nano_jobs::{BashRecord, JobsModel, SHELL_NOTICE};
 use nano_monitor::MonitorModel;
 use nano_runtime::{CapabilityStatus, Hello, SessionMode};
@@ -62,14 +64,24 @@ pub enum Connection {
     Failed(String),
 }
 
-impl Connection {
-    /// Status-line label.
-    pub fn label(&self) -> &str {
+/// What the activity row above the composer reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivityKind {
+    /// A turn is running.
+    Running,
+    /// The root conversation is waiting for approval.
+    AwaitingApproval,
+    /// The root conversation is waiting for a question answer.
+    AwaitingQuestion,
+}
+
+impl ActivityKind {
+    /// Text shown after the 2ch indicator.
+    pub fn label(self) -> &'static str {
         match self {
-            Self::Starting => "启动中",
-            Self::Ready => "已连接",
-            Self::Disconnected => "已断开",
-            Self::Failed(_) => "失败",
+            Self::Running => "正在运行… · Esc 可停止",
+            Self::AwaitingApproval => "等待你的授权",
+            Self::AwaitingQuestion => "等待你的选择",
         }
     }
 }
@@ -491,6 +503,12 @@ pub struct App {
     pub decision_area: Rect,
     /// Decision click targets from the last draw.
     pub decision_hits: Vec<Option<DecisionClick>>,
+    /// Whether the 2ch activity indicator is in its alternate phase.
+    pub activity_phase: bool,
+    /// Next 500ms indicator transition, when a turn is running.
+    pub activity_at: Option<Instant>,
+    /// Composer send button region from the last draw.
+    pub send_area: Rect,
     /// Pointer press position, used to distinguish a click from a drag.
     pub mouse_down: Option<(u16, u16)>,
     /// A drag happened between press and release.
@@ -705,6 +723,9 @@ impl App {
             feed_area: Rect::default(),
             decision_area: Rect::default(),
             decision_hits: Vec::new(),
+            activity_phase: false,
+            activity_at: None,
+            send_area: Rect::default(),
             mouse_down: None,
             mouse_dragged: false,
             should_quit: false,
@@ -974,7 +995,7 @@ impl App {
     }
 
     /// Apply one `nano.subagents.describe` result and mount its real view.
-    fn apply_subagent_description(&mut self, value: &Value) -> bool {
+    pub(crate) fn apply_subagent_description(&mut self, value: &Value) -> bool {
         let row = match self.subagents.apply_description(value) {
             Ok(row) => row,
             Err(message) => {
@@ -5417,8 +5438,33 @@ impl App {
         false
     }
 
+    /// Send button click: exactly Enter's submit path, gated like the composer.
+    pub fn click_send(&mut self) -> bool {
+        if self.decision_owns_seat() {
+            return false;
+        }
+        if self.subagent_active()
+            && !self
+                .subagents
+                .mounted_gate()
+                .unwrap_or(ComposerGate::Resolving)
+                .can_send()
+        {
+            return false;
+        }
+        if self.edit_target.is_some() {
+            self.apply_queue_edit();
+        } else {
+            self.submit_draft(Delivery::Queue);
+        }
+        true
+    }
+
     fn click_at(&mut self, column: u16, row: u16) -> bool {
         let point = (column, row);
+        if self.send_area.contains(point.into()) {
+            return self.click_send();
+        }
         if self.subagent_active() && self.subagent_exit_area.contains(point.into()) {
             return self.leave_subagent();
         }
@@ -6364,46 +6410,80 @@ impl App {
         self.edit_target.as_deref()
     }
 
-    /// Bottom status: the resident working directory and permission/safety
-    /// fact, plus a transient hint. A failed controls read marks the retained
-    /// permission value as possibly stale.
-    pub fn status_line(&self) -> String {
+    /// Which activity message the row above the composer owns, if any.
+    pub fn activity_kind(&self) -> Option<ActivityKind> {
+        if !self.subagent_active() {
+            match self.decisions.top() {
+                Some(DecisionTop::Approval(_)) => return Some(ActivityKind::AwaitingApproval),
+                Some(DecisionTop::Question(card)) if card.state().interactive() => {
+                    return Some(ActivityKind::AwaitingQuestion);
+                }
+                _ => {}
+            }
+        }
+        if self.active_model().status() == ConversationStatus::Running {
+            Some(ActivityKind::Running)
+        } else {
+            None
+        }
+    }
+
+    /// Path shown in the header and at the right of the status bar: relative to
+    /// home when possible, otherwise the tail of a foreign path.
+    pub fn display_path(&self) -> String {
+        let path = self
+            .cli
+            .cwd
+            .clone()
+            .or_else(|| std::env::current_dir().ok());
+        let Some(path) = path else {
+            return ".".to_string();
+        };
+        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+            if let Ok(rest) = path.strip_prefix(&home) {
+                let rest = rest.to_string_lossy();
+                return if rest.is_empty() {
+                    "~".to_string()
+                } else {
+                    format!("~/{}", rest.trim_end_matches('/'))
+                };
+            }
+        }
+        path.file_name()
+            .map(|name| format!("…/{}", name.to_string_lossy()))
+            .unwrap_or_else(|| "…".to_string())
+    }
+
+    /// Left status-bar slot: the permission fact. In a child view the official
+    /// pin is the only honest permission statement.
+    pub fn status_permission(&self) -> String {
         if self.subagent_active() {
-            let hint = self.status_hint();
-            return format!("{} · 子代理（审批由官方拒绝） · {hint}", self.display_cwd());
+            return "权限：子代理审批由官方拒绝".to_string();
         }
         let stale = if self.controls.state_error().is_some() {
             "（可能过期）"
         } else {
             ""
         };
-        let hint = self.status_hint();
-        let base = format!(
-            "{} · 权限 {}{stale}",
-            self.display_cwd(),
-            self.controls.permission_label()
-        );
-        if hint.is_empty() {
-            base
-        } else {
-            format!("{base} · {hint}")
-        }
+        format!("权限：{}{stale}", self.controls.permission_label())
     }
 
-    /// Basename of the effective working directory.
-    pub fn display_cwd(&self) -> String {
-        self.cli
-            .cwd
-            .as_ref()
-            .and_then(|path| path.file_name())
-            .map(|name| name.to_string_lossy().to_string())
-            .or_else(|| {
-                std::env::current_dir().ok().and_then(|path| {
-                    path.file_name()
-                        .map(|name| name.to_string_lossy().to_string())
-                })
-            })
-            .unwrap_or_else(|| ".".to_string())
+    /// Middle status-bar slot: connection and turn transients, truncated
+    /// before either end slot when space is short.
+    pub fn status_transient(&self) -> String {
+        let connection = match &self.connection {
+            Connection::Ready => "",
+            Connection::Starting => "启动中",
+            Connection::Disconnected => "已断开",
+            Connection::Failed(_) => "连接失败",
+        };
+        let hint = self.status_hint();
+        match (connection.is_empty(), hint.is_empty()) {
+            (true, true) => String::new(),
+            (true, false) => hint,
+            (false, true) => connection.to_string(),
+            (false, false) => format!("{connection} · {hint}"),
+        }
     }
 
     /// Status-bar text.
@@ -6435,8 +6515,13 @@ impl App {
                 return "根会话有待处理审批；Esc 返回后处理".to_string();
             }
             if let Some(gate) = self.subagents.mounted_gate() {
-                return format!("子代理 · {}", gate.hint());
+                if !gate.can_send() {
+                    return format!("子代理 · {}", gate.hint());
+                }
             }
+            // The enabled child composer needs no resident shortcut string;
+            // its identity and state live in the header row.
+            return String::new();
         }
         if self.schedule.open {
             if let Some(busy) = &self.schedule.busy {
@@ -7016,6 +7101,25 @@ impl App {
         }
         if self.subagents.snapshot_due && !self.subagents_snapshot_pending {
             self.refresh_subagents();
+            changed = true;
+        }
+        let activity_active = self.activity_kind().is_some();
+        if activity_active && !self.reduced_motion {
+            match self.activity_at {
+                None => {
+                    self.activity_at = Some(now);
+                    self.activity_phase = false;
+                    changed = true;
+                }
+                Some(next) if now >= next => {
+                    self.activity_phase = !self.activity_phase;
+                    self.activity_at = Some(now + Duration::from_millis(500));
+                    changed = true;
+                }
+                Some(_) => {}
+            }
+        } else if self.activity_at.take().is_some() || self.activity_phase {
+            self.activity_phase = false;
             changed = true;
         }
         if self.subagents.any_running() && !self.reduced_motion {
@@ -8548,7 +8652,7 @@ mod tests {
         ));
         assert!(changed);
         assert_eq!(app.controls.permission_label(), "custom（非命名预设）");
-        assert!(app.status_line().contains("权限 custom"));
+        assert!(app.status_permission().contains("权限：custom"));
     }
 
     #[test]
@@ -8740,10 +8844,9 @@ mod tests {
     fn the_status_line_marks_a_failed_control_read_as_stale() {
         let mut app = controls_state(controls_state_value());
         app.controls.note_state_failure("projection unreadable");
-        let line = app.status_line();
-        assert!(line.contains("权限 workspace-write"));
+        let line = app.status_permission();
+        assert!(line.contains("权限：workspace-write"));
         assert!(line.contains("可能过期"));
-        assert!(line.starts_with(&app.display_cwd()));
     }
 
     #[test]
@@ -9877,8 +9980,8 @@ mod terminal_tests {
         assert!(hint.contains("子代理错误"));
         assert!(hint.contains("官方拒绝"));
         app.error = None;
-        let line = app.status_line();
-        assert!(line.contains("子代理（审批由官方拒绝）"));
+        let line = app.status_permission();
+        assert!(line.contains("子代理审批由官方拒绝"));
         assert!(!line.contains("workspace-write"));
     }
 
