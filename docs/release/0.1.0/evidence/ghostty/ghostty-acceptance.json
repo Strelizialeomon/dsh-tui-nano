@@ -15,44 +15,44 @@
       "detail": ""
     },
     {
-      "label": "dark 100 sessions panel captured",
+      "label": "dark 100 sessions panel rendered",
       "ok": true,
-      "detail": ""
+      "detail": "diff=0.03785800530517254"
     },
     {
-      "label": "dark 100 skills panel captured",
+      "label": "dark 100 skills panel rendered",
       "ok": true,
-      "detail": ""
+      "detail": "diff=0.0175546157503566"
     },
     {
-      "label": "dark 100 instructions panel captured",
+      "label": "dark 100 instructions panel rendered",
       "ok": true,
-      "detail": ""
+      "detail": "diff=0.020818344761142114"
     },
     {
-      "label": "dark 100 jobs panel captured",
+      "label": "dark 100 jobs panel rendered",
       "ok": true,
-      "detail": ""
+      "detail": "diff=0.021062723655564174"
     },
     {
-      "label": "dark 100 schedule panel captured",
+      "label": "dark 100 schedule panel rendered",
       "ok": true,
-      "detail": ""
+      "detail": "diff=0.0448773491654363"
     },
     {
-      "label": "dark 100 palette panel captured",
+      "label": "dark 100 palette panel rendered",
       "ok": true,
-      "detail": ""
+      "detail": "diff=0.036957908961237206"
     },
     {
-      "label": "CJK composer captured",
+      "label": "CJK composer rendered",
       "ok": true,
-      "detail": ""
+      "detail": "diff=0.007117486424263657"
     },
     {
-      "label": "model response captured",
+      "label": "model response rendered",
       "ok": true,
-      "detail": ""
+      "detail": "diff=0.07535745789644904"
     },
     {
       "label": "selection copy contains model response",
@@ -62,7 +62,7 @@
     {
       "label": "wheel changed the view",
       "ok": true,
-      "detail": "diff=0.03616064725607467"
+      "detail": "diff=0.0361618202747679"
     },
     {
       "label": "window closed after Ctrl+C",
@@ -85,9 +85,9 @@
       "detail": ""
     },
     {
-      "label": "light 60 sessions panel captured",
+      "label": "light 60 sessions panel rendered",
       "ok": true,
-      "detail": ""
+      "detail": "diff=0.06605202054417751"
     },
     {
       "label": "light window closed after Ctrl+C",
@@ -101,6 +101,16 @@
     },
     {
       "label": "fullscreen window closed after Ctrl+C",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "fullscreen 60 capture exists",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "fullscreen 60 window closed after Ctrl+C",
       "ok": true,
       "detail": ""
     },

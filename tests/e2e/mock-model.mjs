@@ -15,7 +15,7 @@ const EVENTS = [
 export function startMockModel() {
   let requests = 0
   const server = http.createServer((request, response) => {
-    requests += 1
+    if (request.method === 'POST' && request.url.includes('messages')) requests += 1
     request.resume()
     request.on('end', () => {
       const body = EVENTS.map(

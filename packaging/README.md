@@ -74,6 +74,6 @@ packaging/build-release.sh
 ## 首版边界
 
 - 只构建和验证 macOS arm64；其他架构需自行构建，不在支持矩阵内。
-- 只接受官方 dsh `0.2.1-rc.2`；未知版本由 Rust 预检和入口包装双重拒绝。
+- 只接受官方 dsh `0.2.1-rc.2`；未知版本由 Rust 预检拒绝，入口包装核对 Node 与桥接包版本。
 - 安装器不修改 `DSH_HOME` 下的凭据、全局指令、其他 profile 或 `storages/`。
-- 包装脚本每次启动核对桥接包版本；缺失或不符时给出可操作错误。
+- 包装脚本把安装时的 `--dsh-home` / `--data-root` / `--dsh-bin` 固化为 `DSH_HOME` / `NANO_DATA_ROOT` / `NANO_DSH`，每次启动核对桥接包版本；缺失或不符时给出可操作错误。

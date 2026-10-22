@@ -2,26 +2,29 @@
 {
   "name": "dsh-tui-nano",
   "version": "0.1.0",
-  "installedAt": "2026-10-22T03:38:07Z",
-  "installRoot": "/tmp/nano-s13-install-XSke13/install",
-  "target": "/tmp/nano-s13-install-XSke13/install/0.1.0",
-  "entrypoint": "/tmp/nano-s13-install-XSke13/bin/nano",
-  "dataRoot": "/tmp/nano-s13-install-XSke13/data",
-  "dshHome": "/tmp/nano-s13-install-XSke13/dsh-home",
+  "installedAt": "2026-10-22T03:58:18Z",
+  "installRoot": "/tmp/nano-s13-install-4zES1X/install",
+  "target": "/tmp/nano-s13-install-4zES1X/install/0.1.0",
+  "entrypoint": "/tmp/nano-s13-install-4zES1X/bin/nano",
+  "dataRoot": "/tmp/nano-s13-install-4zES1X/data",
+  "dshHome": "/tmp/nano-s13-install-4zES1X/dsh-home",
   "profile": "dsh-tui-nano",
-  "profileDir": "/tmp/nano-s13-install-XSke13/dsh-home/profiles/dsh-tui-nano",
+  "profileDir": "/tmp/nano-s13-install-4zES1X/dsh-home/profiles/dsh-tui-nano",
   "official": {
     "version": "0.2.1-rc.2",
     "source": "https://github.com/deepseek-ai/deepseek-harness/tree/687f282e8625c6b8d11ff58211a90524be2e4317"
   },
   "node": "v24.18.0",
   "bridgeVersion": "0.1.0",
-  "payloadSumsSha256": "26bbfbea4a166a96ebf8eba966796419f7c18fd6cc00f37d33f3fe64ddd4711b",
-  "replacedExistingFiles": 0
+  "payloadSumsSha256": "0664c93234daaf980a1b5a34af8a81c6bc7439468238f8fae612b3b7e0b5a5d1",
+  "payloadAction": "first-install",
+  "replacedExistingFiles": false
 }
 CHECK ok   entrypoint exists
 CHECK ok   receipt exists
 CHECK ok   profile composed
+CHECK ok   first install action
+CHECK ok   first install did not replace
 CHECK ok   data root is 0700
 CHECK ok   config and credentials untouched
 CHECK ok   other profile untouched
@@ -29,25 +32,34 @@ CHECK ok   other profile untouched
 {
   "name": "dsh-tui-nano",
   "version": "0.1.0",
-  "installedAt": "2026-10-22T03:38:08Z",
-  "installRoot": "/tmp/nano-s13-install-XSke13/install",
-  "target": "/tmp/nano-s13-install-XSke13/install/0.1.0",
-  "entrypoint": "/tmp/nano-s13-install-XSke13/bin/nano",
-  "dataRoot": "/tmp/nano-s13-install-XSke13/data",
-  "dshHome": "/tmp/nano-s13-install-XSke13/dsh-home",
+  "installedAt": "2026-10-22T03:58:19Z",
+  "installRoot": "/tmp/nano-s13-install-4zES1X/install",
+  "target": "/tmp/nano-s13-install-4zES1X/install/0.1.0",
+  "entrypoint": "/tmp/nano-s13-install-4zES1X/bin/nano",
+  "dataRoot": "/tmp/nano-s13-install-4zES1X/data",
+  "dshHome": "/tmp/nano-s13-install-4zES1X/dsh-home",
   "profile": "dsh-tui-nano",
-  "profileDir": "/tmp/nano-s13-install-XSke13/dsh-home/profiles/dsh-tui-nano",
+  "profileDir": "/tmp/nano-s13-install-4zES1X/dsh-home/profiles/dsh-tui-nano",
   "official": {
     "version": "0.2.1-rc.2",
     "source": "https://github.com/deepseek-ai/deepseek-harness/tree/687f282e8625c6b8d11ff58211a90524be2e4317"
   },
   "node": "v24.18.0",
   "bridgeVersion": "0.1.0",
-  "payloadSumsSha256": "26bbfbea4a166a96ebf8eba966796419f7c18fd6cc00f37d33f3fe64ddd4711b",
-  "replacedExistingFiles": 0
+  "payloadSumsSha256": "0664c93234daaf980a1b5a34af8a81c6bc7439468238f8fae612b3b7e0b5a5d1",
+  "payloadAction": "reused",
+  "replacedExistingFiles": false
 }
 CHECK ok   reinstall leaves config and credentials untouched
 CHECK ok   reinstall keeps entrypoint
+CHECK ok   reinstall action
+=== explicit path flags are frozen into the wrapper ===
+CHECK ok   alt entrypoint exists
+CHECK ok   wrapper exports DSH_HOME
+CHECK ok   wrapper exports NANO_DATA_ROOT
+CHECK ok   wrapper exports NANO_DSH
+CHECK ok   alt wrapper runs
+CHECK ok   alt entrypoint removed
 === version refusal ===
 install.sh: 官方 dsh 版本不符：当前 0.2.1-rc.1，需要 0.2.1-rc.2。请安装精确版本后重试：npm install -g @deepseek-ai/dsh@0.2.1-rc.2
 CHECK ok   version mismatch exits non-zero
@@ -58,14 +70,14 @@ nano: could not spawn the host: unsupported official dsh version 0.2.1-rc.1
 CHECK ok   startup refuses an unknown official version
 CHECK ok   startup exit is non-zero
 === uninstall (default) ===
-{"removedEntrypoint":1,"removedInstallRoot":1,"removedProfile":0,"removedDataRoot":0,"retainedDataRoot":"/tmp/nano-s13-install-XSke13/data","retainedDshHome":"/tmp/nano-s13-install-XSke13/dsh-home"}
+{"removedEntrypoint":1,"removedInstallRoot":1,"removedProfile":0,"removedDataRoot":0,"retainedDataRoot":"/tmp/nano-s13-install-4zES1X/data","retainedProfile":"/tmp/nano-s13-install-4zES1X/dsh-home/profiles/dsh-tui-nano","retainedDshHome":"/tmp/nano-s13-install-4zES1X/dsh-home"}
 CHECK ok   entrypoint removed
 CHECK ok   install root removed
 CHECK ok   data root retained
 CHECK ok   profile retained by default
 CHECK ok   config and credentials retained
 === uninstall (explicit profile and data removal) ===
-{"removedEntrypoint":0,"removedInstallRoot":0,"removedProfile":1,"removedDataRoot":1,"retainedDataRoot":"/tmp/nano-s13-install-XSke13/data","retainedDshHome":"/tmp/nano-s13-install-XSke13/dsh-home"}
+{"removedEntrypoint":0,"removedInstallRoot":0,"removedProfile":1,"removedDataRoot":1,"retainedDataRoot":null,"retainedProfile":null,"retainedDshHome":"/tmp/nano-s13-install-4zES1X/dsh-home"}
 CHECK ok   profile removed explicitly
 CHECK ok   data root removed explicitly
 CHECK ok   other profile still retained

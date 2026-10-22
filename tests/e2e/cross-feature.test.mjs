@@ -29,10 +29,17 @@ import { startMockModel } from './mock-model.mjs'
 const skip = process.env.NANO_E2E !== '1' ? 'set NANO_E2E=1' : false
 
 function setup(root, t) {
+  const home = path.join(root, 'home')
   const dshHome = path.join(root, 'dsh-home')
   const dataRoot = path.join(root, 'data')
   const work = path.join(root, 'work')
+  fs.mkdirSync(home, { recursive: true })
   fs.mkdirSync(work, { recursive: true })
+  // Keep pnpm/npm caches inside the synthetic root as well.
+  process.env.HOME = home
+  process.env.XDG_CACHE_HOME = path.join(home, '.cache')
+  process.env.XDG_DATA_HOME = path.join(home, '.local', 'share')
+  process.env.XDG_STATE_HOME = path.join(home, '.local', 'state')
   installProfile({ dshHome, dataRoot })
   const hosts = []
   t.after(() => {
@@ -45,9 +52,7 @@ function setup(root, t) {
 }
 
 async function start(options, hosts) {
-  const host = await boot(options)
-  hosts.push(host.host)
-  return host
+  return await boot(options, (host) => hosts.push(host))
 }
 
 async function cleanStop(host, label) {
@@ -141,6 +146,88 @@ test(
 )
 
 test(
+  'two live windows with different roots do not terminate each other',
+  { skip, timeout: 300_000 },
+  async (t) => {
+    const root = tempRoot()
+    const { dshHome, dataRoot, work, hosts } = setup(root, t)
+    const workA = path.join(root, 'work-a')
+    const workB = path.join(root, 'work-b')
+    fs.mkdirSync(workA, { recursive: true })
+    fs.mkdirSync(workB, { recursive: true })
+    const sessionA = `session-${randomUUID()}`
+    const sessionB = `session-${randomUUID()}`
+
+    const [a, b] = await Promise.all([
+      start(
+        {
+          dshHome,
+          work: workA,
+          patchPath: writePatch({
+            root,
+            dataRoot,
+            sessionId: sessionA,
+            runtimeId: `rt-${randomUUID()}`,
+            work: workA,
+            mode: 'create',
+            generation: 1,
+          }),
+        },
+        hosts,
+      ),
+      start(
+        {
+          dshHome,
+          work: workB,
+          patchPath: writePatch({
+            root,
+            dataRoot,
+            sessionId: sessionB,
+            runtimeId: `rt-${randomUUID()}`,
+            work: workB,
+            mode: 'create',
+            generation: 1,
+          }),
+        },
+        hosts,
+      ),
+    ])
+    assert.equal(a.hello.method, 'nano.hello', JSON.stringify(a.hello))
+    assert.equal(b.hello.method, 'nano.hello', JSON.stringify(b.hello))
+    assert.notEqual(a.hello.params.rootSessionId, b.hello.params.rootSessionId)
+
+    const createdA = await a.host.call('nano.schedule.create', {
+      address: address(sessionA),
+      request: { title: '窗口 A', prompt: 'A', after_seconds: 3600 },
+    })
+    const createdB = await b.host.call('nano.schedule.create', {
+      address: address(sessionB),
+      request: { title: '窗口 B', prompt: 'B', after_seconds: 3600 },
+    })
+    assert.ok(createdA.result.record.id, JSON.stringify(createdA))
+    assert.ok(createdB.result.record.id, JSON.stringify(createdB))
+
+    // Closing window A must leave window B alive and serving its own root.
+    await cleanStop(a.host, 'window-a')
+    const listB = await b.host.call('nano.schedule.list', {
+      address: address(sessionB),
+    })
+    assert.deepEqual(
+      listB.result.records.map((record) => record.title),
+      ['窗口 B'],
+    )
+    await cleanStop(b.host, 'window-b')
+
+    for (const sessionId of [sessionA, sessionB]) {
+      assert.ok(
+        fs.existsSync(path.join(dataRoot, 'runtime-data', sessionId, 'storage')),
+        `missing storage partition for ${sessionId}`,
+      )
+    }
+  },
+)
+
+test(
   'transcripts and schedule tables do not cross root sessions',
   { skip, timeout: 300_000 },
   async (t) => {
@@ -212,10 +299,20 @@ test(
 
     await runRoot({ sessionId: sessionA, marker: markerA, title: '任务 A', generation: 1 })
     await runRoot({ sessionId: sessionB, marker: markerB, title: '任务 B', generation: 1 })
+    const logs = sessionLogs(dataRoot)
     assert.ok(mock.requests() >= 2, 'the real conversation path did not reach the local model')
+    for (const [sessionId, marker] of [
+      [sessionA, markerA],
+      [sessionB, markerB],
+    ]) {
+      const markerFiles = logs.filter((file) => fileContains(file, marker))
+      assert.ok(
+        markerFiles.some((file) => fileContains(file, 'S13-MOCK-OK')),
+        `root ${sessionId} has no durable assistant response`,
+      )
+    }
 
     // Durable transcripts: each marker appears only in its own root's log.
-    const logs = sessionLogs(dataRoot)
     const withA = logs.filter((file) => fileContains(file, markerA))
     const withB = logs.filter((file) => fileContains(file, markerB))
     assert.ok(withA.length > 0, `no durable transcript contains ${markerA}`)

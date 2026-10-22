@@ -1,12 +1,12 @@
-capturedAt: 2026-10-22T03:38:33Z
+capturedAt: 2026-10-22T03:58:11Z
 artifact: dsh-tui-nano-0.1.0-arm64.tar.gz
-artifactSha256: b7c0579bb132772fd38cde8e346dba98c34b0bdc448d4c39aa1b93eb5811577c
+artifactSha256: 0fe241b06683cb7ec174a9de34f2d71685296e2d4f7a99a7a023e2e2fcb837f3
 binarySha256: 8eecddd54a9bf36baf11d0201afb8e86f8543653a37e0ac8d6c668f5e3a1af97
-payloadSumsSha256: 26bbfbea4a166a96ebf8eba966796419f7c18fd6cc00f37d33f3fe64ddd4711b
+payloadSumsSha256: 0664c93234daaf980a1b5a34af8a81c6bc7439468238f8fae612b3b7e0b5a5d1
 officialVersion: 0.2.1-rc.2
 officialSource: https://github.com/deepseek-ai/deepseek-harness/tree/687f282e8625c6b8d11ff58211a90524be2e4317
 officialSourceCommit: 687f282e8625c6b8d11ff58211a90524be2e4317
-sourceCommit: 2bf63df532a9dd808e09269852a7be3fba375af6
+sourceCommit: e25138354c6f8adf80794aba87e95149db1e7861
 node: v24.18.0
 rust: rustc 1.99.1 (58cf8f9c3 2026-10-13)
 ghostty: Ghostty 1.3.1

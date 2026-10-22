@@ -2,6 +2,8 @@
 
 这些测试只属于发布验收，不替代各子件的单元/契约测试。全部使用合成 HOME / DSH_HOME / 数据根；不读写用户真实凭据或会话。
 
+前置：`zstd` CLI（官方会话日志是多帧 zstd，Node 内置 zstd 只解第一帧）、Pillow（Ghostty 截图差分）。
+
 ## 真实宿主跨功能
 
 ```sh
@@ -25,7 +27,7 @@ python3 tests/e2e/ghostty-acceptance.py \
 
 前置：macOS 辅助功能权限（System Events 发键）与屏幕录制权限（窗口级截图）、Ghostty 1.3.1、已构建的 payload。
 
-脚本只截取本次运行拥有的窗口（`screencapture -l`），截图前把窗口尺寸固定为 100/60 列；模型响应来自本地 mock，不产生费用。截图写入 `docs/release/<version>/evidence/ghostty/`。
+脚本只截取本次运行拥有的窗口（`screencapture -l`），截图前把窗口尺寸固定为 100/60 列；模型响应来自本地 mock，不产生费用。截图写入 `docs/release/<version>/evidence/ghostty/`。运行前会保存用户剪贴板，结束时恢复；若无法把目标窗口置前，脚本直接中止，不会把按键发给前台应用。
 
 ## 边界
 

@@ -19,10 +19,15 @@
 ```sh
 ./packaging/build-release.sh
 ./packaging/verify-install.sh --payload packaging/dist/dsh-tui-nano-0.1.0-arm64
-NANO_E2E=1 node --test tests/e2e/cross-feature.test.mjs
+NANO_BRIDGE_PACKAGE="$PWD/packaging/dist/dsh-tui-nano-0.1.0-arm64/lib/bridge" \
+  NANO_E2E=1 node --test tests/e2e/cross-feature.test.mjs
+cargo test -p nano-runtime --test integration -- --ignored --test-threads=1 \
+  --skip shutdown_budget_is_bounded_when_cleanup_hangs
 python3 tests/e2e/ghostty-acceptance.py --payload packaging/dist/dsh-tui-nano-0.1.0-arm64
 cargo test --workspace
 npm run test:bridge
 ```
+
+前置：`zstd` CLI（读取多帧会话日志）、Pillow（截图差分）、Ghostty 与 macOS 辅助功能/屏幕录制权限。`NANO_BRIDGE_PACKAGE` 让跨功能测试使用发布 payload 而不是仓库源码。
 
 Ghostty 验收需要 macOS 辅助功能权限（System Events）与屏幕录制权限（仅窗口级截图）。所有截图来自合成 HOME/workdir；不采集用户真实桌面。

@@ -27,6 +27,11 @@ import time
 import warnings
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+try:
+    from PIL import Image, ImageChops
+except ImportError:
+    sys.exit("ghostty-acceptance: Pillow is required (pip install pillow)")
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -120,7 +125,11 @@ def osa_keystroke(char, modifiers=""):
 
 
 def focus(title):
-    applescript(RAISE_SCRIPT, title)
+    result = applescript(RAISE_SCRIPT, title)
+    if result.returncode != 0 or not result.stdout.strip():
+        raise RuntimeError(
+            f"could not focus Ghostty window {title!r}: {result.stderr.strip() or 'not found'}"
+        )
     time.sleep(0.2)
 
 
@@ -134,7 +143,13 @@ def send_char(title, char, modifiers=""):
     osa_keystroke(char, modifiers)
 
 
+ORIGINAL_CLIPBOARD = None
+
+
 def paste_text(title, text):
+    global ORIGINAL_CLIPBOARD
+    if ORIGINAL_CLIPBOARD is None:
+        ORIGINAL_CLIPBOARD = subprocess.run(["pbpaste"], capture_output=True).stdout
     focus(title)
     subprocess.run(["pbcopy"], input=text.encode(), check=True)
     osa_keystroke("v", "command")
@@ -155,7 +170,7 @@ def wait_for_window(title, timeout=30):
         result = run([str(LIST_WINDOWS)])
         for line in result.stdout.splitlines():
             fields = line.split("\t")
-            if len(fields) >= 5 and fields[3] == title:
+            if len(fields) >= 5 and fields[2] == "Ghostty" and fields[3] == title:
                 return int(fields[0])
         time.sleep(0.25)
     raise RuntimeError(f"Ghostty window {title!r} did not appear")
@@ -165,7 +180,11 @@ def wait_for_window_gone(title, timeout=20):
     deadline = time.time() + timeout
     while time.time() < deadline:
         result = run([str(LIST_WINDOWS)])
-        if not any(line.split("\t")[3:4] == [title] for line in result.stdout.splitlines()):
+        if not any(
+            line.split("\t")[2:4] == ["Ghostty", title]
+            for line in result.stdout.splitlines()
+            if len(line.split("\t")) >= 5
+        ):
             return True
         time.sleep(0.25)
     return False
@@ -219,8 +238,11 @@ def launch(title, run_script, cols, rows, theme, fullscreen=False, font_size=Non
     if fullscreen:
         args.append("--fullscreen=true")
     run(args, check=True)
+    for pid in ghostty_pids() - before:
+        command = run(["ps", "-o", "command=", "-p", str(pid)]).stdout
+        if f"--title={title}" in command:
+            SPAWNED_GHOSTTY.add(pid)
     wait_for_window(title)
-    SPAWNED_GHOSTTY.update(ghostty_pids() - before)
     # Give the host handshake and first draw time to settle.
     time.sleep(6)
     applescript(RAISE_SCRIPT, title)
@@ -257,10 +279,6 @@ if let list = CGWindowListCopyWindowInfo([.optionIncludingWindow], id) as? [[Str
 
 
 def png_diff(a, b):
-    try:
-        from PIL import Image, ImageChops
-    except ImportError:
-        return None
     left = Image.open(a).convert("RGB")
     right = Image.open(b).convert("RGB")
     if left.size != right.size:
@@ -374,7 +392,8 @@ if let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: An
             time.sleep(1.2)
             path = out / f"02-dark-100-{name}.png"
             capture(title, path)
-            check(f"dark 100 {name} panel captured", path.exists())
+            panel_diff = png_diff(main_dark, path) if path.exists() else 0.0
+            check(f"dark 100 {name} panel rendered", panel_diff > 0.001, f"diff={panel_diff}")
             send_key(title, KEY_CODES["esc"])
             time.sleep(0.8)
 
@@ -383,12 +402,14 @@ if let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: An
         time.sleep(1.0)
         cjk = out / "03-dark-100-cjk-input.png"
         capture(title, cjk)
-        check("CJK composer captured", cjk.exists())
+        cjk_diff = png_diff(main_dark, cjk) if cjk.exists() else 0.0
+        check("CJK composer rendered", cjk_diff > 0.001, f"diff={cjk_diff}")
         send_key(title, KEY_CODES["return"])
         time.sleep(4)
         response = out / "04-dark-100-response.png"
         capture(title, response)
-        check("model response captured", response.exists())
+        response_diff = png_diff(cjk, response) if response.exists() else 0.0
+        check("model response rendered", response_diff > 0.001, f"diff={response_diff}")
 
         # Ghostty selection copy: Cmd+A then Cmd+C, verify the clipboard.
         send_char(title, "a", "command")
@@ -422,7 +443,7 @@ if let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: An
         # Clean exit with Ctrl+C.
         check("window closed after Ctrl+C", quit_window(title), "")
         time.sleep(1)
-        leftover = run(["pgrep", "-f", str(ROOT / "install/current/bin/nano")]).stdout.strip()
+        leftover = run(["pgrep", "-f", str(ROOT / "install/")]).stdout.strip()
         check("no nano process remains", leftover == "", leftover)
         stderr = (ROOT / "nano.stderr.log").read_text() if (ROOT / "nano.stderr.log").exists() else ""
         check("no shutdown error on stderr", "shutdown was not clean" not in stderr, stderr[-200:])
@@ -437,17 +458,34 @@ if let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: An
         time.sleep(1.2)
         light_panel = out / "08-light-60-sessions.png"
         capture(light_title, light_panel)
-        check("light 60 sessions panel captured", light_panel.exists())
+        light_panel_diff = png_diff(light_main, light_panel) if light_panel.exists() else 0.0
+        check("light 60 sessions panel rendered", light_panel_diff > 0.001, f"diff={light_panel_diff}")
         send_key(light_title, KEY_CODES["esc"])
         check("light window closed after Ctrl+C", quit_window(light_title), "")
 
         # --- Fullscreen dark, 100 columns (font sized to keep ~100 columns). ---
         full_title = "nano-s13-fullscreen"
-        launch(full_title, write_run_script("fullscreen"), COLS, ROWS, DARK, fullscreen=True, font_size=15)
+        launch(full_title, write_run_script("fullscreen"), COLS, ROWS, DARK, fullscreen=True, font_size=27)
         full = out / "09-dark-fullscreen.png"
         capture(full_title, full)
-        check("fullscreen capture exists", full.exists())
+        check("fullscreen capture exists", full.exists() and full.stat().st_size > 0)
         check("fullscreen window closed after Ctrl+C", quit_window(full_title), "")
+
+        # --- Fullscreen at a narrower grid (60 columns via a larger font). ---
+        full60_title = "nano-s13-fullscreen-60"
+        launch(
+            full60_title,
+            write_run_script("fullscreen60"),
+            LIGHT_COLS,
+            LIGHT_ROWS,
+            DARK,
+            fullscreen=True,
+            font_size=45,
+        )
+        full60 = out / "09b-dark-fullscreen-60.png"
+        capture(full60_title, full60)
+        check("fullscreen 60 capture exists", full60.exists() and full60.stat().st_size > 0)
+        check("fullscreen 60 window closed after Ctrl+C", quit_window(full60_title), "")
 
         # --- Reduced motion: launch and confirm it draws; motion itself is unit-tested. ---
         rm_title = "nano-s13-reduced-motion"
@@ -461,6 +499,8 @@ if let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: An
         # Best-effort cleanup of any window this run left behind.
         for title in ("nano-s13-dark-100", "nano-s13-light-60", "nano-s13-fullscreen", "nano-s13-reduced-motion"):
             run(["osascript", "-e", RAISE_SCRIPT, title])
+        if ORIGINAL_CLIPBOARD is not None:
+            subprocess.run(["pbcopy"], input=ORIGINAL_CLIPBOARD)
         for pid in SPAWNED_GHOSTTY:
             try:
                 os.kill(pid, signal.SIGTERM)

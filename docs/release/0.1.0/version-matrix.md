@@ -33,8 +33,8 @@
 | 文件 | SHA-256 |
 | --- | --- |
 | `bin/nano` | `8eecddd54a9bf36baf11d0201afb8e86f8543653a37e0ac8d6c668f5e3a1af97` |
-| `dsh-tui-nano-0.1.0-arm64.tar.gz` | `b7c0579bb132772fd38cde8e346dba98c34b0bdc448d4c39aa1b93eb5811577c` |
-| `SHA256SUMS` | 见安装凭据 `payloadSumsSha256`（证据目录 `install.json`） |
+| `dsh-tui-nano-0.1.0-arm64.tar.gz` | `0fe241b06683cb7ec174a9de34f2d71685296e2d4f7a99a7a023e2e2fcb837f3` |
+| `SHA256SUMS` | 见安装凭据 `payloadSumsSha256`（`evidence/ghostty/install.json`） |
 
 产物哈希在最终构建后重新生成；若脚本或源码变更，必须重新构建并更新本表，不能沿用旧哈希。
 

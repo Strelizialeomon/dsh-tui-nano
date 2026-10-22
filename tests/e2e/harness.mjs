@@ -53,6 +53,7 @@ export function writePatch({
   nonce = `nonce-${randomUUID()}`,
   askUserMode = 'blocking',
   route = 'nano-schedule-json',
+  probeRoute = 'nano-schedule-json',
   provider = 'deepseek-official',
   model = 'deepseek-flash',
 }) {
@@ -70,7 +71,7 @@ export function writePatch({
         id: 'storage-domain',
         config: {
           backend: 'json',
-          routes: { schedule: route, nano_probe: route },
+          routes: { schedule: route, nano_probe: probeRoute },
         },
       },
       {
@@ -192,8 +193,9 @@ export function startHost({ dshHome, patchPath, work, env = {} }) {
   return state
 }
 
-export async function boot(options) {
+export async function boot(options, onSpawn) {
   const host = startHost(options)
+  onSpawn?.(host)
   const hello = await host.waitFor(
     (frame) => frame.method === 'nano.hello' || frame.method === 'nano.startupError',
     90_000,
@@ -226,7 +228,10 @@ function readLog(file) {
   // after the first frame, so prefer the CLI and fall back to Node.
   try {
     return execFileSync('zstd', ['-dc', file], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
-  } catch {
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      throw new Error('zstd CLI is required to read multi-frame official session logs')
+    }
     return zstdDecompressSync(fs.readFileSync(file)).toString('utf8')
   }
 }
