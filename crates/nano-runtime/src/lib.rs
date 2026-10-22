@@ -15,7 +15,10 @@ pub mod protocol_error;
 pub use host::{Host, HostEvent, HostOptions, PendingRequest, SessionMode, ShutdownOutcome};
 pub use lifecycle::{Lifecycle, LifecycleState};
 pub use paths::{Preflight, RuntimePaths};
-pub use protocol::{Capability, CapabilityStatus, Hello, ProtocolVersion, RpcError};
+pub use protocol::{
+    Capability, CapabilityStatus, ConfigSource, CredentialSource, Hello, ProtocolVersion,
+    Provenance, RpcError,
+};
 pub use protocol_error::{HostError, ProtocolError};
 
 /// Wire protocol major version implemented by this crate.

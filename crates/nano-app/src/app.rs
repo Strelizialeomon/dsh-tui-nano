@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver};
 use std::time::{Duration, Instant};
 
@@ -25,7 +25,7 @@ use nano_decisions::{
 };
 use nano_jobs::{BashRecord, JobsModel, SHELL_NOTICE};
 use nano_monitor::MonitorModel;
-use nano_runtime::{CapabilityStatus, Hello, SessionMode};
+use nano_runtime::{CapabilityStatus, Hello, Provenance, SessionMode};
 use nano_schedule::{ScheduleAction, ScheduleModel};
 use nano_sessions::{
     CompactionOutcome, ContextMeter, RenameOutcome, SessionSummary, SwitchMachine, SwitchTarget,
@@ -517,6 +517,14 @@ pub struct App {
     pub should_quit: bool,
     /// Handshake facts, once ready.
     pub hello: Option<Hello>,
+    /// Source labels reported by the host at handshake (B5).
+    pub provenance: Option<Provenance>,
+    /// Existing instruction files the first request will load (B5).
+    pub instruction_candidates: Vec<String>,
+    /// Whether the first-launch sources panel owns the main view.
+    pub sources_visible: bool,
+    /// The sources panel is offered once per process.
+    sources_shown: bool,
     /// Whether the replay window omitted older durable events.
     pub replay_truncated: bool,
     /// A stop was admitted but the official idle fact has not arrived yet.
@@ -730,6 +738,10 @@ impl App {
             mouse_dragged: false,
             should_quit: false,
             hello: None,
+            provenance: None,
+            instruction_candidates: Vec::new(),
+            sources_visible: false,
+            sources_shown: false,
             replay_truncated,
             stop_pending: false,
             resubscribe_at: None,
@@ -1755,6 +1767,16 @@ impl App {
             self.should_quit = true;
             return true;
         }
+        if self.sources_visible {
+            if matches!(key.code, KeyCode::Enter | KeyCode::Esc) {
+                self.sources_visible = false;
+                return true;
+            }
+            // Keep the first-launch sources on screen until the user closes
+            // them; every other key is ignored rather than editing a draft
+            // behind a panel the user cannot see.
+            return false;
+        }
         // After a failed switch this window has no host. The retry and back
         // entries stay reachable even though no session is connected.
         if self.switch.state().failed() {
@@ -2164,6 +2186,13 @@ impl App {
                     capability_supported(&hello, "commands"),
                 );
                 self.claim_controls_commands();
+                self.provenance = hello.provenance.clone();
+                self.instruction_candidates =
+                    instruction_candidates(&hello.cwd, self.cli.dsh_home.as_deref());
+                if !self.sources_shown && self.provenance.is_some() {
+                    self.sources_visible = true;
+                    self.sources_shown = true;
+                }
                 self.hello = Some(hello);
                 self.schedule_unsupported = match self
                     .hello
@@ -7350,6 +7379,80 @@ fn text_input_event(key: &KeyEvent) -> Option<InputEvent> {
 }
 
 /// Whether the handshake reports one official capability as usable now.
+/// Existing instruction files that the official baseline will consider on the
+/// first request. This mirrors the default `agent-instructions` candidate set
+/// (user-global `AGENTS.md`, then the project chain) without reading content;
+/// it answers "where will the rules come from" at first launch, and the
+/// authoritative snapshot replaces it once the first turn loads.
+fn instruction_candidates(cwd: &str, dsh_home: Option<&Path>) -> Vec<String> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let dsh_home = dsh_home
+        .map(Path::to_path_buf)
+        .or_else(|| std::env::var_os("DSH_HOME").map(PathBuf::from))
+        .or_else(|| home.as_ref().map(|home| home.join(".dsh")));
+    let agents_home = std::env::var_os("DSH_AGENTS_HOME")
+        .map(PathBuf::from)
+        .or_else(|| home.as_ref().map(|home| home.join(".agents")));
+    collect_instruction_candidates(Path::new(cwd), dsh_home.as_deref(), agents_home.as_deref())
+}
+
+fn collect_instruction_candidates(
+    cwd: &Path,
+    dsh_home: Option<&Path>,
+    agents_home: Option<&Path>,
+) -> Vec<String> {
+    let mut candidates = Vec::new();
+    if let Some(path) = dsh_home.map(|home| home.join("AGENTS.md")) {
+        push_existing_file(&mut candidates, path);
+    }
+    if let Some(path) = agents_home.map(|home| home.join("AGENTS.md")) {
+        push_existing_file(&mut candidates, path);
+    }
+    let root = project_root(cwd);
+    let mut chain = Vec::new();
+    let mut current = Some(cwd);
+    while let Some(directory) = current {
+        chain.push(directory.to_path_buf());
+        if directory == root {
+            break;
+        }
+        current = directory.parent();
+    }
+    for directory in chain.into_iter().rev() {
+        for name in [
+            "AGENTS.md",
+            "CLAUDE.md",
+            "AGENTS.local.md",
+            "CLAUDE.local.md",
+        ] {
+            push_existing_file(&mut candidates, directory.join(name));
+        }
+    }
+    candidates
+        .into_iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect()
+}
+
+fn project_root(cwd: &Path) -> PathBuf {
+    let mut current = cwd;
+    loop {
+        if current.join(".git").exists() {
+            return current.to_path_buf();
+        }
+        match current.parent() {
+            Some(parent) => current = parent,
+            None => return cwd.to_path_buf(),
+        }
+    }
+}
+
+fn push_existing_file(candidates: &mut Vec<PathBuf>, path: PathBuf) {
+    if path.is_file() {
+        candidates.push(path);
+    }
+}
+
 fn capability_supported(hello: &Hello, name: &str) -> bool {
     hello
         .capabilities
@@ -7484,6 +7587,7 @@ mod tests {
                 max_chunk_bytes: 49_152,
                 file_admission: "verbatim".into(),
             }),
+            provenance: None,
         }
     }
 
@@ -7503,6 +7607,79 @@ mod tests {
             );
         }
         hello
+    }
+
+    #[test]
+    fn instruction_candidates_list_global_then_project_files() {
+        let root = std::env::temp_dir().join(format!("nano-b5-candidates-{}", std::process::id()));
+        let dsh = root.join("dsh");
+        let agents = root.join("agents");
+        let project = root.join("project");
+        let work = project.join("crates").join("app");
+        let git_marker = project.join(".git");
+        for directory in [&dsh, &agents, &work, &git_marker] {
+            std::fs::create_dir_all(directory).expect("create test directory");
+        }
+        for file in [
+            dsh.join("AGENTS.md"),
+            agents.join("AGENTS.md"),
+            project.join("AGENTS.md"),
+            work.join("CLAUDE.md"),
+        ] {
+            std::fs::write(&file, "test").expect("write instruction file");
+        }
+        let found = collect_instruction_candidates(&work, Some(&dsh), Some(&agents));
+        let expected: Vec<String> = [
+            dsh.join("AGENTS.md"),
+            agents.join("AGENTS.md"),
+            project.join("AGENTS.md"),
+            work.join("CLAUDE.md"),
+        ]
+        .iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect();
+        assert_eq!(found, expected);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_hello_with_provenance_opens_the_sources_panel_once() {
+        let mut app = app();
+        let mut hello = hello_with_attachments(0);
+        hello.provenance = Some(Provenance {
+            config: Some(nano_runtime::ConfigSource {
+                path: "/tmp/profile/cordis.patch.yml".into(),
+            }),
+            credentials: Some(nano_runtime::CredentialSource {
+                reference: "DEEPSEEK_API_KEY".into(),
+                configured: true,
+                source: Some("env".into()),
+            }),
+        });
+        assert!(app.handle_link(LinkEvent::Ready {
+            hello: hello.clone(),
+            truncated: false,
+        }));
+        assert!(app.sources_visible);
+        assert_eq!(
+            app.provenance
+                .as_ref()
+                .and_then(|provenance| provenance.config.as_ref())
+                .map(|config| config.path.as_str()),
+            Some("/tmp/profile/cordis.patch.yml")
+        );
+
+        assert!(app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
+        assert!(!app.sources_visible);
+
+        app.handle_link(LinkEvent::Ready {
+            hello,
+            truncated: false,
+        });
+        assert!(
+            !app.sources_visible,
+            "the panel is offered once per process"
+        );
     }
 
     /// One official job projection with retained output bytes.

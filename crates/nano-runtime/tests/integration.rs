@@ -238,6 +238,15 @@ fn handshake_subscribe_shutdown_roundtrip() {
         hello.capabilities["approval"].status,
         CapabilityStatus::Supported
     );
+    let provenance = hello.provenance.as_ref().expect("source labels");
+    let config = provenance.config.as_ref().expect("profile patch path");
+    assert!(
+        config.path.ends_with("cordis.patch.yml"),
+        "unexpected profile patch: {}",
+        config.path
+    );
+    let credentials = provenance.credentials.as_ref().expect("credential source");
+    assert_eq!(credentials.reference, "DEEPSEEK_API_KEY");
     assert_eq!(
         hello.capabilities["userQuestions"].status,
         CapabilityStatus::Supported
