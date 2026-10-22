@@ -51,7 +51,7 @@
 
 - **Rust** owns terminal interaction, reading, input, and rendering.
 - **A thin TypeScript bridge** runs inside the official profile and translates public APIs into a versioned protocol.
-- The two sides exchange NDJSON over fd 3/4, so upstream changes mostly hit the bridge instead of being scattered across the UI.
+- The two sides exchange a versioned local protocol, so upstream changes mostly hit the bridge instead of being scattered across the UI.
 
 The design goals are simple: **reading first, low decoration, and no invented facts**. Sessions, permissions, models, and tool results always belong to the official DSH; nano only displays receipts and state. nano is an independent rewrite and does not inherit the old dsh-TUI fork's implementation or Git history.
 
@@ -64,7 +64,7 @@ The design goals are simple: **reading first, low decoration, and no invented fa
 - **Sessions and control**: session list / resume / rename, context pressure, `/compact`, schedules, subagents.
 - **Models and permissions**: `/model` for model and reasoning effort, `/permission` for presets, `Ctrl+P` for the command palette.
 
-Features are implemented per specs S01–S12. The first visual-alignment batch is merged; the second batch is pending. Version 0.1.0 has not been released.
+Features are implemented per the specs. The first visual-alignment batch is merged; the second batch is pending. Version 0.1.0 has not been released.
 
 ## Requirements
 
@@ -137,7 +137,7 @@ See [`packaging/README.md`](packaging/README.md) for packaging details. The 0.1.
 
 | Item | Status |
 | --- | --- |
-| Feature components S01–S12 (conversation, reading, attachments, skills, sessions, Shell / jobs, terminal, schedules, Monitor, subagents) | Implemented |
+| Feature components S01–S12 | Implemented |
 | Visual alignment | First batch merged; second batch pending (light diff, questionnaire / approval cards, etc.) |
 | 0.1.0 release | **Unreleased**; release acceptance still has open items |
 | Platform | Only macOS arm64 + Ghostty verified; release acceptance uses fullscreen |
