@@ -82,9 +82,17 @@ export function buildCapabilities(ctx, config, facts = {}) {
   capabilities.schedule = facts.schedule === true
     ? { status: 'supported', detail: '官方 schedule 服务已按根会话隔离挂载' }
     : { status: 'unsupported', detail: 'the schedule backend is not mounted' }
+  // S10 observes the official job registry and delivers through the official
+  // Agent followup/inject surface. It owns no process and no second output.
   capabilities.monitor = {
-    status: 'unsupported',
-    detail: 'the Monitor backend belongs to S10',
+    status:
+      ctx.get('jobs') !== undefined && ctx.get('agents') !== undefined
+        ? 'supported'
+        : 'unsupported',
+    detail:
+      ctx.get('jobs') !== undefined && ctx.get('agents') !== undefined
+        ? 'bounded job-output observation; followup/inject delivery'
+        : 'the official job registry or Agent service is not composed',
   }
 
   // S05 reads the official registry; when the registry row is absent the

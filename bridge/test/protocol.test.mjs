@@ -34,7 +34,7 @@ test('implemented methods match the contract', () => {
   assert.deepEqual([...IMPLEMENTED_METHODS].sort(), [...CONTRACT_IMPLEMENTED.keys()].sort())
   for (const [name, method] of CONTRACT_IMPLEMENTED) {
     assert.ok(
-      ['S01', 'S02', 'S03', 'S04', 'S05', 'S06', 'S07', 'S08', 'S09', 'S11'].includes(method.owner),
+      ['S01', 'S02', 'S03', 'S04', 'S05', 'S06', 'S07', 'S08', 'S09', 'S10', 'S11'].includes(method.owner),
       `${name} owner`,
     )
     if (method.kind === 'request') {
@@ -92,6 +92,11 @@ test('limits and error codes match the contract', () => {
   assert.equal(ERROR_CODES.get('nano/decisions/answer-invalid'), 1046)
   assert.equal(ERROR_CODES.get('nano/decisions/reply-queued'), 1047)
   assert.equal(ERROR_CODES.get('nano/decisions/answer-failed'), 1048)
+  assert.equal(ERROR_CODES.get('nano/monitor/unavailable'), 1057)
+  assert.equal(ERROR_CODES.get('nano/monitor/not-found'), 1058)
+  assert.equal(ERROR_CODES.get('nano/monitor/filter-invalid'), 1059)
+  assert.equal(ERROR_CODES.get('nano/monitor/budget-invalid'), 1060)
+  assert.equal(ERROR_CODES.get('nano/monitor/limit-reached'), 1061)
 })
 
 test('lifecycle edges are exactly the contract table', () => {
@@ -118,6 +123,7 @@ test('event kinds match', () => {
     'decisions.approval',
     'decisions.question',
     'decisions.projection',
+    'monitor.updated',
   ])
 })
 
@@ -163,6 +169,16 @@ test('startupError, event, and streamEnded fixtures validate', () => {
   assert.equal(validateEvent(event.params, { runtimeId: 'rt-fixture', generation: 1 }).kind, 'session.event')
   const ended = parseFrameLine(JSON.stringify(CONTRACT.fixtures.streamEnded))
   assert.equal(validateStreamEnded(ended.params, { runtimeId: 'rt-fixture', generation: 1 }).outcome, 'cancelled')
+})
+
+test('monitor fixture validates as an event', () => {
+  const frame = parseFrameLine(JSON.stringify(CONTRACT.fixtures.monitorEvent))
+  assert.equal(frame.type, 'notification')
+  assert.equal(frame.method, 'nano.event')
+  assert.equal(frame.params.kind, 'monitor.updated')
+  assert.equal(frame.params.payload.monitor.role, 'user')
+  assert.equal(frame.params.payload.monitor.source, 'monitor')
+  assert.equal(frame.params.payload.monitor.deliveries[0].state, 'accepted')
 })
 
 test('shutdown report fixture has the four facts', () => {

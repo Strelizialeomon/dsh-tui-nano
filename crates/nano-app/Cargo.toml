@@ -19,6 +19,7 @@ nano-decisions = { path = "../nano-decisions" }
 nano-schedule = { path = "../nano-schedule" }
 nano-attachments = { path = "../nano-attachments" }
 nano-jobs = { path = "../nano-jobs" }
+nano-monitor = { path = "../nano-monitor" }
 nano-controls = { path = "../nano-controls" }
 nano-sessions = { path = "../nano-sessions" }
 nano-skills = { path = "../nano-skills" }

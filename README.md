@@ -23,6 +23,8 @@ S07「会话与上下文」实施中（执行单 [#10](https://github.com/Streli
 
 S05「技能与规矩」已实施（执行单 [#8](https://github.com/Strelizialeomon/dsh-tui-nano/issues/8)）：`Alt+K` 打开官方用户可调用技能目录（含仅用户可调用标记与官方路径），`P` 只读预览 `SKILL.md`，`Enter` 把字面量 `/name` 填入输入框；官方 provider watcher 变化后只订阅 `skills/change` 并重拉目录。`Alt+R` 显示官方 `agent-instructions` 实际加载的全局链/项目链、去重后的来源、最近一次加载时间与预算省略/截断提示。与官方命令同名的 `/name` 在成为 prompt 前被拦下（命令入口属 S04，尚未接入）。
 
+S10「Monitor」已实施（执行单 [#13](https://github.com/Strelizialeomon/dsh-tui-nano/issues/13)）：在官方任务面板选中任务按 `m`，先看到「已有 N 字节未读」再选择只看新输出或从 retained head 重放；监听使用自己的绝对字节偏移和非消费 `readAt`，不移动模型 `job_output` 游标。匹配行按合并窗口生成首行/末行/省略数量的 user-role 通知，支持 `notify`（官方 `followup`，唤醒并产生费用）与 `quiet`（官方 `inject`，不唤醒），界面显示 `role=user / source=monitor`、预算/有效期、缺口/已裁剪和真实投递回执；只有 durable `user/message` 显示为已收件。终态只进 UI，不额外发模型通知，也不抑制官方完成通知。证据见 `docs/evidence/2026-10-22-s10/`。
+
 ## 结构
 
 | 路径 | 内容 |
@@ -35,6 +37,9 @@ S05「技能与规矩」已实施（执行单 [#8](https://github.com/Strelizial
 | `bridge/controls/` | 控制宿主：官方命令目录、模型目录/选择、权限预设读写与两类实时事件 |
 | `bridge/skills/` | 技能目录/预览与规矩来源投影；只读官方 `ctx.skills`、官方命令名与 `agent-instructions` 持久消息 |
 | `bridge/sessions/` | 会话宿主：官方列表、活动会话改名、上下文占用投影、官方 `/compact` |
+| `bridge/shell/` | 人工 `!` 命令：用户权限、合成上下文注入、不注册官方 job |
+| `bridge/jobs/` | 任务观察宿主：官方 jobs 投影、非消费 `readAt`、人工停止原因 |
+| `bridge/monitor/` | 监听宿主：非消费任务输出、行合并/过滤、`followup`/`inject` 投递与回执、预算/有效期 |
 | `crates/nano-runtime/` | Rust 侧：preflight、启动、握手、请求/事件、生命周期、关停四事实 |
 | `crates/nano-conversation/` | 输入缓冲、按地址草稿、提交状态机、队列投影、流式预览、消息历史、场景/焦点 |
 | `crates/nano-schedule/` | 定时任务目录、六种时间选择器表单、比较并交换修改、投递历史与调度覆盖层状态 |
@@ -42,6 +47,8 @@ S05「技能与规矩」已实施（执行单 [#8](https://github.com/Strelizial
 | `crates/nano-controls/` | 模型目录与强度、权限预设、命令面板与底部权限事实 |
 | `crates/nano-skills/` | 技能目录（保留上次可用、可能不完整）、命令优先裁决、预览、规矩来源、`/name` 注入事实 |
 | `crates/nano-sessions/` | 官方会话行、受控切换状态机、上下文占用、改名与压缩结果 |
+| `crates/nano-jobs/` | 官方任务投影、非消费输出跟随与本窗口 `!` 记录 |
+| `crates/nano-monitor/` | 监听投影：偏移、预算、投递回执、缺口/裁剪与 UI-only 流终态 |
 | `crates/nano-app/` | `nano` 终端应用：键位、渲染、宿主连接、受控重启与退出 |
 | `docs/specs/2026-10-20-nano-v1/` | 已合并的规格 |
 

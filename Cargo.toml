@@ -10,6 +10,7 @@ members = [
     "crates/nano-controls",
     "crates/nano-skills",
     "crates/nano-jobs",
+    "crates/nano-monitor",
     "crates/nano-sessions",
     "crates/nano-app",
 ]

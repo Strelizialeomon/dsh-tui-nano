@@ -362,6 +362,26 @@
     {
       "code": 1056,
       "name": "nano/terminal/failed"
+    },
+    {
+      "code": 1057,
+      "name": "nano/monitor/unavailable"
+    },
+    {
+      "code": 1058,
+      "name": "nano/monitor/not-found"
+    },
+    {
+      "code": 1059,
+      "name": "nano/monitor/filter-invalid"
+    },
+    {
+      "code": 1060,
+      "name": "nano/monitor/budget-invalid"
+    },
+    {
+      "code": 1061,
+      "name": "nano/monitor/limit-reached"
     }
   ],
   "shapes": {
@@ -455,7 +475,7 @@
       "generation": "integer",
       "subscriptionId": "string",
       "sequence": "integer",
-      "kind": "enum:session.event|conversation.status|conversation.inbox|conversation.stream|schedule.changed|controls.model|controls.permission|sessions.context|skills.changed|instructions.changed|jobs.event|jobs.output|decisions.approval|decisions.question|decisions.projection",
+      "kind": "enum:session.event|conversation.status|conversation.inbox|conversation.stream|schedule.changed|controls.model|controls.permission|sessions.context|skills.changed|instructions.changed|jobs.event|jobs.output|decisions.approval|decisions.question|decisions.projection|monitor.updated",
       "payload": "object"
     },
     "streamEnded": {
@@ -717,6 +737,82 @@
       "jobId": "string",
       "owner": "string?",
       "total": "integer"
+    },
+    "monitorFilter": {
+      "pattern": "string",
+      "regex": "boolean"
+    },
+    "monitorBudgets": {
+      "maxNotifications": "integer",
+      "minIntervalMs": "integer",
+      "maxLinesPerNotification": "integer",
+      "maxNotificationBytes": "integer",
+      "maxNotificationTokens": "integer",
+      "expiresAt": "integer"
+    },
+    "monitorUsage": {
+      "notifications": "integer",
+      "lines": "integer",
+      "bytes": "integer",
+      "estimatedTokens": "integer"
+    },
+    "monitorDelivery": {
+      "messageId": "string",
+      "mode": "enum:notify|quiet",
+      "state": "enum:submitted|inserted|claimed|accepted|discarded|failed|unknown",
+      "at": "integer",
+      "lines": "integer",
+      "bytes": "integer",
+      "estimatedTokens": "integer",
+      "firstOffset": "integer",
+      "lastOffset": "integer",
+      "omittedLines": "integer",
+      "textPreview": "string",
+      "detail": "string?"
+    },
+    "monitorView": {
+      "id": "string",
+      "jobId": "string",
+      "mode": "enum:notify|quiet",
+      "listening": "boolean",
+      "from": "enum:new|earliest",
+      "initialOffset": "integer",
+      "offset": "integer",
+      "unreadBytes": "integer",
+      "skippedBytes": "integer",
+      "filter": "monitorFilter?",
+      "mergeWindowMs": "integer",
+      "budgets": "monitorBudgets",
+      "used": "monitorUsage",
+      "exhausted": "boolean",
+      "exhaustReason": "enum:notifications|expired?",
+      "stoppedByUser": "boolean",
+      "stream": "enum:watching|stream-ended|failed|stopped",
+      "streamDetail": "string?",
+      "jobStatus": "string",
+      "lossy": "boolean",
+      "gaps": "integer",
+      "heldMatches": "integer",
+      "heldBytes": "integer",
+      "droppedMatches": "integer",
+      "lastError": "string?",
+      "deliveries": "array:monitorDelivery",
+      "role": "enum:user",
+      "source": "enum:monitor",
+      "createdAt": "integer",
+      "updatedAt": "integer"
+    },
+    "monitorCreate": {
+      "existing": "boolean",
+      "monitor": "monitorView"
+    },
+    "monitorResult": {
+      "monitor": "monitorView"
+    },
+    "monitorUpdated": {
+      "address": "address",
+      "seq": "integer",
+      "monitor": "monitorView"
     },
     "decisionQuestion": {
       "id": "string",
@@ -2124,6 +2220,97 @@
       "paramsSemantics": {
         "reason": "enum:detached|drained|failed|slow-consumer|closed|input-failed"
       }
+    },
+    {
+      "name": "nano.monitor.create",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S10",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address",
+          "jobId",
+          "from",
+          "mode"
+        ],
+        "optional": [
+          "filter",
+          "budgets"
+        ]
+      },
+      "paramsSemantics": {
+        "from": "enum:new|earliest",
+        "mode": "enum:notify|quiet"
+      },
+      "result": {
+        "shape": "monitorCreate",
+        "required": [
+          "existing",
+          "monitor"
+        ]
+      }
+    },
+    {
+      "name": "nano.monitor.list",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S10",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address"
+        ],
+        "optional": []
+      },
+      "result": {
+        "required": [
+          "seq",
+          "monitors"
+        ]
+      }
+    },
+    {
+      "name": "nano.monitor.stop",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S10",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address",
+          "jobId"
+        ],
+        "optional": []
+      },
+      "result": {
+        "shape": "monitorResult",
+        "required": [
+          "monitor"
+        ]
+      }
+    },
+    {
+      "name": "nano.monitor.resetBudget",
+      "direction": "client-to-host",
+      "kind": "request",
+      "owner": "S10",
+      "status": "implemented",
+      "params": {
+        "required": [
+          "address",
+          "jobId"
+        ],
+        "optional": [
+          "budgets"
+        ]
+      },
+      "result": {
+        "shape": "monitorResult",
+        "required": [
+          "monitor"
+        ]
+      }
     }
   ],
   "eventKinds": [
@@ -2291,6 +2478,19 @@
         "address": "address",
         "active": "array:object",
         "settled": "array:object"
+      }
+    },
+    {
+      "kind": "monitor.updated",
+      "owner": "S10",
+      "status": "implemented",
+      "payload": {
+        "shape": "monitorUpdated",
+        "required": [
+          "address",
+          "seq",
+          "monitor"
+        ]
       }
     }
   ],
@@ -2806,6 +3006,78 @@
               "total": 12,
               "earliest": 0
             }
+          }
+        }
+      }
+    },
+    "monitorEvent": {
+      "jsonrpc": "2.0",
+      "method": "nano.event",
+      "params": {
+        "runtimeId": "rt-fixture",
+        "generation": 1,
+        "subscriptionId": "sub-1",
+        "sequence": 2,
+        "kind": "monitor.updated",
+        "payload": {
+          "address": {
+            "rootSessionId": "session-fixture"
+          },
+          "seq": 2,
+          "monitor": {
+            "id": "bash-0123456789abcdef",
+            "jobId": "bash-0123456789abcdef",
+            "mode": "notify",
+            "listening": true,
+            "from": "new",
+            "initialOffset": 12,
+            "offset": 12,
+            "unreadBytes": 12,
+            "skippedBytes": 12,
+            "filter": null,
+            "mergeWindowMs": 800,
+            "budgets": {
+              "maxNotifications": 50,
+              "minIntervalMs": 1000,
+              "maxLinesPerNotification": 20,
+              "maxNotificationBytes": 8192,
+              "maxNotificationTokens": 2048,
+              "expiresAt": 1000000
+            },
+            "used": {
+              "notifications": 1,
+              "lines": 3,
+              "bytes": 120,
+              "estimatedTokens": 30
+            },
+            "exhausted": false,
+            "stoppedByUser": false,
+            "stream": "watching",
+            "jobStatus": "running",
+            "lossy": false,
+            "gaps": 0,
+            "heldMatches": 0,
+            "heldBytes": 0,
+            "droppedMatches": 0,
+            "deliveries": [
+              {
+                "messageId": "monitor-message-fixture",
+                "mode": "notify",
+                "state": "accepted",
+                "at": 1000,
+                "lines": 3,
+                "bytes": 120,
+                "estimatedTokens": 30,
+                "firstOffset": 0,
+                "lastOffset": 20,
+                "omittedLines": 1,
+                "textPreview": "[monitor] job=bash-0123456789abcdef matched=3"
+              }
+            ],
+            "role": "user",
+            "source": "monitor",
+            "createdAt": 900,
+            "updatedAt": 1000
           }
         }
       }

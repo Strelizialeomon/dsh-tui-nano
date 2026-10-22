@@ -1,0 +1,17 @@
+PROFILE {"profile":"nano-s10-evidence-75864","provider":"deepseek-official","model":"deepseek-flash"}
+CAPABILITY {"status":"supported","detail":"bounded job-output observation; followup/inject delivery"}
+CONTEXT_BEFORE {"sessionId":"session-b2c13fff-947a-4cd7-a7db-9e5b451af810","asOfSeq":2,"approximate":true,"tokenUsage":{"uncachedInputTokens":0,"outputTokens":0,"cacheReadTokens":0,"cacheWriteTokens":0},"contextBreakdown":{"systemTokens":0,"toolsTokens":0,"messageTokens":0}}
+JOB_REGISTERED {"id":"bash-0185cef310f74607","kind":"bash","label":"sh -c 'sleep 3; echo monitor-line-1; echo noise-ignore-me; sleep 1; echo monitor-line-2; sleep 1; echo monitor-line-3'"}
+QUIET_CREATE {"unreadBytes":0,"skippedBytes":0,"offset":0,"mode":"quiet"}
+QUIET_JOB_SETTLED {"status":"completed","detail":"exit code: 0"}
+QUIET_DELIVERY {"states":["inserted","inserted","inserted"],"texts":["[monitor] job=bash-0185cef310f74607 matched=1\nfirst@0: monitor-line-1\nlast@0: monitor-line-1\nomitted=0","[monitor] job=bash-0185cef310f74607 matched=1\nfirst@31: monitor-line-2\nlast@31: monitor-line-2\nomitted=0","[monitor] job=bash-0185cef310f74607 matched=1\nfirst@46: monitor-line-3\nlast@46: monitor-line-3\nomitted=0"],"used":{"notifications":3,"lines":3,"bytes":310,"estimatedTokens":78},"stream":"stream-ended","streamDetail":"exit code: 0","noiseDelivered":false}
+QUIET_RECEIPT {"deliveries":[{"state":"accepted","messageId":"658276c2-b400-4f22-9ca8-53698b8ac875","lines":1,"text":"[monitor] job=bash-0185cef310f74607 matched=1\nfirst@0: monitor-line-1\nlast@0: monitor-line-1\nomitted=0"},{"state":"accepted","messageId":"31c932d9-7c44-4401-a3d7-dac1618e538e","lines":1,"text":"[monitor] job=bash-0185cef310f74607 matched=1\nfirst@31: monitor-line-2\nlast@31: monitor-line-2\nomitted=0"},{"state":"accepted","messageId":"92245a6b-201d-4764-8d3f-cb04f981fe04","lines":1,"text":"[monitor] job=bash-0185cef310f74607 matched=1\nfirst@46: monitor-line-3\nlast@46: monitor-line-3\nomitted=0"}]}
+QUIET_DURABLE_USER_MESSAGE {"present":true,"monitorMessageIds":["658276c2-b400-4f22-9ca8-53698b8ac875","31c932d9-7c44-4401-a3d7-dac1618e538e","92245a6b-201d-4764-8d3f-cb04f981fe04"]}
+NOTIFY_JOB {"id":"bash-9d5ed4128ae04da6","label":"sh -c 'sleep 2; echo notify-line-42'"}
+NOTIFY_RECEIPT {"deliveries":[{"state":"accepted","mode":"notify","messageId":"7fb60524-32d8-4a09-a30d-2f068a849804","lines":1,"text":"[monitor] job=bash-9d5ed4128ae04da6 matched=1\nfirst@0: notify-line-42\nlast@0: notify-line-42\nomitted=0"}]}
+STOP_MONITOR true
+JOB_STILL_PRESENT {"first":true,"second":true}
+CONTEXT_AFTER {"sessionId":"session-b2c13fff-947a-4cd7-a7db-9e5b451af810","asOfSeq":72,"approximate":true,"tokenUsage":{"uncachedInputTokens":10229,"outputTokens":295,"cacheReadTokens":88192,"cacheWriteTokens":0},"projectedTokens":20078,"contextWindow":1000000,"pressureTokens":19977,"pressureAt":1792636727825,"contextWindowAt":1792636717846,"contextBreakdown":{"systemTokens":732,"toolsTokens":5212,"messageTokens":8345}}
+ASSISTANT_TEXTS ["job id：bash-0185cef310f74607","The user asks: which monitor-line lines appeared in the listening notifications? Just list numbers, no tool calls.\n\nLines: monitor-line-1, monitor-line-2, monitor-line-3 → 1, 2, 3.\n\nKeep short.1、2、3\n\n","job id：bash-9d5ed4128ae04da6"]
+SHUTDOWN {"steps":[{"name":"accepting","status":"stopped"},{"name":"subscriptions","status":"stopped"},{"name":"agents","status":"stopped"},{"name":"persistence","status":"stopped"},{"name":"dispose","status":"stopped"},{"name":"ledger","status":"stopped"}],"clean":true}
+EXIT 0
