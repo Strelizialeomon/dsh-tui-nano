@@ -293,6 +293,7 @@ dependencies = [
  "nano-schedule",
  "nano-sessions",
  "nano-skills",
+ "nano-subagents",
  "nano-terminal",
  "nano-transcript",
  "ratatui",
@@ -374,6 +375,15 @@ dependencies = [
 
 [[package]]
 name = "nano-skills"
+version = "0.1.0"
+dependencies = [
+ "nano-conversation",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "nano-subagents"
 version = "0.1.0"
 dependencies = [
  "nano-conversation",

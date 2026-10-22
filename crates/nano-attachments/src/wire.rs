@@ -132,7 +132,9 @@ pub fn display_name(path: &std::path::Path) -> String {
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
         .unwrap_or_else(|| path.to_string_lossy().to_string());
-    name.chars().filter(|character| !character.is_control()).collect()
+    name.chars()
+        .filter(|character| !character.is_control())
+        .collect()
 }
 
 #[cfg(test)]

@@ -81,8 +81,7 @@ impl CompletionState {
         let next_start = token
             .as_ref()
             .map_or(0, |token| line_start.saturating_add(token.start));
-        let changed = token != self.token
-            || (token.is_some() && next_start != self.token_start);
+        let changed = token != self.token || (token.is_some() && next_start != self.token_start);
         self.token = token;
         self.token_start = next_start;
         if changed {

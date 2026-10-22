@@ -88,7 +88,8 @@ fn every_event_kind_is_covered_by_the_contract_shape() {
             "jobs.output",
             "decisions.approval",
             "decisions.question",
-            "decisions.projection"
+            "decisions.projection",
+            "subagents.event"
         ]
     );
     for (owner, kind) in [

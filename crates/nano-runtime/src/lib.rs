@@ -81,7 +81,7 @@ pub const LIFECYCLE_TRANSITIONS: [(&str, &str); 15] = [
 ];
 
 /// Error code names shared with the bridge contract.
-pub const ERROR_CODE_NAMES: [(&str, i64); 61] = [
+pub const ERROR_CODE_NAMES: [(&str, i64); 69] = [
     ("jsonrpc/parse-error", -32700),
     ("jsonrpc/invalid-request", -32600),
     ("jsonrpc/method-not-found", -32601),
@@ -143,10 +143,18 @@ pub const ERROR_CODE_NAMES: [(&str, i64); 61] = [
     ("nano/terminal/input-full", 1054),
     ("nano/terminal/closed-id", 1055),
     ("nano/terminal/failed", 1056),
+    ("nano/subagents/unavailable", 1057),
+    ("nano/subagents/unauthorized", 1058),
+    ("nano/subagents/not-resumable", 1059),
+    ("nano/subagents/parent-unavailable", 1060),
+    ("nano/subagents/delivery-unavailable", 1061),
+    ("nano/subagents/attachment-invalid", 1062),
+    ("nano/subagents/capacity", 1063),
+    ("nano/subagents/invalid", 1064),
 ];
 
 /// Method names implemented by this generation.
-pub const IMPLEMENTED_METHODS: [&str; 61] = [
+pub const IMPLEMENTED_METHODS: [&str; 66] = [
     "nano.hello",
     "nano.startupError",
     "nano.shutdown",
@@ -208,6 +216,11 @@ pub const IMPLEMENTED_METHODS: [&str; 61] = [
     "nano.terminal.state",
     "nano.terminal.ack",
     "nano.terminal.ended",
+    "nano.subagents.snapshot",
+    "nano.subagents.list",
+    "nano.subagents.describe",
+    "nano.subagents.prompt",
+    "nano.subagents.interrupt",
 ];
 /// Host-to-client terminal notifications understood by this client.
 pub const TERMINAL_NOTIFICATION_METHODS: [&str; 4] = [
@@ -218,7 +231,7 @@ pub const TERMINAL_NOTIFICATION_METHODS: [&str; 4] = [
 ];
 
 /// Event kinds this client accepts.
-pub const EVENT_KINDS: [&str; 15] = [
+pub const EVENT_KINDS: [&str; 16] = [
     "session.event",
     "conversation.status",
     "conversation.inbox",
@@ -234,6 +247,7 @@ pub const EVENT_KINDS: [&str; 15] = [
     "decisions.approval",
     "decisions.question",
     "decisions.projection",
+    "subagents.event",
 ];
 
 /// Shutdown report step names, in report order.

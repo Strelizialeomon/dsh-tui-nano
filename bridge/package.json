@@ -16,7 +16,8 @@
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json",
     "./controls": "./controls/service.mjs",
-    "./decisions": "./decisions/service.mjs"
+    "./decisions": "./decisions/service.mjs",
+    "./subagents": "./subagents/service.mjs"
   },
   "files": [
     "runtime/**/*.mjs",
@@ -29,6 +30,7 @@
     "controls/**/*.mjs",
     "skills/**/*.mjs",
     "sessions/**/*.mjs",
+    "subagents/**/*.mjs",
     "profile/**/*.mjs",
     "cordis.patch.yml",
     "README.md",

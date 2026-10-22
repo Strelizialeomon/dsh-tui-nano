@@ -17,8 +17,8 @@ use nano_attachments::{
 use nano_controls::{ControlsModel, ModelSelection, Panel, PanelAction, PanelMode};
 use nano_conversation::{
     CommandRouter, ConversationItem, ConversationModel, Delivery, DraftStore, FeatureContribution,
-    FeatureRegistry, FocusId, InputBuffer, InputEvent, InputOutcome, InputRoute, SceneId,
-    SceneState, SessionAddress, SubmitError,
+    FeatureRegistry, FocusId, InputBuffer, InputEvent, InputMode, InputOutcome, InputRoute,
+    SceneId, SceneState, SessionAddress, SubmitError,
 };
 use nano_decisions::{answers_to_wire, DecisionAction, DecisionClick, DecisionKey, DecisionsModel};
 use nano_jobs::{BashRecord, JobsModel, SHELL_NOTICE};
@@ -31,6 +31,7 @@ use nano_sessions::{
 use nano_skills::{
     InstructionState, InvocationFact, InvocationTracker, NameResolution, SkillCatalog, SkillPreview,
 };
+use nano_subagents::{AgentMode, ComposerGate, ExitTarget, SubagentState};
 use nano_terminal::{
     is_close_key, is_toggle_key, Command as TerminalCommand, Failure, RequestKind, TerminalState,
     TerminalStore,
@@ -80,6 +81,33 @@ fn skills_focus() -> FocusId {
 /// Focus identity for the S05 workspace-instruction panel.
 fn instructions_focus() -> FocusId {
     FocusId::new("instructions")
+}
+
+/// Reduced-motion opt-out. S13 owns the final detection contract; until it is
+/// frozen, the environment switch is the only supported input.
+fn reduced_motion_env() -> bool {
+    matches!(
+        std::env::var("NANO_REDUCED_MOTION").as_deref(),
+        Ok("1") | Ok("true")
+    )
+}
+
+/// Read a complete child wire address from one event payload. A missing field
+/// means this is not a child event; partial addresses are ignored rather than
+/// guessed.
+fn child_address_from_payload(payload: &Value) -> Option<SessionAddress> {
+    let address = payload.get("address")?;
+    let root = address.get("rootSessionId").and_then(Value::as_str)?;
+    let child = address.get("childSessionId").and_then(Value::as_str)?;
+    let parent = address.get("parentSessionId").and_then(Value::as_str)?;
+    let mode = address.get("mode").and_then(Value::as_str)?;
+    let mode = match mode {
+        "continuable" => nano_conversation::SubagentMode::Continuable,
+        "one-shot" => nano_conversation::SubagentMode::OneShot,
+        "unknown" => nano_conversation::SubagentMode::Unknown,
+        _ => return None,
+    };
+    Some(SessionAddress::child(root, parent, child, mode))
 }
 
 /// A request awaiting its response.
@@ -233,6 +261,32 @@ pub enum Pending {
         /// Operation epoch; stale responses are ignored.
         epoch: u64,
     },
+    /// Read the direct-child snapshot.
+    SubagentsSnapshot,
+    /// Read the recursive descendant list.
+    SubagentsList,
+    /// Resolve one child's mode, liveness, timing, and sequence.
+    SubagentsDescribe {
+        /// Child being described.
+        child_id: String,
+    },
+    /// One human continuation prompt.
+    SubagentPrompt {
+        /// Business identity used to restore the draft on failure.
+        request_id: String,
+    },
+    /// Stop one child's current turn.
+    SubagentInterrupt {
+        /// Child being stopped.
+        child_id: String,
+    },
+    /// Open the child transcript subscription.
+    SubagentSubscribe {
+        /// Address key the subscription serves.
+        address_key: String,
+    },
+    /// Release a child transcript subscription.
+    SubagentUnsubscribe,
 }
 
 /// A submission's draft snapshot, used to restore on an explicit failure.
@@ -511,6 +565,37 @@ pub struct App {
     pub terminal_screen_area: Rect,
     /// Resolved Nano data root, kept across host restarts for terminal rebinding.
     pub terminal_data_root: Option<PathBuf>,
+    /// S12 official child catalog, dock, navigation, and input gates.
+    pub subagents: SubagentState,
+    /// Child conversation models keyed by address key.
+    pub child_models: HashMap<String, ConversationModel>,
+    /// Child transcript views keyed by address key; the mounted one lives in
+    /// `view` while `parent_view` holds the parent transcript.
+    pub child_views: HashMap<String, TranscriptView>,
+    /// Parent transcript kept aside while a child view is mounted.
+    pub parent_view: Option<TranscriptView>,
+    /// Address key of the mounted child view.
+    pub active_child_key: Option<String>,
+    /// Open child session subscription.
+    pub subagent_subscription: Option<String>,
+    /// A snapshot request is in flight.
+    pub subagents_snapshot_pending: bool,
+    /// A snapshot was requested while one was in flight.
+    pub subagents_snapshot_queued: bool,
+    /// A recursive list request is in flight.
+    pub subagent_list_loading: bool,
+    /// Next blink transition to service in `tick`.
+    pub subagent_blink_at: Option<Instant>,
+    /// Reduced motion requested by the environment; blinking becomes static.
+    pub reduced_motion: bool,
+    /// Screen area of the subagent dock, set by the draw pass.
+    pub subagent_dock_area: Rect,
+    /// Dock rows as (index, screen row), including the overflow entry.
+    pub subagent_dock_hits: Vec<(usize, u16)>,
+    /// Screen area of the child-view exit button.
+    pub subagent_exit_area: Rect,
+    /// Screen area of the all-agents list, set by the draw pass.
+    pub subagent_list_area: Rect,
 }
 
 impl App {
@@ -619,6 +704,21 @@ impl App {
             terminal: None,
             terminal_screen_area: Rect::new(0, 0, 0, 0),
             terminal_data_root: None,
+            subagents: SubagentState::new(address.root_session_id.clone()),
+            child_models: HashMap::new(),
+            child_views: HashMap::new(),
+            parent_view: None,
+            active_child_key: None,
+            subagent_subscription: None,
+            subagents_snapshot_pending: false,
+            subagents_snapshot_queued: false,
+            subagent_list_loading: false,
+            subagent_blink_at: None,
+            reduced_motion: reduced_motion_env(),
+            subagent_dock_area: Rect::default(),
+            subagent_dock_hits: Vec::new(),
+            subagent_exit_area: Rect::default(),
+            subagent_list_area: Rect::default(),
         }
     }
 
@@ -653,6 +753,425 @@ impl App {
     /// Whether the terminal scene is the active main scene.
     pub fn terminal_active(&self) -> bool {
         self.scene.active() == &SceneId::new("terminal")
+    }
+
+    /// Whether a subagent view currently owns the conversation surface.
+    pub fn subagent_active(&self) -> bool {
+        self.active_child_key.is_some()
+    }
+
+    /// Active conversation model: the mounted child, otherwise the root.
+    pub fn active_model(&self) -> &ConversationModel {
+        self.active_child_key
+            .as_ref()
+            .and_then(|key| self.child_models.get(key))
+            .unwrap_or(&self.model)
+    }
+
+    /// Ask the host for the direct-child snapshot.
+    pub fn refresh_subagents(&mut self) {
+        if !self.ready || !self.capability_supported("subagents") {
+            return;
+        }
+        if self.subagents_snapshot_pending {
+            self.subagents_snapshot_queued = true;
+            return;
+        }
+        let Some(link) = &self.link else {
+            return;
+        };
+        match link.request("nano.subagents.snapshot", json!({})) {
+            Ok(id) => {
+                self.subagents_snapshot_pending = true;
+                self.pending.insert(id, Pending::SubagentsSnapshot);
+            }
+            Err(message) => self.error = Some(format!("子代理目录读取失败：{message}")),
+        }
+    }
+
+    /// Ask the host for the recursive descendant list.
+    pub fn refresh_subagents_list(&mut self) {
+        if !self.ready || !self.capability_supported("subagents") || self.subagent_list_loading {
+            return;
+        }
+        let Some(link) = &self.link else {
+            return;
+        };
+        match link.request("nano.subagents.list", json!({})) {
+            Ok(id) => {
+                self.subagent_list_loading = true;
+                self.pending.insert(id, Pending::SubagentsList);
+            }
+            Err(message) => self.error = Some(format!("子代理列表读取失败：{message}")),
+        }
+    }
+
+    /// Ask the host to resolve one child's mode, liveness, timing, and seq.
+    fn request_subagent_describe(&mut self, child_id: &str) {
+        let Some(mounted) = self.subagents.mounted() else {
+            return;
+        };
+        let Some(child) = &mounted.address.child else {
+            return;
+        };
+        if self.subagents.describing.as_deref() == Some(child_id) {
+            return;
+        }
+        let Some(link) = &self.link else {
+            return;
+        };
+        let params = json!({
+            "parentSessionId": child.parent_session_id,
+            "childSessionId": child.child_session_id,
+        });
+        match link.request("nano.subagents.describe", params) {
+            Ok(id) => {
+                self.subagents.describing = Some(child_id.to_string());
+                self.pending.insert(
+                    id,
+                    Pending::SubagentsDescribe {
+                        child_id: child_id.to_string(),
+                    },
+                );
+            }
+            Err(message) => self.error = Some(format!("子代理历史读取失败：{message}")),
+        }
+    }
+
+    /// Open one dock row. The view is mounted immediately and the official
+    /// describe confirms mode and history before input is enabled.
+    pub fn enter_subagent(&mut self, index: usize) -> bool {
+        if !self.subagents.enter_dock(index) {
+            return false;
+        }
+        self.mount_child_surface();
+        true
+    }
+
+    /// Open the overflow row, which is the all-agents list.
+    pub fn enter_subagent_overflow(&mut self) {
+        self.subagents.enter_overflow();
+        self.refresh_subagents_list();
+    }
+
+    /// Open one row from the all-agents list.
+    pub fn enter_subagent_list(&mut self, index: usize) -> bool {
+        if !self.subagents.enter_list(index) {
+            return false;
+        }
+        self.mount_child_surface();
+        true
+    }
+
+    /// Swap the parent transcript aside and install a placeholder child view.
+    fn mount_child_surface(&mut self) {
+        let Some(mounted) = self.subagents.mounted() else {
+            return;
+        };
+        let address = mounted.address.clone();
+        let child_id = address
+            .child
+            .as_ref()
+            .map(|child| child.child_session_id.clone());
+        let key = address.key();
+        let placeholder = TranscriptView::new(address, TranscriptSource::ReadOnly);
+        if self.parent_view.is_none() {
+            self.parent_view = Some(std::mem::replace(&mut self.view, placeholder));
+        } else {
+            self.view = placeholder;
+        }
+        self.active_child_key = Some(key);
+        self.transcript_dirty = true;
+        self.completion.clear();
+        if !self.ready {
+            // No live host means no live exact parent. Keep the view readable
+            // and the composer read-only until a host is available again.
+            if let Some(mounted) = self.subagents.nav_mut().mounted_mut() {
+                mounted.parent_live = false;
+                mounted.activity = nano_subagents::Activity::Inactive;
+            }
+        }
+        if let Some(child_id) = child_id {
+            self.request_subagent_describe(&child_id);
+        }
+    }
+
+    /// Apply one `nano.subagents.describe` result and mount its real view.
+    fn apply_subagent_description(&mut self, value: &Value) -> bool {
+        let row = match self.subagents.apply_description(value) {
+            Ok(row) => row,
+            Err(message) => {
+                self.error = Some(format!("子代理描述无效：{message}"));
+                return true;
+            }
+        };
+        let Some(mounted) = self.subagents.mounted().cloned() else {
+            return true;
+        };
+        let Some(child) = mounted.address.child.as_ref() else {
+            return true;
+        };
+        if child.child_session_id != row.id {
+            // A describe for an old mount arrived after the user returned.
+            return true;
+        }
+        let address = mounted.address.clone();
+        let key = address.key();
+        let source = if mounted.mode == AgentMode::Continuable {
+            TranscriptSource::Interactive
+        } else {
+            TranscriptSource::ReadOnly
+        };
+        if !self.child_models.contains_key(&key) {
+            let mut model = ConversationModel::new(address.clone());
+            model.apply_replay_baseline(row.seq.unwrap_or(0), false);
+            self.child_models.insert(key.clone(), model);
+        }
+        if self.active_child_key.as_deref() != Some(key.as_str()) {
+            let view = self
+                .child_views
+                .remove(&key)
+                .unwrap_or_else(|| TranscriptView::new(address.clone(), source));
+            let old = std::mem::replace(&mut self.view, view);
+            if let Some(old_key) = self.active_child_key.take() {
+                self.child_views.insert(old_key, old);
+            }
+            self.active_child_key = Some(key.clone());
+        }
+        self.drafts.switch_to(address.clone());
+        self.attachments.switch_to(address.clone());
+        self.completion.clear();
+        self.transcript_dirty = true;
+        let from = row
+            .seq
+            .unwrap_or(0)
+            .saturating_sub(nano_conversation::MAX_REPLAY_EVENTS);
+        self.subscribe_child(&address, from);
+        true
+    }
+
+    /// Open the child transcript subscription with a bounded replay window.
+    fn subscribe_child(&mut self, address: &nano_conversation::SessionAddress, from_seq: u64) {
+        if self.subagent_subscription.is_some() {
+            self.unsubscribe_child();
+        }
+        let Some(link) = &self.link else {
+            return;
+        };
+        let params = json!({
+            "address": address.wire_value(),
+            "kinds": ["session.event", "conversation.stream"],
+            "fromSeq": from_seq,
+        });
+        match link.request("nano.subscribe", params) {
+            Ok(id) => {
+                self.pending.insert(
+                    id,
+                    Pending::SubagentSubscribe {
+                        address_key: address.key(),
+                    },
+                );
+            }
+            Err(message) => self.error = Some(format!("子代理历史订阅失败：{message}")),
+        }
+    }
+
+    /// Release the child subscription. The child itself keeps running.
+    fn unsubscribe_child(&mut self) {
+        let Some(subscription_id) = self.subagent_subscription.take() else {
+            return;
+        };
+        if let Some(link) = &self.link {
+            let id = link.request(
+                "nano.unsubscribe",
+                json!({ "subscriptionId": subscription_id }),
+            );
+            if let Ok(id) = id {
+                self.pending.insert(id, Pending::SubagentUnsubscribe);
+            }
+        }
+    }
+
+    /// Leave the child view and return to its exact origin.
+    pub fn leave_subagent(&mut self) -> bool {
+        let target = self.subagents.exit();
+        self.subagents.describing = None;
+        self.unsubscribe_child();
+        if let Some(parent) = self.parent_view.take() {
+            let child = std::mem::replace(&mut self.view, parent);
+            if let Some(key) = self.active_child_key.take() {
+                if self.child_views.len() >= 16 {
+                    self.child_views.clear();
+                }
+                self.child_views.insert(key, child);
+            }
+        } else {
+            self.active_child_key = None;
+        }
+        let root = self.model.address().clone();
+        self.drafts.switch_to(root.clone());
+        self.attachments.switch_to(root);
+        self.completion.clear();
+        self.transcript_dirty = true;
+        match target {
+            Some(ExitTarget::Dock { index, child_id }) => {
+                let (rows, overflow) = self.subagents.dock();
+                let count = rows.len() + usize::from(overflow > 0);
+                let restored = rows.iter().position(|row| row.id == child_id);
+                match restored {
+                    Some(index) if index < count => {
+                        self.subagents.nav_mut().dock_selected = index;
+                    }
+                    None if index < count => {
+                        self.subagents.nav_mut().dock_selected = index;
+                    }
+                    _ => self.subagents.nav_mut().dock_focus = false,
+                }
+            }
+            Some(ExitTarget::List { child_id }) => {
+                match self
+                    .subagents
+                    .list_rows()
+                    .iter()
+                    .position(|row| row.id == child_id)
+                {
+                    Some(index) => self.subagents.nav_mut().list_selected = index,
+                    None => {
+                        // The entry disappeared while it was open. Do not strand
+                        // the list on a stale row; fall back to the input.
+                        self.subagents.nav_mut().close_list();
+                        self.subagents.nav_mut().dock_focus = false;
+                    }
+                }
+            }
+            None => {}
+        }
+        true
+    }
+
+    /// Send the mounted child's draft through the official continuation path.
+    pub fn submit_subagent_draft(&mut self, delivery: Delivery) {
+        let Some(mounted) = self.subagents.mounted().cloned() else {
+            return;
+        };
+        let gate = self
+            .subagents
+            .mounted_gate()
+            .unwrap_or(ComposerGate::Resolving);
+        if !gate.can_send() {
+            self.notice = Some(gate.hint().to_string());
+            return;
+        }
+        let text = self.drafts.current().text().to_string();
+        let has_attachments = !self.attachments.current().is_empty();
+        if text.trim().is_empty() && !has_attachments {
+            self.error = Some("内容为空，草稿已保留".to_string());
+            return;
+        }
+        if let Err(blocker) = self.attachments.current().ready() {
+            self.error = Some(blocker.message());
+            return;
+        }
+        let content = self.attachments.current().content(&text);
+        let blocks = match content.to_wire_blocks() {
+            Ok(blocks) => blocks,
+            Err(error) => {
+                self.error = Some(error.to_string());
+                return;
+            }
+        };
+        if blocks
+            .iter()
+            .any(|block| block.get("type").and_then(Value::as_str) == Some("file"))
+        {
+            self.error = Some("子代理只接受图片附件；通用文件已被拒绝，草稿已保留".to_string());
+            return;
+        }
+        let request_id = nano_conversation::new_request_id();
+        let params =
+            nano_subagents::prompt_params(&mounted.address, &request_id, delivery, &blocks);
+        let snapshot = SubmittedDraft {
+            text: text.clone(),
+            attachments: self.attachments.current().clone(),
+        };
+        self.drafts.current_mut().take();
+        self.attachments.current_mut().clear();
+        self.completion.clear();
+        self.submit_backups.insert(request_id.clone(), snapshot);
+        let Some(link) = &self.link else {
+            self.submit_backups.remove(&request_id);
+            self.error = Some("宿主连接已关闭；子代理消息未发送".to_string());
+            return;
+        };
+        match link.request("nano.subagents.prompt", params) {
+            Ok(id) => {
+                self.pending.insert(
+                    id,
+                    Pending::SubagentPrompt {
+                        request_id: request_id.clone(),
+                    },
+                );
+            }
+            Err(message) => {
+                if let Some(snapshot) = self.submit_backups.get(&request_id).cloned() {
+                    self.restore_draft(&request_id, &snapshot);
+                }
+                self.error = Some(format!("子代理发送失败：{message}"));
+            }
+        }
+    }
+
+    /// Stop the mounted child's current turn. Queued messages and descendants
+    /// stay alive; `dispose` is never used.
+    pub fn stop_mounted_subagent(&mut self) {
+        let Some(mounted) = self.subagents.mounted().cloned() else {
+            return;
+        };
+        let gate = self
+            .subagents
+            .mounted_gate()
+            .unwrap_or(ComposerGate::Resolving);
+        if !gate.can_stop() {
+            self.notice = Some("当前子代理没有可停止的回合".to_string());
+            return;
+        }
+        self.interrupt_subagent_address(&mounted.address);
+    }
+
+    /// Stop one dock row's current turn.
+    fn stop_selected_subagent(&mut self) {
+        let index = self.subagents.nav().dock_selected;
+        let (rows, _) = self.subagents.dock();
+        let Some(row) = rows.get(index) else {
+            return;
+        };
+        if row.mode != AgentMode::Continuable {
+            self.notice = Some("一次性或外部子代理没有可停止的回合".to_string());
+            return;
+        }
+        let address = self.subagents.address_for(row);
+        self.interrupt_subagent_address(&address);
+    }
+
+    fn interrupt_subagent_address(&mut self, address: &nano_conversation::SessionAddress) {
+        let Some(link) = &self.link else {
+            return;
+        };
+        let child_id = address
+            .child
+            .as_ref()
+            .map(|child| child.child_session_id.clone())
+            .unwrap_or_default();
+        match link.request(
+            "nano.subagents.interrupt",
+            nano_subagents::interrupt_params(address),
+        ) {
+            Ok(id) => {
+                self.pending
+                    .insert(id, Pending::SubagentInterrupt { child_id });
+            }
+            Err(message) => self.error = Some(format!("子代理停止失败：{message}")),
+        }
     }
 
     /// Apply terminal side effects in issue order.
@@ -1134,6 +1653,9 @@ impl App {
         if self.sessions_panel.open {
             return self.handle_sessions_panel_key(key);
         }
+        if self.subagents.nav().list_open {
+            return self.handle_subagent_list_key(key);
+        }
         if key.modifiers.contains(KeyModifiers::CONTROL)
             && matches!(key.code, KeyCode::Char('t') | KeyCode::Char('T'))
         {
@@ -1172,6 +1694,9 @@ impl App {
                 }
                 _ => {}
             }
+        }
+        if let Some(handled) = self.handle_child_key(key) {
+            return handled;
         }
         if self.decisions.top().is_some() {
             if let Some(mapped) = decision_key(key) {
@@ -1233,6 +1758,11 @@ impl App {
         // shortcuts into the hidden input draft; S05 panels were handled above.
         if !self.scene.focus().input_focused() {
             return self.handle_queue_key(key);
+        }
+        if self.edit_target.is_none() {
+            if let Some(handled) = self.handle_dock_key(key) {
+                return handled;
+            }
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
@@ -1403,6 +1933,15 @@ impl App {
             self.dispatch_terminal(commands);
             return true;
         }
+        if self.subagent_active()
+            && !self
+                .subagents
+                .mounted_gate()
+                .unwrap_or(ComposerGate::Resolving)
+                .can_send()
+        {
+            return true;
+        }
         if self.decision_owns_seat() {
             self.clear_transient_status();
             return self.decisions.paste(&text);
@@ -1497,6 +2036,7 @@ impl App {
                 self.refresh_controls_state();
                 self.refresh_skills();
                 self.refresh_instructions();
+                self.refresh_subagents();
                 true
             }
             LinkEvent::Host(event) => self.handle_host_event(event),
@@ -1593,6 +2133,11 @@ impl App {
         use nano_runtime::HostEvent;
         match event {
             HostEvent::Event(params) => {
+                if params.kind == "session.event" || params.kind == "conversation.stream" {
+                    if let Some(address) = child_address_from_payload(&params.payload) {
+                        return self.handle_child_event(&params.kind, &params.payload, address);
+                    }
+                }
                 self.transcript_dirty = true;
                 if params.kind == "session.event" || params.kind.starts_with("decisions.") {
                     self.view.apply_event(&params.kind, &params.payload);
@@ -1660,6 +2205,7 @@ impl App {
                         self.handle_jobs_output(&params.payload);
                         changed
                     }
+                    "subagents.event" => self.handle_subagents_event(&params.payload),
                     _ => self.model.apply_event(&params.kind, &params.payload),
                 };
                 if params.kind == "session.event" {
@@ -1696,6 +2242,25 @@ impl App {
                 true
             }
             HostEvent::StreamEnded(params) => {
+                // A closed child subscription is rebuilt from the child's own
+                // last applied seq; the root rebuild path is unrelated.
+                if self.subagent_subscription.as_deref() == Some(params.subscription_id.as_str()) {
+                    self.subagent_subscription = None;
+                    if let Some(mounted) = self.subagents.mounted().cloned() {
+                        let key = mounted.address.key();
+                        let from = self
+                            .child_models
+                            .get(&key)
+                            .map(|model| {
+                                model
+                                    .seq()
+                                    .saturating_sub(nano_conversation::MAX_REPLAY_EVENTS)
+                            })
+                            .unwrap_or(0);
+                        self.subscribe_child(&mounted.address, from);
+                    }
+                    return true;
+                }
                 if params.outcome == nano_runtime::protocol::StreamOutcome::Failed {
                     if self.ready && self.resubscribe_attempts < 2 {
                         // The host is alive; only the observable subscription
@@ -1759,6 +2324,67 @@ impl App {
         }
     }
 
+    /// Apply one child-addressed durable event or stream frame. The child
+    /// model keeps the official address and never leaks into the root model.
+    fn handle_child_event(&mut self, kind: &str, payload: &Value, address: SessionAddress) -> bool {
+        let key = address.key();
+        let model = self
+            .child_models
+            .entry(key.clone())
+            .or_insert_with(|| ConversationModel::new(address));
+        let changed = model.apply_event(kind, payload);
+        if self.active_child_key.as_deref() == Some(key.as_str()) && changed {
+            self.transcript_dirty = true;
+        }
+        // A child turn boundary changes the official activity and timing
+        // projections. Refresh the direct catalog so the dock lamp and the
+        // header do not stay on a stale running state.
+        if payload.get("type").and_then(Value::as_str) == Some("turn/end") {
+            self.subagents.snapshot_due = true;
+            self.refresh_subagents();
+        }
+        changed
+    }
+
+    /// Apply one official subagent lifecycle event and refresh the catalog.
+    fn handle_subagents_event(&mut self, payload: &Value) -> bool {
+        match self.subagents.apply_event(payload) {
+            Ok(changed) => {
+                if self.subagents.snapshot_due {
+                    self.refresh_subagents();
+                }
+                if self.subagents.nav().list_open {
+                    self.refresh_subagents_list();
+                }
+                if self.subagent_blink_at.is_none() {
+                    self.subagent_blink_at = Some(Instant::now());
+                }
+                // If the mounted child's direct parent settled, its liveness
+                // may have changed; re-read the official description instead
+                // of keeping a stale enabled composer.
+                if payload.get("type").and_then(Value::as_str) == Some("end") {
+                    let description = self.subagents.mounted().and_then(|mounted| {
+                        let child = mounted.address.child.as_ref()?;
+                        Some((
+                            child.parent_session_id.clone(),
+                            child.child_session_id.clone(),
+                        ))
+                    });
+                    if let Some((parent, child)) = description {
+                        if payload.get("childId").and_then(Value::as_str) == Some(parent.as_str()) {
+                            self.request_subagent_describe(&child);
+                        }
+                    }
+                }
+                changed
+            }
+            Err(message) => {
+                self.error = Some(format!("子代理事件无效：{message}"));
+                true
+            }
+        }
+    }
+
     fn handle_request_done(&mut self, id: u64, result: Result<Value, RequestError>) {
         let Some(pending) = self.pending.remove(&id) else {
             return;
@@ -1787,6 +2413,13 @@ impl App {
                     | Pending::ScheduleUpdate
                     | Pending::ScheduleDelete
                     | Pending::ScheduleHistory { .. }
+                    | Pending::SubagentsSnapshot
+                    | Pending::SubagentsList
+                    | Pending::SubagentsDescribe { .. }
+                    | Pending::SubagentPrompt { .. }
+                    | Pending::SubagentInterrupt { .. }
+                    | Pending::SubagentSubscribe { .. }
+                    | Pending::SubagentUnsubscribe
             )
         {
             self.resubscribing = false;
@@ -2244,6 +2877,109 @@ impl App {
                     .unwrap_or_default();
                 self.dispatch_terminal(commands);
             }
+            Pending::SubagentsSnapshot => {
+                self.subagents_snapshot_pending = false;
+                match result {
+                    Ok(value) => {
+                        if let Err(message) = self.subagents.apply_snapshot(&value) {
+                            self.error = Some(format!("子代理目录无效：{message}"));
+                        }
+                    }
+                    Err(error) => {
+                        self.error = Some(format!("子代理目录读取失败：{}", error.message));
+                    }
+                }
+                if self.subagents_snapshot_queued {
+                    self.subagents_snapshot_queued = false;
+                    self.refresh_subagents();
+                }
+            }
+            Pending::SubagentsList => {
+                self.subagent_list_loading = false;
+                match result {
+                    Ok(value) => {
+                        if let Err(message) = self.subagents.apply_list(&value) {
+                            self.error = Some(format!("子代理列表无效：{message}"));
+                        }
+                    }
+                    Err(error) => {
+                        self.error = Some(format!("子代理列表读取失败：{}", error.message));
+                    }
+                }
+            }
+            Pending::SubagentsDescribe { child_id } => match result {
+                Ok(value) => {
+                    self.apply_subagent_description(&value);
+                }
+                Err(error) => {
+                    self.subagents.describing = None;
+                    self.error = Some(format!("子代理历史读取失败：{}", error.message));
+                    if self
+                        .subagents
+                        .mounted()
+                        .and_then(|mounted| mounted.address.child.as_ref())
+                        .is_some_and(|child| child.child_session_id == child_id)
+                    {
+                        self.notice = Some("无法确认子代理模式；输入保持禁用".to_string());
+                    }
+                }
+            },
+            Pending::SubagentPrompt { request_id } => match result {
+                Ok(value) => {
+                    let accepted = value
+                        .get("accepted")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    if accepted {
+                        self.submit_backups.remove(&request_id);
+                        self.notice =
+                            Some("子代理消息已被官方收件箱接受（回执不等于已执行）".to_string());
+                    } else if let Some(snapshot) = self.submit_backups.get(&request_id).cloned() {
+                        self.restore_draft(&request_id, &snapshot);
+                        self.error = Some("官方未接受子代理消息；草稿已恢复".to_string());
+                    }
+                }
+                Err(error)
+                    if matches!(error.kind, RequestErrorKind::Rpc | RequestErrorKind::Local) =>
+                {
+                    if let Some(snapshot) = self.submit_backups.get(&request_id).cloned() {
+                        self.restore_draft(&request_id, &snapshot);
+                    }
+                    self.error = Some(format!("子代理发送失败：{}", error.message));
+                }
+                Err(_) => {
+                    // The prompt may have reached the child. Keep the draft
+                    // cleared and never retry with a new requestId.
+                    self.submit_backups.remove(&request_id);
+                    self.notice =
+                        Some("子代理发送结果未知；草稿未回滚，也不会自动重发".to_string());
+                }
+            },
+            Pending::SubagentInterrupt { child_id } => match result {
+                Ok(_) => {
+                    self.notice = Some(format!(
+                        "已请求停止子代理 {child_id} 的当前回合；排队消息与后代保留"
+                    ));
+                }
+                Err(error) => self.error = Some(format!("子代理停止失败：{}", error.message)),
+            },
+            Pending::SubagentSubscribe { address_key } => match result {
+                Ok(value) => {
+                    if let Some(model) = self.child_models.get_mut(&address_key) {
+                        let seq = value.get("seq").and_then(Value::as_u64).unwrap_or(0);
+                        model.apply_replay_baseline(seq, false);
+                    }
+                    self.subagent_subscription = value
+                        .get("subscriptionId")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    self.transcript_dirty = true;
+                }
+                Err(error) => {
+                    self.error = Some(format!("子代理历史订阅失败：{}", error.message));
+                }
+            },
+            Pending::SubagentUnsubscribe => {}
             Pending::CompactCancel => match result {
                 Ok(value) => {
                     let cancelled = value
@@ -2861,10 +3597,20 @@ impl App {
                 record.unknown("宿主已断开，命令可能已执行");
             }
         }
+        // Without a live host the exact parent is gone. Keep the child view
+        // readable, but never leave a composer that would fail on send.
+        if let Some(mounted) = self.subagents.nav_mut().mounted_mut() {
+            mounted.parent_live = false;
+            mounted.activity = nano_subagents::Activity::Inactive;
+        }
     }
 
-    /// Address value for S06 request params.
+    /// Address value for S06 request params. The mounted child owns its own
+    /// image drafts; the root address is used everywhere else.
     fn address_value(&self) -> Value {
+        if let Some(mounted) = self.subagents.mounted() {
+            return mounted.address.wire_value();
+        }
         self.model.address().wire_value()
     }
 
@@ -2976,6 +3722,16 @@ impl App {
 
     /// Open the attachment path picker.
     fn open_picker(&mut self) {
+        if self.subagent_active()
+            && !self
+                .subagents
+                .mounted_gate()
+                .unwrap_or(ComposerGate::Resolving)
+                .can_send()
+        {
+            self.notice = Some("当前子代理没有可输入内容的附件入口".to_string());
+            return;
+        }
         if self.edit_target.is_some() {
             self.error = Some("编辑队列项时不能附加文件".to_string());
             return;
@@ -3088,6 +3844,9 @@ impl App {
         let name = nano_attachments::wire::display_name(&path);
         if declared.is_some() || looks_image {
             return self.attach_image(path, name, total, declared);
+        }
+        if self.subagent_active() {
+            return Err("子代理只接受图片附件；通用文件已被拒绝".to_string());
         }
         if let Some(limits) = &self.attachment_limits {
             if limits.file_admission == "unsupported" {
@@ -3981,6 +4740,26 @@ impl App {
 
     fn click_at(&mut self, column: u16, row: u16) -> bool {
         let point = (column, row);
+        if self.subagent_active() && self.subagent_exit_area.contains(point.into()) {
+            return self.leave_subagent();
+        }
+        if !self.subagent_active() && self.subagent_dock_area.contains(point.into()) {
+            if let Some((index, _)) = self
+                .subagent_dock_hits
+                .iter()
+                .find(|(_, hit_row)| *hit_row == row)
+            {
+                let index = *index;
+                let (rows, _) = self.subagents.dock();
+                self.subagents.nav_mut().dock_focus = true;
+                if index < rows.len() {
+                    self.subagents.nav_mut().dock_selected = index;
+                    return self.enter_subagent(index);
+                }
+                self.enter_subagent_overflow();
+                return true;
+            }
+        }
         if self.decision_area.contains(point.into()) {
             let offset = row.saturating_sub(self.decision_area.y) as usize;
             let Some(Some(click)) = self.decision_hits.get(offset).cloned() else {
@@ -3997,7 +4776,16 @@ impl App {
             };
             match hit.kind {
                 HitKind::Toggle => return self.view.toggle(&hit.identity),
-                HitKind::OpenQuestion { call_id } => return self.open_question(&call_id),
+                HitKind::OpenQuestion { call_id } => {
+                    if self.subagent_active() {
+                        // Child approvals/questions are pinned to `never` by
+                        // the official policy; never offer an answer surface.
+                        self.notice =
+                            Some("子代理审批由官方钉死为拒绝，不能从此处放行".to_string());
+                        return true;
+                    }
+                    return self.open_question(&call_id);
+                }
             }
         }
         false
@@ -4640,6 +5428,212 @@ impl App {
         }
     }
 
+    /// Route one key while a child conversation is mounted. Returns `None`
+    /// when the key should keep its ordinary meaning (scrolling, global
+    /// shortcuts, or plain typing while input is enabled).
+    fn handle_child_key(&mut self, key: KeyEvent) -> Option<bool> {
+        let gate = self.subagents.mounted_gate()?;
+        let composing = self.drafts.current().mode() == InputMode::Composing;
+        let blank = self.drafts.current().is_blank();
+        if key.code == KeyCode::Esc && key.modifiers.is_empty() {
+            // The input method owns Esc while composing; exiting is a separate
+            // physical action.
+            if composing {
+                return Some(false);
+            }
+            return Some(self.leave_subagent());
+        }
+        if key.code == KeyCode::Left
+            && key.modifiers.is_empty()
+            && blank
+            && self.scene.focus().input_focused()
+            && !composing
+        {
+            return Some(self.leave_subagent());
+        }
+        if key.code == KeyCode::Char('k') && key.modifiers.is_empty() && blank && gate.can_stop() {
+            self.stop_mounted_subagent();
+            return Some(true);
+        }
+        if key.code == KeyCode::Enter {
+            if key.kind == KeyEventKind::Repeat {
+                return Some(true);
+            }
+            if composing {
+                return Some(false);
+            }
+            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                if gate.can_send() {
+                    let old = self.drafts.current().text().to_string();
+                    self.drafts.current_mut().handle(&InputEvent::Newline);
+                    let new = self.drafts.current().text().to_string();
+                    self.shift_attachment_anchors(&old, &new);
+                }
+                return Some(true);
+            }
+            if key.modifiers.contains(KeyModifiers::ALT) {
+                self.submit_subagent_draft(Delivery::Steer);
+                return Some(true);
+            }
+            if key.modifiers.is_empty() {
+                if gate.can_send() {
+                    self.submit_subagent_draft(Delivery::Queue);
+                } else {
+                    self.notice = Some(gate.hint().to_string());
+                }
+                return Some(true);
+            }
+            return Some(false);
+        }
+        // A read-only or stopped child owns no editable draft. Swallow editing
+        // keys so a phantom draft cannot be built and later sent by accident.
+        if !gate.can_send() && key.modifiers.is_empty() {
+            match key.code {
+                KeyCode::Char(_)
+                | KeyCode::Backspace
+                | KeyCode::Delete
+                | KeyCode::Left
+                | KeyCode::Right
+                | KeyCode::Up
+                | KeyCode::Down
+                | KeyCode::Home
+                | KeyCode::End
+                | KeyCode::Tab => return Some(true),
+                _ => {}
+            }
+        }
+        // The parent queue and its shortcuts do not belong to a child view.
+        if key.modifiers.contains(KeyModifiers::ALT) {
+            match key.code {
+                KeyCode::Char('e' | 'E' | 'd' | 'D' | 's' | 'S' | 'x' | 'X') => return Some(true),
+                // A read-only child has no attachment entry either.
+                KeyCode::Char('a' | 'A') if !gate.can_send() => return Some(true),
+                _ => {}
+            }
+        }
+        if key.code == KeyCode::Tab {
+            return Some(true);
+        }
+        None
+    }
+
+    /// Route one key while the all-agents list owns the keyboard.
+    fn handle_subagent_list_key(&mut self, key: KeyEvent) -> bool {
+        let rows = self.subagents.list_rows().len();
+        match key.code {
+            KeyCode::Esc => {
+                self.subagents.nav_mut().close_list();
+                true
+            }
+            KeyCode::Up => self.subagents.nav_mut().move_list(-1, rows),
+            KeyCode::Down => self.subagents.nav_mut().move_list(1, rows),
+            KeyCode::PageUp => {
+                self.subagents.nav_mut().move_list(-8, rows);
+                true
+            }
+            KeyCode::PageDown => {
+                self.subagents.nav_mut().move_list(8, rows);
+                true
+            }
+            KeyCode::Enter | KeyCode::Right | KeyCode::Char('f') => {
+                let index = self.subagents.nav().list_selected;
+                self.enter_subagent_list(index)
+            }
+            KeyCode::Char(' ') if key.modifiers.is_empty() => {
+                let index = self.subagents.nav().list_selected;
+                self.enter_subagent_list(index)
+            }
+            KeyCode::Char('r') if key.modifiers.is_empty() => {
+                self.refresh_subagents_list();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Route one key to the dock while the input is blank. Returns `None` when
+    /// the key keeps its ordinary meaning.
+    fn handle_dock_key(&mut self, key: KeyEvent) -> Option<bool> {
+        if self.subagents.nav().is_mounted()
+            || !self.scene.focus().input_focused()
+            || !self.drafts.current().is_blank()
+        {
+            return None;
+        }
+        let (rows, overflow) = self.subagents.dock();
+        if rows.is_empty() {
+            return None;
+        }
+        let dock_focus = self.subagents.nav().dock_focus;
+        if !dock_focus {
+            match key.code {
+                KeyCode::Up | KeyCode::Down if key.modifiers.is_empty() => {
+                    self.subagents.nav_mut().dock_focus = true;
+                    self.subagents
+                        .nav_mut()
+                        .clamp_dock(rows.len(), overflow > 0);
+                    if key.code == KeyCode::Up {
+                        let last = rows.len() + usize::from(overflow > 0) - 1;
+                        self.subagents.nav_mut().dock_selected = last;
+                    }
+                    return Some(true);
+                }
+                _ => return None,
+            }
+        }
+        match key.code {
+            KeyCode::Esc => {
+                self.subagents.nav_mut().dock_focus = false;
+                Some(true)
+            }
+            KeyCode::Up => Some(
+                self.subagents
+                    .nav_mut()
+                    .move_dock(-1, rows.len(), overflow > 0),
+            ),
+            KeyCode::Down => Some(
+                self.subagents
+                    .nav_mut()
+                    .move_dock(1, rows.len(), overflow > 0),
+            ),
+            KeyCode::Enter | KeyCode::Right | KeyCode::Char('f') => {
+                let index = self.subagents.nav().dock_selected;
+                if index < rows.len() {
+                    Some(self.enter_subagent(index))
+                } else {
+                    self.enter_subagent_overflow();
+                    Some(true)
+                }
+            }
+            KeyCode::Char(' ') if key.modifiers.is_empty() => {
+                let index = self.subagents.nav().dock_selected;
+                if index < rows.len() {
+                    Some(self.enter_subagent(index))
+                } else {
+                    self.enter_subagent_overflow();
+                    Some(true)
+                }
+            }
+            KeyCode::Char('k') if key.modifiers.is_empty() => {
+                self.stop_selected_subagent();
+                Some(true)
+            }
+            KeyCode::Char('l') if key.modifiers.is_empty() => {
+                self.enter_subagent_overflow();
+                Some(true)
+            }
+            KeyCode::Char(_) => {
+                // Typing returns to the input and keeps the ordinary meaning.
+                self.subagents.nav_mut().dock_focus = false;
+                None
+            }
+            _ => {
+                self.subagents.nav_mut().dock_focus = false;
+                None
+            }
+        }
+    }
+
     fn handle_queue_key(&mut self, key: KeyEvent) -> bool {
         if key.modifiers.contains(KeyModifiers::CONTROL)
             || key.modifiers.contains(KeyModifiers::ALT)
@@ -4736,6 +5730,11 @@ impl App {
         }
         if self.switch.busy() {
             return self.switch.state().label();
+        }
+        if self.subagent_active() {
+            if let Some(gate) = self.subagents.mounted_gate() {
+                return format!("子代理 · {}", gate.hint());
+            }
         }
         if self.schedule.open {
             if let Some(busy) = &self.schedule.busy {
@@ -5133,6 +6132,18 @@ impl App {
     fn reset_for_target(&mut self, address: &SessionAddress) {
         self.model = ConversationModel::new(address.clone());
         self.drafts.switch_to(address.clone());
+        self.attachments.switch_to(address.clone());
+        self.view = TranscriptView::new(address.clone(), TranscriptSource::Interactive);
+        self.subagents = SubagentState::new(address.root_session_id.clone());
+        self.child_models.clear();
+        self.child_views.clear();
+        self.parent_view = None;
+        self.active_child_key = None;
+        self.subagent_subscription = None;
+        self.subagents_snapshot_pending = false;
+        self.subagents_snapshot_queued = false;
+        self.subagent_list_loading = false;
+        self.subagent_blink_at = None;
         self.scene
             .switch_to(SceneId::conversation(), address.clone());
         self.hello = None;
@@ -5284,12 +6295,34 @@ impl App {
             self.drain_decisions();
             changed = true;
         }
-        if !self.model.previews().is_empty() {
+        if !self.active_model().previews().is_empty() {
             self.transcript_dirty = true;
             changed = true;
         }
         if self.view.scroll().recent_wheel(now) {
             return changed;
+        }
+        if self.subagents.cleanup(now) {
+            changed = true;
+        }
+        if self.subagents.snapshot_due && !self.subagents_snapshot_pending {
+            self.refresh_subagents();
+            changed = true;
+        }
+        if self.subagents.any_running() && !self.reduced_motion {
+            match self.subagent_blink_at {
+                None => {
+                    self.subagent_blink_at = Some(now);
+                    changed = true;
+                }
+                Some(next) if now >= next => {
+                    self.subagent_blink_at = Some(now + nano_subagents::BLINK_PERIOD / 2);
+                    changed = true;
+                }
+                Some(_) => {}
+            }
+        } else {
+            self.subagent_blink_at = None;
         }
         changed |= self.tick_resubscribe();
         changed
@@ -7692,6 +8725,11 @@ mod tests {
 mod terminal_tests {
     use super::*;
     use crossterm::event::KeyEvent;
+    use serde_json::json;
+
+    fn app() -> App {
+        App::new(Cli::default(), "root".to_string(), false)
+    }
 
     fn terminal_app() -> App {
         use std::sync::atomic::{AtomicU64, Ordering};
@@ -7745,5 +8783,185 @@ mod terminal_tests {
         app.hide_terminal();
         app.handle_paste("hello".to_string());
         assert_eq!(app.drafts.current().text(), "hello");
+    }
+
+    fn install_subagents(app: &mut App, agents: Value) {
+        app.subagents
+            .apply_snapshot(&json!({
+                "agents": agents,
+                "diagnostics": [],
+                "parentLive": true
+            }))
+            .expect("valid snapshot");
+    }
+
+    fn subagent_row(id: &str, mode: &str) -> Value {
+        json!({
+            "id": id,
+            "parentId": "root",
+            "depth": 1,
+            "mode": mode,
+            "label": format!("task {id}"),
+            "activity": "inactive",
+            "hasChildren": false
+        })
+    }
+
+    fn describe_child(id: &str, mode: &str) -> Value {
+        json!({
+            "id": id,
+            "parentId": "root",
+            "mode": mode,
+            "label": format!("task {id}"),
+            "activity": "inactive",
+            "parentLive": true,
+            "seq": 1
+        })
+    }
+
+    #[test]
+    fn dock_enter_and_escape_restore_parent_and_child_drafts() {
+        let mut app = app();
+        install_subagents(&mut app, json!([subagent_row("child", "continuable")]));
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert!(app.subagents.nav().dock_focus);
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.subagent_active());
+        app.apply_subagent_description(&describe_child("child", "continuable"));
+        assert_eq!(app.subagents.mounted_gate(), Some(ComposerGate::Enabled));
+        app.drafts.current_mut().set_text("child draft");
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.subagent_active());
+        assert_eq!(app.drafts.current().text(), "");
+        // Re-entering the same address restores its draft.
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        app.apply_subagent_description(&describe_child("child", "continuable"));
+        assert_eq!(app.drafts.current().text(), "child draft");
+    }
+
+    #[test]
+    fn one_shot_child_is_read_only_and_swallows_typing() {
+        let mut app = app();
+        install_subagents(&mut app, json!([subagent_row("old", "one-shot")]));
+        assert!(app.enter_subagent(0));
+        app.apply_subagent_description(&describe_child("old", "one-shot"));
+        assert_eq!(app.subagents.mounted_gate(), Some(ComposerGate::ReadOnly));
+        app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert_eq!(app.drafts.current().text(), "");
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.subagent_active());
+    }
+
+    #[test]
+    fn unknown_mode_stays_read_only_until_history_resolves_it() {
+        let mut app = app();
+        install_subagents(&mut app, json!([subagent_row("mystery", "unknown")]));
+        assert!(app.enter_subagent(0));
+        assert_eq!(app.subagents.mounted_gate(), Some(ComposerGate::Resolving));
+        app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert_eq!(app.drafts.current().text(), "");
+        app.apply_subagent_description(&describe_child("mystery", "continuable"));
+        assert_eq!(app.subagents.mounted_gate(), Some(ComposerGate::Enabled));
+        app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert_eq!(app.drafts.current().text(), "x");
+    }
+
+    #[test]
+    fn external_child_never_opens_a_detail_view() {
+        let mut app = app();
+        install_subagents(&mut app, json!([subagent_row("remote", "external")]));
+        assert!(!app.enter_subagent(0));
+        assert!(!app.subagent_active());
+    }
+
+    #[test]
+    fn child_session_events_never_enter_the_root_model() {
+        let mut app = app();
+        install_subagents(&mut app, json!([subagent_row("child", "continuable")]));
+        assert!(app.enter_subagent(0));
+        app.apply_subagent_description(&describe_child("child", "continuable"));
+        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::Event(
+            nano_runtime::protocol::EventParams {
+                runtime_id: "rt".into(),
+                generation: 1,
+                subscription_id: "sub-child".into(),
+                sequence: 1,
+                kind: "session.event".into(),
+                payload: json!({
+                    "address": {
+                        "rootSessionId": "root",
+                        "parentSessionId": "root",
+                        "childSessionId": "child",
+                        "mode": "continuable"
+                    },
+                    "seq": 1,
+                    "type": "user/message",
+                    "data": {
+                        "id": "message-1",
+                        "role": "user",
+                        "content": [{"type": "text", "text": "child only"}],
+                        "source": {"kind": "user", "rpcId": "r-1"}
+                    }
+                }),
+            },
+        )));
+        assert_eq!(app.model.history().len(), 0);
+        let key = app.active_child_key.clone().expect("child mounted");
+        assert_eq!(app.child_models[&key].history().len(), 1);
+    }
+
+    #[test]
+    fn terminal_cleanup_hides_the_dock_entry_but_not_the_open_view() {
+        let mut app = app();
+        install_subagents(&mut app, json!([subagent_row("child", "continuable")]));
+        assert!(app.enter_subagent(0));
+        app.apply_subagent_description(&describe_child("child", "continuable"));
+        app.subagents
+            .apply_event(&json!({
+                "type": "end",
+                "childId": "child",
+                "stopReason": "completed"
+            }))
+            .expect("valid lifecycle event");
+        assert!(app
+            .subagents
+            .cleanup(Instant::now() + nano_subagents::CLEANUP_DELAY * 2));
+        assert!(app.subagents.dock().0.is_empty());
+        // The mounted detail is not closed by the dock timer.
+        assert!(app.subagent_active());
+    }
+
+    #[test]
+    fn list_navigation_returns_to_the_selected_row() {
+        let mut app = app();
+        app.subagents
+            .apply_list(&json!({
+                "entries": [
+                    {"id": "a", "parentId": "root", "depth": 1, "mode": "continuable", "activity": "inactive", "hasChildren": true},
+                    {"id": "c", "parentId": "a", "depth": 2, "mode": "one-shot", "activity": "inactive", "hasChildren": false}
+                ],
+                "diagnostics": [
+                    {"id": "broken", "parentId": "a", "depth": 2, "reason": "corrupt"}
+                ]
+            }))
+            .expect("valid list");
+        app.enter_subagent_overflow();
+        assert!(app.subagents.nav().list_open);
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.subagent_active());
+        app.apply_subagent_description(&json!({
+            "id": "c",
+            "parentId": "a",
+            "mode": "one-shot",
+            "activity": "inactive",
+            "parentLive": false,
+            "seq": 1
+        }));
+        assert_eq!(app.subagents.mounted_gate(), Some(ComposerGate::ReadOnly));
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.subagents.nav().list_open);
+        assert_eq!(app.subagents.nav().list_selected, 1);
     }
 }

@@ -26,6 +26,7 @@ import { ShellService } from '../shell/service.mjs'
 import { JobsService } from '../jobs/service.mjs'
 import { ControlsService } from '../controls/service.mjs'
 import { SkillsService } from '../skills/service.mjs'
+import { SubagentsService } from '../subagents/service.mjs'
 import { buildCapabilities } from './capabilities.mjs'
 import { IMPLEMENTED_REQUEST_METHODS } from './methods.mjs'
 
@@ -46,6 +47,7 @@ const CANCELLABLE_REQUEST_METHODS = new Set([
   'nano.schedule.create',
   'nano.schedule.update',
   'nano.schedule.delete',
+  'nano.subagents.prompt',
 ])
 
 /**
@@ -75,6 +77,7 @@ export function startHost(ctx, config) {
     jobs: undefined,
     controls: undefined,
     skills: undefined,
+    subagents: undefined,
     agentHandle: undefined,
     session: undefined,
     claim: undefined,
@@ -254,6 +257,12 @@ async function runStartup(state, config) {
     session,
     nonce: state.config.nonce,
     nonceRequired: state.transport.nonceRequired,
+    authorizeChild: (address) => {
+      if (state.subagents === undefined) {
+        throw new RpcError('nano/subagents/unavailable', 'the subagent service is not composed')
+      }
+      return state.subagents.authorizeChild(address)
+    },
   })
   state.attachments = new AttachmentService({
     ctx,
@@ -322,6 +331,14 @@ async function runStartup(state, config) {
     rootSessionId: state.config.rootSessionId,
     nonce: state.config.nonce,
     nonceRequired: state.transport.nonceRequired,
+  })
+  state.subagents = new SubagentsService({
+    ctx,
+    hub: state.hub,
+    agent: state.agentHandle.agent,
+    session,
+    rootSessionId: state.config.rootSessionId,
+    attachments: state.attachments,
   })
 
   // Both ownership gates (mount ledger above, schedule lease inside) must be
@@ -783,6 +800,26 @@ async function dispatchRequest(state, frame) {
       await sendResult(state, id, await state.terminal.close(params))
       return undefined
     }
+    case 'nano.subagents.snapshot': {
+      await sendResult(state, id, await state.subagents.snapshot())
+      return undefined
+    }
+    case 'nano.subagents.list': {
+      await sendResult(state, id, await state.subagents.list())
+      return undefined
+    }
+    case 'nano.subagents.describe': {
+      await sendResult(state, id, await state.subagents.describe(params))
+      return undefined
+    }
+    case 'nano.subagents.prompt': {
+      await sendResult(state, id, await state.subagents.prompt(params, signalOf(state, id)))
+      return undefined
+    }
+    case 'nano.subagents.interrupt': {
+      await sendResult(state, id, state.subagents.interrupt(params))
+      return undefined
+    }
     case 'nano.approval.answer': {
       await sendResult(state, id, state.decisions.answerApproval(params))
       return undefined
@@ -985,6 +1022,8 @@ async function runShutdown(state, reason) {
     state.sessions = undefined
     state.skills?.close()
     state.skills = undefined
+    state.subagents?.close()
+    state.subagents = undefined
     state.shell?.close()
     state.shell = undefined
     state.jobs?.close()
@@ -1173,6 +1212,14 @@ async function failStartup(state, error) {
       state.skills = undefined
     } catch (cleanupError) {
       cleanupFailures.push(`skills: ${describe(cleanupError)}`)
+    }
+  }
+  if (state.subagents !== undefined) {
+    try {
+      state.subagents.close()
+      state.subagents = undefined
+    } catch (cleanupError) {
+      cleanupFailures.push(`subagents: ${describe(cleanupError)}`)
     }
   }
   if (state.shell !== undefined) {

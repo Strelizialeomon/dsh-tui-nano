@@ -181,7 +181,10 @@ impl ComposerAttachments {
     /// (`delta < 0`) or later (`delta > 0`). Reordering changes only the
     /// anchors; no bytes are re-uploaded.
     pub fn move_at_cursor(&mut self, cursor: usize, delta: isize) -> Option<String> {
-        let index = self.anchors.iter().rposition(|anchor| anchor.offset <= cursor)?;
+        let index = self
+            .anchors
+            .iter()
+            .rposition(|anchor| anchor.offset <= cursor)?;
         let target = index as isize + delta;
         if target < 0 || target >= self.anchors.len() as isize {
             return None;
