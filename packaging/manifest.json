@@ -1,0 +1,31 @@
+{
+  "name": "dsh-tui-nano",
+  "version": "0.1.0",
+  "platform": "macos",
+  "arch": "arm64",
+  "profile": "dsh-tui-nano",
+  "dataRootDefault": "~/.dsh-tui-nano",
+  "bridgeVersion": "0.1.0",
+  "official": {
+    "package": "@deepseek-ai/dsh",
+    "version": "0.2.1-rc.2",
+    "source": "https://github.com/deepseek-ai/deepseek-harness/tree/687f282e8625c6b8d11ff58211a90524be2e4317",
+    "sourceCommit": "687f282e8625c6b8d11ff58211a90524be2e4317"
+  },
+  "node": {
+    "verified": "v24.18.0",
+    "minimumMajor": 22
+  },
+  "verified": {
+    "terminal": "Ghostty 1.3.1",
+    "os": "macOS 27.0.1 (26A434)",
+    "cpu": "arm64",
+    "node": "v24.18.0",
+    "rust": "1.99.1"
+  },
+  "payload": {
+    "binary": "bin/nano",
+    "bridge": "lib/bridge",
+    "protocol": "lib/protocol"
+  }
+}

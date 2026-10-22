@@ -1,0 +1,41 @@
+   Compiling libc v0.2.191
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling errno v0.3.14
+   Compiling os_pipe v1.2.3
+   Compiling getrandom v0.4.3
+   Compiling signal-hook-registry v1.4.8
+   Compiling rustix v1.1.5
+   Compiling syn v3.0.9
+   Compiling signal-hook v0.3.18
+   Compiling tempfile v3.27.0
+   Compiling serde_derive v1.0.229
+   Compiling serde v1.0.229
+   Compiling nano-runtime v0.1.0 (/Users/<user>/code/dsh-tui-nano/.claude/worktrees/issue-16/crates/nano-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.83s
+     Running tests/integration.rs (target/debug/deps/integration-96183ea9b146e080)
+
+running 21 tests
+test corrupt_ledger_refuses_startup ... ok
+test dead_owner_is_swept_and_session_resumes ... ok
+test direct_signals_enter_the_shutdown_path ... ok
+test handshake_subscribe_shutdown_roundtrip ... ok
+test host_shutdown_closes_a_live_terminal ... ok
+test multiple_windows_and_two_sessions_in_one_checkout_are_isolated ... ok
+test nano_profile_has_no_user_terminal_agent_tool ... ok
+test persistence_failure_is_reported_without_lying ... ok
+test reused_pid_causes_false_occupancy_without_double_write ... ok
+test second_host_same_session_is_occupied ... ok
+test simultaneous_hosts_for_one_session_leave_exactly_one_winner ... ok
+test startup_signal_cancels_cleanly ... ok
+test stdio_fallback_handshake_and_shutdown ... ok
+test terminal_create_input_resize_reattach_close ... ok
+test terminal_process_exit_disables_input_then_drains ... ok
+test terminal_retain_protects_the_process_until_release ... ok
+test terminal_without_a_retain_hold_is_reclaimed ... ok
+test terminals_are_scoped_to_their_root_session_host ... ok
+test transport_eof_runs_host_cleanup ... ok
+test unknown_cleanup_step_is_reported_and_claim_retained ... ok
+test writer_held_is_reported_without_switching_sessions ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 55.49s

@@ -1,0 +1,12 @@
+✔ same root session is rejected, then released and re-claimable (13384.432084ms)
+✔ two live windows with different roots do not terminate each other (11298.021334ms)
+✔ transcripts and schedule tables do not cross root sessions (15992.191958ms)
+✔ official schedule route is nano-schedule-json and rejects another route (12111.652875ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 72656.5815

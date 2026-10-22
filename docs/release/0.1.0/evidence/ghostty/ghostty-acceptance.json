@@ -1,0 +1,128 @@
+{
+  "ghostty": "Ghostty 1.3.1",
+  "macos": "27.0.1",
+  "arch": "arm64",
+  "payload": "dsh-tui-nano-0.1.0-arm64",
+  "checks": [
+    {
+      "label": "install succeeded",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "dark 100 main captured",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "dark 100 sessions panel rendered",
+      "ok": true,
+      "detail": "diff=0.03785800530517254"
+    },
+    {
+      "label": "dark 100 skills panel rendered",
+      "ok": true,
+      "detail": "diff=0.0175546157503566"
+    },
+    {
+      "label": "dark 100 instructions panel rendered",
+      "ok": true,
+      "detail": "diff=0.020818344761142114"
+    },
+    {
+      "label": "dark 100 jobs panel rendered",
+      "ok": true,
+      "detail": "diff=0.021062723655564174"
+    },
+    {
+      "label": "dark 100 schedule panel rendered",
+      "ok": true,
+      "detail": "diff=0.0448773491654363"
+    },
+    {
+      "label": "dark 100 palette panel rendered",
+      "ok": true,
+      "detail": "diff=0.036957908961237206"
+    },
+    {
+      "label": "CJK composer rendered",
+      "ok": true,
+      "detail": "diff=0.007117486424263657"
+    },
+    {
+      "label": "model response rendered",
+      "ok": true,
+      "detail": "diff=0.07535745789644904"
+    },
+    {
+      "label": "selection copy contains model response",
+      "ok": true,
+      "detail": "nano 已连接 · 空闲 · seq 19 · 队列 0 · ctx 289/1000k (0%) · 参考\n第 5 行：滚轮与阅读位置检查。\n第 6 行：滚"
+    },
+    {
+      "label": "wheel changed the view",
+      "ok": true,
+      "detail": "diff=0.0361618202747679"
+    },
+    {
+      "label": "window closed after Ctrl+C",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "no nano process remains",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "no shutdown error on stderr",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "light 60 main captured",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "light 60 sessions panel rendered",
+      "ok": true,
+      "detail": "diff=0.06605202054417751"
+    },
+    {
+      "label": "light window closed after Ctrl+C",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "fullscreen capture exists",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "fullscreen window closed after Ctrl+C",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "fullscreen 60 capture exists",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "fullscreen 60 window closed after Ctrl+C",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "reduced-motion main captured",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "reduced-motion window closed",
+      "ok": true,
+      "detail": ""
+    }
+  ]
+}

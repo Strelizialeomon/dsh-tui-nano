@@ -1,7 +1,7 @@
 # [2026-10-20-nano-v1/S13] 发布验收
 
 - 组标识：`2026-10-20-nano-v1`；角色：子件 S13，单交付为安装、版本矩阵与跨功能验收证据。
-- 状态：草案，未批准实施；Issue：待规格合入后创建。
+- 状态：已验收（#16）；发布结论：**不发布**，阻断项见 `docs/release/0.1.0/release-conclusion.md`。Issue：#16。
 - 总纲：[共享约定与依据](README.md)。上游：全部子件。下游：全部子件（design-contract 与 D10 发布条件）。
 - 合入前提：测试契约可先写，发布结论必须等所有子件完成；本份不代其他子件补写功能。发布由本份负责。
 
@@ -100,20 +100,20 @@ design-contract 的视觉基准固定为 `docs/design/2026-10-17-dsh-tui-ux-rese
 
 ## 8. 验收
 
-- [ ] 安装包在干净的 macOS 用户环境完成安装、首次启动、版本核对和卸载演练；在已有 `$DSH_HOME`/profile 的环境做一次重装/升级演练，安装前后有文件清单或哈希比对，证明不覆盖配置和凭据。
-- [ ] 首次启动显示配置、凭据和全局指令的实际来源；Node/dsh/桥接缺失或版本不符时给出可操作错误；卸载后用户会话和官方数据仍在，文档写明保留路径。
-- [ ] 版本矩阵覆盖实际构建与官方 `0.2.1-rc.2`，记录构建号、官方提交、终端版本、macOS、CPU、Node 和验证日期；未知版本被明确拒绝，不进入离线只读模式。
-- [ ] 双窗口、会话认领、会话切换、`nano-schedule-json` 路由、补投组合通过；两个根会话的调度表互不可见。
+- [x] 安装包在干净的 macOS 用户环境完成安装、首次启动、版本核对和卸载演练；在已有 `$DSH_HOME`/profile 的环境做一次重装/升级演练，安装前后有文件清单或哈希比对，证明不覆盖配置和凭据。证据：`docs/release/0.1.0/evidence/install.txt`、Ghostty 成功首启截图。
+- [ ] 首次启动显示配置、凭据和全局指令的实际来源；Node/dsh/桥接缺失或版本不符时给出可操作错误；卸载后用户会话和官方数据仍在，文档写明保留路径。— 版本拒绝/卸载通过；首次启动来源显示缺失，见发布结论 B5。
+- [x] 版本矩阵覆盖实际构建与官方 `0.2.1-rc.2`，记录构建号、官方提交、终端版本、macOS、CPU、Node 和验证日期；未知版本被明确拒绝，不进入离线只读模式。证据：`docs/release/0.1.0/version-matrix.md`。
+- [x] 双窗口、会话认领、会话切换、`nano-schedule-json` 路由、补投组合通过；两个根会话的调度表互不可见。证据：`tests/e2e/cross-feature.test.mjs`（含双 root 并发）、S07/S11 证据。
 - [ ] 跨会话内容隔离端到端通过：transcript、草稿、队列、附件、审批、问卷、终端、Monitor、调度都不跨根会话或父子地址。
 - [ ] 真实对话、工具、差异、问卷、审批、压缩、子代理链路端到端通过。
 - [ ] `!`、PTY、任务停止、Monitor 收件和预算耗尽通过。
 - [ ] 附件、技能/规矩、上下文展示的边界与失败路径通过。
-- [ ] 正常退出、EOF、SIGTERM、崩溃、启动取消的清理结果逐项记录；不误杀独立 dsh。
-- [ ] Ghostty 全屏下 60/100 列、深浅主题、CJK、选择复制、滚轮、退出通过人工验收；对照已冻结的 design-contract，键位/主题冲突为阻断项。
-- [ ] 证据绑定安装产物哈希 + 官方包完整版本/来源；commit 只作补充；证据脱敏检查通过，不含密钥、PII、用户正文或绝对路径。
-- [ ] 已知限制、未测平台和阻断项清单与实际一致；没有未处理的阻断缺陷。
-- [ ] 发布证据冻结在 `docs/release/<version>/`，可被人独立复核。
-- [ ] 本份只汇总其他子件证据，不为缺失功能补写实现或演示数据。
+- [x] 正常退出、EOF、SIGTERM、崩溃、启动取消的清理结果逐项记录；不误杀独立 dsh。证据：`docs/release/0.1.0/evidence/host-integration.txt`、`shutdown-budget.txt`；S01 证据见 #4/PR #18。
+- [x] Ghostty 全屏下 60/100 列、深浅主题、CJK、选择复制、滚轮、退出通过人工验收；对照已冻结的 design-contract，键位/主题冲突为阻断项。— 24/24 检查通过；冲突记 B1–B3，真实输入法组合态记 B4。
+- [x] 证据绑定安装产物哈希 + 官方包完整版本/来源；commit 只作补充；证据脱敏检查通过，不含密钥、PII、用户正文或用户真实绝对路径（合成 `/tmp`、`/var/folders` 路径允许出现）。
+- [ ] 已知限制、未测平台和阻断项清单与实际一致；没有未处理的阻断缺陷。— 清单一致；但存在 B1–B5，后半句不成立。
+- [x] 发布证据冻结在 `docs/release/<version>/`，可被人独立复核。
+- [x] 本份只汇总其他子件证据，不为缺失功能补写实现或演示数据。
 
 ## 9. 机制清单
 
@@ -132,11 +132,39 @@ design-contract 的视觉基准固定为 `docs/design/2026-10-17-dsh-tui-ux-rese
 
 - 安装包格式（压缩包/安装脚本）在实施时按 macOS 分发实测确定；本份不先锁定。
 - 截图/录屏的存放格式和命名由 S13 定，但必须能对应到版本和验收项。
-- 证据必须脱敏：密钥、凭据、PII、用户正文、完整环境和绝对路径不得进入 `docs/release/`；这是硬要求，不是「默认」。
+- 证据必须脱敏：密钥、凭据、PII、用户正文、完整环境和用户真实绝对路径不得进入 `docs/release/`；合成 home/workdir 路径允许出现。这是硬要求，不是「默认」。
 - 发布审核档位按 spec-flow 闸卡当场选择；本份不预设档位。
 - `docs/release/design-contract.md` 的格式和初始内容由 S13 在实施期定义；各子件只引用，不各写一份。颜色/间距/行号槽/状态灯/上下文线以 `preview/index.html` 为基准，但用终端单元格映射，不冻结浏览器 px/字号/行高。
 - 截图/录屏使用合成 home/workdir 或固定遮罩规则；未脱敏原件只留在受控本机目录，不进发布证据。
 
 ## 11. 审核修订记录
 
-待本稿逐份过闸；上述验收均未执行。
+2026-10-22：轻审（用户点档；S13 派 1 个 agent 执行，非独立第三方）发现 25 项（7 major / 17 minor / 1 nit / 1 范围外），无 blocker；原文见 PR #36 评论。处置如下，验收结论见 `docs/release/0.1.0/release-conclusion.md`。
+
+| # | 严重度 | 发现 | 处置 |
+| --- | --- | --- | --- |
+| 1 | major | install.sh 的 `--dsh-home/--data-root/--dsh-bin` 未写入 wrapper | 已修：wrapper 固化 `DSH_HOME/NANO_DATA_ROOT/NANO_DSH`，verify-install 增加显式路径用例 |
+| 2 | major | build-release.sh 可能带入未跟踪 `.env`/证书 | 已修：payload 改白名单复制，增加 secret-like 扫描 |
+| 3 | major | 退出/EOF/SIGTERM/崩溃/启动取消被标已验但无证据 | 已修：跑 ignored 真实宿主套件并冻结 `host-integration.txt`、`shutdown-budget.txt` |
+| 4 | major | 首次启动来源显示无证据 | 改标 B5 阻断，不再声称通过 |
+| 5 | major | 双窗口只测同 root 拒绝，无并发双 root | 已修：新增双 root 并发用例；ignored 套件也覆盖同 checkout 双窗口 |
+| 6 | major | Ghostty `pgrep -f .../current/bin/nano` 永不匹配 | 已修：改为匹配 `$ROOT/install/` |
+| 7 | major | Ghostty `focus()` 丢弃返回码，失败会把按键/剪贴板发给前台应用 | 已修：置前失败即中止；保存/恢复用户剪贴板 |
+| 8 | minor | Ghostty 窗口只按标题匹配、PID 记录时机、清理范围 | 已修：owner+title 匹配；启动后立即按 title 记录 PID |
+| 9 | minor | 面板/全屏检查只验文件存在，Pillow 缺失时滚轮误绿 | 已修：面板/主视图做像素差分；Pillow 改为硬依赖；补 60 列全屏截图 |
+| 10 | minor | 多帧 zstd 仅解第一帧，CLI 未声明 | 已修：README 声明 `zstd` 前置；测试在缺 CLI 时显式失败 |
+| 11 | minor | e2e 未使用合成 HOME | 已修：setup 设置合成 HOME/XDG 并传给安装与宿主 |
+| 12 | minor | 错误路由同时改 `schedule` 与 `nano_probe`，可能误判 | 已修：只改 `routes.schedule`，`nano_probe` 保持正确后端 |
+| 13 | minor | mock 请求计数含非模型请求，未断言两 root 的响应 | 已修：只计 POST messages，并断言两 root 持久化助手响应 |
+| 14 | minor | `start()` 在 boot 成功后才登记清理 | 已修：spawn 后立即登记，boot 失败也会清理 |
+| 15 | minor | 证据绝对路径规则冲突；version-matrix `install.json` 路径错 | 已修：统一为“用户真实路径不含、合成路径允许”；矩阵指向 `evidence/ghostty/install.json` |
+| 16 | minor | packaging README 说 wrapper 也拒绝未知 dsh 版本 | 已修文案：Rust 预检拒绝，wrapper 核对 Node/桥接版本 |
+| 17 | minor | spec §11/§8 状态未回填 | 已修：本节与 §8 勾选已回填 |
+| 18 | minor | release README 复核命令缺 `NANO_BRIDGE_PACKAGE`/ignored 套件 | 已修：命令与前置已补 |
+| 19 | minor | uninstall 对 install root/profile 归属检查不足 | 已修：install root 需 receipt；profile 校验 name+bridge；先检查后删除 |
+| 20 | minor | receipt `replacedExistingFiles` 语义易误读；purge 后仍输出 retained 路径 | 已修：增加 `payloadAction`；删除时输出 `null` |
+| 21 | minor | build-release 缺 rsync 检查、不尊重 CARGO_TARGET_DIR、arch 未校验 | 已修：补 `need rsync`、`--target-dir`、`file` 架构校验 |
+| 22 | minor | wrapper 在 profile 安装前落盘，失败会半安装 | 已修：profile 安装成功后才切 current/wrapper |
+| 23 | minor | wrapper/receipt 对含引号路径不安全 | 已修：wrapper 用 shell 单引号转义；receipt 由 node `JSON.stringify` 生成 |
+| 24 | nit | B1 解除动作 owner 写成 S07/S03 | 已修：改为 S02（输入框绘制），上下文数值可联 S07 |
+| 25 | 范围外 | 根 `package.json` 新增 S13 脚本，属 S01 构建根 | 已移除；命令保留在 packaging/README 与 release README |
