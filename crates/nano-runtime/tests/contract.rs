@@ -251,6 +251,23 @@ fn fixtures_parse_with_rust_types() {
     assert!(report.clean);
     assert!(report.steps.iter().any(|step| step.name == "persistence"));
     assert!(report.steps.iter().any(|step| step.name == "dispose"));
+
+    assert_eq!(fixtures["terminalAttach"]["method"], "nano.terminal.attach");
+    assert_eq!(
+        fixtures["terminalAttach"]["params"]["sessionId"],
+        "session-fixture"
+    );
+    assert_eq!(
+        fixtures["terminalAttach"]["params"]["terminalId"],
+        "term-fixture"
+    );
+    let attach = &fixtures["terminalAttachResult"]["result"];
+    assert_eq!(attach["attachmentId"], "att-1");
+    assert_eq!(attach["info"]["state"], "running");
+    assert_eq!(attach["writable"], true);
+    assert!(attach["snapshot"].is_string());
+    assert_eq!(fixtures["terminalOutput"]["method"], "nano.terminal.output");
+    assert_eq!(fixtures["terminalOutput"]["params"]["sequence"], 7);
 }
 
 #[test]

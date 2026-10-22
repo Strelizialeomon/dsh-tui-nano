@@ -21,6 +21,7 @@
   "files": [
     "runtime/**/*.mjs",
     "conversation/**/*.mjs",
+    "terminal/**/*.mjs",
     "schedule/**/*.mjs",
     "attachments/**/*.mjs",
     "shell/**/*.mjs",

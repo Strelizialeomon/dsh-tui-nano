@@ -1,0 +1,27 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.02s
+     Running tests/integration.rs (target/debug/deps/integration-2d092d642fa50042)
+
+running 21 tests
+test corrupt_ledger_refuses_startup ... ok
+test dead_owner_is_swept_and_session_resumes ... ok
+test direct_signals_enter_the_shutdown_path ... ok
+test handshake_subscribe_shutdown_roundtrip ... ok
+test host_shutdown_closes_a_live_terminal ... ok
+test multiple_windows_and_two_sessions_in_one_checkout_are_isolated ... ok
+test nano_profile_has_no_user_terminal_agent_tool ... ok
+test persistence_failure_is_reported_without_lying ... ok
+test reused_pid_causes_false_occupancy_without_double_write ... ok
+test second_host_same_session_is_occupied ... ok
+test simultaneous_hosts_for_one_session_leave_exactly_one_winner ... ok
+test startup_signal_cancels_cleanly ... ok
+test stdio_fallback_handshake_and_shutdown ... ok
+test terminal_create_input_resize_reattach_close ... ok
+test terminal_process_exit_disables_input_then_drains ... ok
+test terminal_retain_protects_the_process_until_release ... ok
+test terminal_without_a_retain_hold_is_reclaimed ... ok
+test terminals_are_scoped_to_their_root_session_host ... ok
+test transport_eof_runs_host_cleanup ... ok
+test unknown_cleanup_step_is_reported_and_claim_retained ... ok
+test writer_held_is_reported_without_switching_sessions ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 55.67s

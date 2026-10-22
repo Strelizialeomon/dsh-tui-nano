@@ -146,25 +146,38 @@ mod tests {
     #[test]
     fn handles_utf8_across_chunks() {
         let mut frames = reader("{\"k\":\"中文\"}\n".as_bytes(), 2);
-        assert_eq!(frames.read_frame().unwrap().as_deref(), Some("{\"k\":\"中文\"}"));
+        assert_eq!(
+            frames.read_frame().unwrap().as_deref(),
+            Some("{\"k\":\"中文\"}")
+        );
     }
 
     #[test]
     fn rejects_unterminated_frame() {
         let mut frames = reader(b"{\"a\":1}", 4);
-        assert!(matches!(frames.read_frame(), Err(FrameReadError::Unterminated)));
+        assert!(matches!(
+            frames.read_frame(),
+            Err(FrameReadError::Unterminated)
+        ));
     }
 
     #[test]
     fn rejects_invalid_utf8() {
         let mut frames = reader(&[b'{', 0xff, b'}', b'\n'], 4);
-        assert!(matches!(frames.read_frame(), Err(FrameReadError::InvalidUtf8)));
+        assert!(matches!(
+            frames.read_frame(),
+            Err(FrameReadError::InvalidUtf8)
+        ));
     }
 
     #[test]
     fn rejects_oversize_frame() {
-        let mut frames = FrameReader::with_limit(io::BufReader::new(Cursor::new(vec![b'a'; 10])), 4);
-        assert!(matches!(frames.read_frame(), Err(FrameReadError::TooLarge(_))));
+        let mut frames =
+            FrameReader::with_limit(io::BufReader::new(Cursor::new(vec![b'a'; 10])), 4);
+        assert!(matches!(
+            frames.read_frame(),
+            Err(FrameReadError::TooLarge(_))
+        ));
     }
 
     #[test]

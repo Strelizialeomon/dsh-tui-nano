@@ -23,12 +23,15 @@ use crate::paths::{
     ProfileInstallSummary, RuntimePaths,
 };
 use crate::protocol::{
-    encode_request, parse_incoming, Address, CancelResult, EventParams, FrameRules, Hello,
-    IncomingFrame, ProtocolVersion, SessionFactMode, ShutdownReport, StartupErrorParams,
-    StreamEndedParams, SubscribeResult,
+    encode_notification, encode_request, parse_incoming, Address, CancelResult, EventParams,
+    FrameRules, Hello, IncomingFrame, ProtocolVersion, SessionFactMode, ShutdownReport,
+    StartupErrorParams, StreamEndedParams, SubscribeResult,
 };
 use crate::protocol_error::{HostError, HostRpcError, ProtocolError};
-use crate::{GRACEFUL_SHUTDOWN_MS, MAX_PENDING_REQUESTS, PROFILE_NAME, TERM_GRACE_MS};
+use crate::{
+    GRACEFUL_SHUTDOWN_MS, MAX_PENDING_REQUESTS, PROFILE_NAME, TERMINAL_NOTIFICATION_METHODS,
+    TERM_GRACE_MS,
+};
 
 /// Whether this launch creates a new root session or resumes an existing one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +81,10 @@ pub struct HostOptions {
     pub model: Option<String>,
     /// Optional initial reasoning effort for the root Agent.
     pub reasoning_effort: Option<String>,
+    /// Test-only override for the official unattended terminal timeout.
+    pub terminal_unattended_timeout_ms: Option<u64>,
+    /// Test-only override for the official terminal activity poll interval.
+    pub terminal_activity_poll_interval_ms: Option<u64>,
 }
 
 /// Events surfaced to the app.
@@ -91,6 +98,13 @@ pub enum HostEvent {
     Event(EventParams),
     /// A `nano.streamEnded` notification.
     StreamEnded(StreamEndedParams),
+    /// A live terminal frame (`nano.terminal.output|state|ack|ended`).
+    TerminalNotification {
+        /// Notification method.
+        method: String,
+        /// Raw params, parsed by the terminal feature.
+        params: Value,
+    },
     /// The transport ended; `lost` means the process is gone.
     TransportClosed {
         /// Whether the host process exited.
@@ -213,7 +227,10 @@ impl PendingRequest {
                     .lock()
                     .expect("pending mutex poisoned")
                     .remove(&self.id);
-                Err(HostError::Timeout(format!("{} did not answer", self.method)))
+                Err(HostError::Timeout(format!(
+                    "{} did not answer",
+                    self.method
+                )))
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => Err(HostError::TransportClosed),
         }
@@ -275,6 +292,8 @@ impl Host {
             options.provider.as_deref(),
             options.model.as_deref(),
             options.reasoning_effort.as_deref(),
+            options.terminal_unattended_timeout_ms,
+            options.terminal_activity_poll_interval_ms,
         )?;
 
         let spawned = if options.force_fallback {
@@ -489,6 +508,30 @@ impl Host {
             .request_timeout
             .unwrap_or(Duration::from_secs(30));
         self.request_internal(method, params, timeout, false)
+    }
+
+    /// Send one client-to-host notification. There is no response, so a write
+    /// failure is the only observably local result.
+    pub fn notify(&self, method: &str, params: Value) -> Result<(), HostError> {
+        let state = self.inner.shared.lifecycle.state();
+        if state != LifecycleState::Ready {
+            return Err(match state {
+                LifecycleState::Lost | LifecycleState::Stopped | LifecycleState::CleanupFailed => {
+                    HostError::ProcessGone
+                }
+                _ => HostError::TransportClosed,
+            });
+        }
+        let encoded = encode_notification(
+            method,
+            params,
+            if self.inner.shared.require_nonce {
+                Some(self.inner.shared.nonce.as_str())
+            } else {
+                None
+            },
+        )?;
+        self.write_frame(&encoded)
     }
 
     /// Send one request without waiting. The returned handle exposes the
@@ -1209,6 +1252,13 @@ fn handle_notification(
                 false
             }
         },
+        other if TERMINAL_NOTIFICATION_METHODS.contains(&other) => {
+            let _ = inbox.send(HostEvent::TerminalNotification {
+                method: other.to_string(),
+                params,
+            });
+            true
+        }
         other => {
             let _ = inbox.send(HostEvent::ProtocolFailure(format!(
                 "unknown host notification {other}"

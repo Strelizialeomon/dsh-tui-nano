@@ -27,6 +27,10 @@ use unicode_width::UnicodeWidthChar;
 /// Draw one frame.
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
+    if app.terminal_active() {
+        draw_terminal(frame, app, area);
+        return;
+    }
     if app.schedule.open {
         draw_schedule(frame, app, area);
         return;
@@ -100,6 +104,46 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_panel(frame, app, area);
     }
 }
+
+fn draw_terminal(frame: &mut Frame, app: &mut App, area: Rect) {
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(area);
+    app.terminal_screen_area = layout[0];
+    let status = match app.terminal.as_mut() {
+        Some(terminal) => {
+            terminal.draw(frame, layout[0]);
+            terminal.status_line()
+        }
+        None => {
+            frame.render_widget(
+                Paragraph::new("终端状态文件不可用；未附着官方终端。")
+                    .style(Style::default().fg(Color::Red)),
+                layout[0],
+            );
+            "终端不可用".to_string()
+        }
+    };
+    let color = if app
+        .terminal
+        .as_ref()
+        .and_then(|terminal| terminal.error())
+        .is_some()
+    {
+        Color::Red
+    } else {
+        Color::DarkGray
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            truncate(&status, area.width.max(1) as usize),
+            Style::default().fg(color),
+        ))),
+        layout[1],
+    );
+}
+
 fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     let status_color = match app.connection {
         Connection::Ready => match app.model.status() {
@@ -468,8 +512,7 @@ fn draw_feed(frame: &mut Frame, app: &mut App, area: Rect) {
             push_bash_record(&mut lines, record, area.width.max(1) as usize);
         }
         let added = lines.len().saturating_sub(before);
-        app.feed_hits
-            .extend(std::iter::repeat(None).take(added));
+        app.feed_hits.extend(std::iter::repeat(None).take(added));
         let viewport = area.height as usize;
         if lines.len() > viewport {
             let extra = lines.len() - viewport;
@@ -1611,7 +1654,6 @@ fn format_duration(duration: std::time::Duration) -> String {
     format!("{}:{:02}", seconds / 60, seconds % 60)
 }
 
-
 fn draw_queue(frame: &mut Frame, app: &App, area: Rect) {
     let focused = !app.scene.focus().input_focused();
     let total = app.model.inbox().total_count();
@@ -1768,7 +1810,13 @@ fn draw_completion(frame: &mut Frame, app: &App, area: Rect) {
         let display: String = candidate
             .path
             .chars()
-            .map(|character| if character.is_control() { '?' } else { character })
+            .map(|character| {
+                if character.is_control() {
+                    '?'
+                } else {
+                    character
+                }
+            })
             .collect();
         lines.push(Line::from(Span::styled(
             format!("{marker} {display}{suffix}"),

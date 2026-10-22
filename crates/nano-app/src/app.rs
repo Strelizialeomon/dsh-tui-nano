@@ -22,8 +22,6 @@ use nano_conversation::{
 };
 use nano_decisions::{answers_to_wire, DecisionAction, DecisionClick, DecisionKey, DecisionsModel};
 use nano_jobs::{BashRecord, JobsModel, SHELL_NOTICE};
-use nano_transcript::{Hit, HitKind, RecordedQuestionState, TranscriptSource, TranscriptView};
-use ratatui::layout::Rect;
 use nano_runtime::{CapabilityStatus, Hello, SessionMode};
 use nano_schedule::{ScheduleAction, ScheduleModel};
 use nano_sessions::{
@@ -33,6 +31,12 @@ use nano_sessions::{
 use nano_skills::{
     InstructionState, InvocationFact, InvocationTracker, NameResolution, SkillCatalog, SkillPreview,
 };
+use nano_terminal::{
+    is_close_key, is_toggle_key, Command as TerminalCommand, Failure, RequestKind, TerminalState,
+    TerminalStore,
+};
+use nano_transcript::{Hit, HitKind, RecordedQuestionState, TranscriptSource, TranscriptView};
+use ratatui::layout::Rect;
 use serde_json::{json, Value};
 
 use crate::cli::Cli;
@@ -221,6 +225,13 @@ pub enum Pending {
     ScheduleHistory {
         /// Exclusive cursor for an older page.
         before: Option<String>,
+    },
+    /// One S09 terminal request and the epoch it belongs to.
+    Terminal {
+        /// Pending identity.
+        kind: RequestKind,
+        /// Operation epoch; stale responses are ignored.
+        epoch: u64,
     },
 }
 
@@ -494,6 +505,12 @@ pub struct App {
     pub compact_request_id: Option<u64>,
     /// A compaction may still be running after a timeout; result unknown.
     pub compact_maybe_running: bool,
+    /// S09 terminal feature, created when the host link exposes its data root.
+    pub terminal: Option<TerminalState>,
+    /// Screen area used by terminal mouse coordinates, set by the draw pass.
+    pub terminal_screen_area: Rect,
+    /// Resolved Nano data root, kept across host restarts for terminal rebinding.
+    pub terminal_data_root: Option<PathBuf>,
 }
 
 impl App {
@@ -514,6 +531,9 @@ impl App {
                 .with_key("ctrl+p"),
         );
         registry.register(nano_skills::contribution());
+        registry.register(
+            FeatureContribution::new("terminal", SceneId::new("terminal")).with_key("f12"),
+        );
         let mut scene = SceneState::conversation();
         scene.set_address(address.clone());
         Self {
@@ -596,12 +616,116 @@ impl App {
             compact_in_flight: false,
             compact_request_id: None,
             compact_maybe_running: false,
+            terminal: None,
+            terminal_screen_area: Rect::new(0, 0, 0, 0),
+            terminal_data_root: None,
         }
     }
 
-    /// Attach the host link.
+    /// Attach the host link and open the terminal identity store under the
+    /// resolved Nano data root.
     pub fn attach_link(&mut self, link: HostLink) {
+        self.terminal_data_root = Some(link.data_root());
+        let root_session_id = self.model.address().root_session_id.clone();
+        self.bind_terminal(root_session_id);
         self.link = Some(link);
+    }
+
+    /// Rebuild the terminal feature for one root session. S07 owns the switch;
+    /// the old host shuts its terminals down, and the view must never carry the
+    /// old screen or attachment into the new session.
+    fn bind_terminal(&mut self, root_session_id: String) {
+        let Some(data_root) = self.terminal_data_root.clone() else {
+            self.terminal = None;
+            return;
+        };
+        self.terminal = Some(match TerminalStore::open(&data_root, &root_session_id) {
+            Ok(store) => {
+                let mut terminal = TerminalState::new(store, (80, 24));
+                terminal.set_root_session_id(root_session_id);
+                terminal
+            }
+            Err(error) => TerminalState::unavailable(error, (80, 24)),
+        });
+        self.terminal_screen_area = Rect::new(0, 0, 0, 0);
+    }
+
+    /// Whether the terminal scene is the active main scene.
+    pub fn terminal_active(&self) -> bool {
+        self.scene.active() == &SceneId::new("terminal")
+    }
+
+    /// Apply terminal side effects in issue order.
+    fn dispatch_terminal(&mut self, commands: Vec<TerminalCommand>) {
+        let mut commands: std::collections::VecDeque<TerminalCommand> = commands.into();
+        while let Some(command) = commands.pop_front() {
+            match command {
+                TerminalCommand::Request {
+                    kind,
+                    method,
+                    params,
+                    epoch,
+                } => match self.link.as_ref().map(|link| link.request(method, params)) {
+                    Some(Ok(id)) => {
+                        self.pending.insert(id, Pending::Terminal { kind, epoch });
+                    }
+                    Some(Err(message)) => {
+                        if let Some(terminal) = self.terminal.as_mut() {
+                            commands.extend(terminal.on_response_epoch(
+                                epoch,
+                                kind,
+                                Err(Failure::unknown(message)),
+                            ));
+                        }
+                    }
+                    None => {
+                        if let Some(terminal) = self.terminal.as_mut() {
+                            commands.extend(terminal.on_response_epoch(
+                                epoch,
+                                kind,
+                                Err(Failure::unknown("宿主未就绪")),
+                            ));
+                        }
+                    }
+                },
+                TerminalCommand::Notify { method, params } => {
+                    if let Some(link) = &self.link {
+                        if let Err(message) = link.notify(method, params) {
+                            self.error = Some(format!("终端通信失败：{message}"));
+                            if let Some(terminal) = self.terminal.as_mut() {
+                                commands.extend(terminal.disconnect("宿主通信已断开"));
+                            }
+                        }
+                    }
+                }
+                TerminalCommand::Clipboard(text) => {
+                    write_clipboard(&text);
+                }
+                TerminalCommand::Status { error, message } => {
+                    if error {
+                        self.error = Some(message);
+                    } else {
+                        self.notice = Some(message);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Toggle into the terminal scene and start its attach flow.
+    pub fn open_terminal(&mut self) {
+        self.scene.switch(SceneId::new("terminal"));
+        let commands = self
+            .terminal
+            .as_mut()
+            .map(TerminalState::open)
+            .unwrap_or_default();
+        self.dispatch_terminal(commands);
+    }
+
+    /// Leave the terminal scene without stopping the process.
+    pub fn hide_terminal(&mut self) {
+        self.scene.switch(SceneId::conversation());
     }
 
     /// Ctrl+P: open the command palette, or close the current pane.
@@ -933,6 +1057,29 @@ impl App {
         if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
             return false;
         }
+        if self.terminal_active() {
+            if is_toggle_key(&key) {
+                self.hide_terminal();
+                return true;
+            }
+            if is_close_key(&key) {
+                let commands = self
+                    .terminal
+                    .as_mut()
+                    .map(TerminalState::close_terminal)
+                    .unwrap_or_default();
+                self.dispatch_terminal(commands);
+                return true;
+            }
+            self.clear_transient_status();
+            let commands = self
+                .terminal
+                .as_mut()
+                .map(|terminal| terminal.handle_key(key))
+                .unwrap_or_default();
+            self.dispatch_terminal(commands);
+            return true;
+        }
         self.clear_transient_status();
         if key.modifiers.contains(KeyModifiers::CONTROL)
             && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('q'))
@@ -962,6 +1109,10 @@ impl App {
             // A switch owns the host lifecycle; new work waits for it.
             self.notice = Some(self.switch.state().label());
             return false;
+        }
+        if is_toggle_key(&key) {
+            self.open_terminal();
+            return true;
         }
         if self.schedule.open {
             if key.modifiers.contains(KeyModifiers::CONTROL)
@@ -1243,6 +1394,15 @@ impl App {
 
     /// Insert a bracketed-paste payload exactly as received.
     pub fn handle_paste(&mut self, text: String) -> bool {
+        if self.terminal_active() {
+            let commands = self
+                .terminal
+                .as_mut()
+                .map(|terminal| terminal.handle_paste(text))
+                .unwrap_or_default();
+            self.dispatch_terminal(commands);
+            return true;
+        }
         if self.decision_owns_seat() {
             self.clear_transient_status();
             return self.decisions.paste(&text);
@@ -1391,6 +1551,9 @@ impl App {
                 true
             }
             LinkEvent::Switched { link } => {
+                self.terminal_data_root = Some(link.data_root());
+                let root_session_id = self.model.address().root_session_id.clone();
+                self.bind_terminal(root_session_id);
                 self.link = Some(link);
                 self.restart_rx = None;
                 self.switch.host_started();
@@ -1416,6 +1579,10 @@ impl App {
 
     /// Enter the explicit "no usable host" state after a failed switch.
     fn fail_switch(&mut self, code: Option<String>, holder_pid: Option<u32>, message: String) {
+        if let Some(terminal) = self.terminal.as_mut() {
+            let commands = terminal.disconnect("会话切换失败；终端进程状态未知");
+            self.dispatch_terminal(commands);
+        }
         self.switch.fail(code, holder_pid, message.clone());
         let label = self.switch.state().label();
         self.error = Some(format!("{label}：{message}；当前没有可用宿主"));
@@ -1518,6 +1685,15 @@ impl App {
                     self.clamp_queue_selection();
                 }
                 changed || controls_changed
+            }
+            HostEvent::TerminalNotification { method, params } => {
+                let commands = self
+                    .terminal
+                    .as_mut()
+                    .map(|terminal| terminal.on_notification(&method, &params))
+                    .unwrap_or_default();
+                self.dispatch_terminal(commands);
+                true
             }
             HostEvent::StreamEnded(params) => {
                 if params.outcome == nano_runtime::protocol::StreamOutcome::Failed {
@@ -1824,10 +2000,8 @@ impl App {
                         );
                     if not_accepted {
                         let detail = reason.unwrap_or("请求已失效");
-                        self.decisions.answer_not_accepted(
-                            &action,
-                            format!("{label}未被接受：{detail}"),
-                        );
+                        self.decisions
+                            .answer_not_accepted(&action, format!("{label}未被接受：{detail}"));
                         self.error = Some(format!("{label}未被接受：{detail}"));
                         if reason == Some("no-live-wait") {
                             self.refresh_decisions();
@@ -2057,6 +2231,18 @@ impl App {
                         self.refresh_snapshot();
                     }
                 }
+            }
+            Pending::Terminal { kind, epoch } => {
+                let result = result.map_err(|error| Failure {
+                    definite: !matches!(error.kind, RequestErrorKind::Unknown),
+                    message: error.message,
+                });
+                let commands = self
+                    .terminal
+                    .as_mut()
+                    .map(|terminal| terminal.on_response_epoch(epoch, kind, result))
+                    .unwrap_or_default();
+                self.dispatch_terminal(commands);
             }
             Pending::CompactCancel => match result {
                 Ok(value) => {
@@ -2657,6 +2843,10 @@ impl App {
     /// The host is gone: no job it owned can still be running. Drop the last
     /// projection instead of showing it as live across a restart.
     fn handle_host_loss(&mut self) {
+        if let Some(terminal) = self.terminal.as_mut() {
+            let commands = terminal.disconnect("宿主已断开；终端进程状态未知");
+            self.dispatch_terminal(commands);
+        }
         self.decisions.clear();
         self.scene.focus_mut().reset(FocusId::input());
         self.transcript_dirty = true;
@@ -3738,6 +3928,16 @@ impl App {
 
     /// Apply one pointer event. Returns whether the screen needs a redraw.
     pub fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> bool {
+        if self.terminal_active() {
+            let area = self.terminal_screen_area;
+            let commands = self
+                .terminal
+                .as_mut()
+                .map(|terminal| terminal.handle_mouse(mouse, area))
+                .unwrap_or_default();
+            self.dispatch_terminal(commands);
+            return true;
+        }
         use crossterm::event::{MouseButton, MouseEventKind};
         match mouse.kind {
             MouseEventKind::ScrollUp => self.scroll_at(mouse.column, mouse.row, -1),
@@ -3849,7 +4049,10 @@ impl App {
     fn send_decision_action(&mut self, action: DecisionAction) {
         let address = self.address_value();
         let (method, params, label) = match &action {
-            DecisionAction::Approval { request_id, outcome } => (
+            DecisionAction::Approval {
+                request_id,
+                outcome,
+            } => (
                 "nano.approval.answer",
                 json!({
                     "address": address,
@@ -3872,7 +4075,11 @@ impl App {
                     params.insert("callId".into(), Value::String(id.clone()));
                 }
                 params.insert("answers".into(), answers_to_wire(answers));
-                ("nano.question.answer", Value::Object(params), "答卷".to_string())
+                (
+                    "nano.question.answer",
+                    Value::Object(params),
+                    "答卷".to_string(),
+                )
             }
             DecisionAction::QuestionExpire {
                 request_id,
@@ -3927,7 +4134,8 @@ impl App {
             }
         };
         if !self.ready {
-            self.decisions.action_failed(&action, "宿主未就绪；卡片已保留");
+            self.decisions
+                .action_failed(&action, "宿主未就绪；卡片已保留");
             self.error = Some("宿主未就绪；卡片已保留".to_string());
             return;
         }
@@ -4954,6 +5162,8 @@ impl App {
         self.view.scroll_mut().to_bottom();
         self.replay_truncated = false;
         self.sessions_panel.close();
+        let root_session_id = address.root_session_id.clone();
+        self.bind_terminal(root_session_id);
     }
 
     /// Read the official context-occupancy projection.
@@ -5059,6 +5269,17 @@ impl App {
     pub fn tick(&mut self) -> bool {
         let now = Instant::now();
         let mut changed = self.poll_restart_events();
+        if self.terminal_active() {
+            let commands = self
+                .terminal
+                .as_mut()
+                .map(TerminalState::tick)
+                .unwrap_or_default();
+            if !commands.is_empty() {
+                self.dispatch_terminal(commands);
+                changed = true;
+            }
+        }
         if self.decisions.tick(now) {
             self.drain_decisions();
             changed = true;
@@ -5281,6 +5502,16 @@ fn capability_supported(hello: &Hello, name: &str) -> bool {
         .capabilities
         .get(name)
         .is_some_and(|capability| capability.status == CapabilityStatus::Supported)
+}
+
+/// Put selected terminal text on the clipboard through OSC 52. This does not
+/// send any key to the process and works in Ghostty without an extra crate.
+fn write_clipboard(text: &str) {
+    use std::io::Write;
+    let encoded = base64(text.as_bytes());
+    let mut stdout = std::io::stdout();
+    let _ = write!(stdout, "\x1b]52;c;{encoded}\x07");
+    let _ = stdout.flush();
 }
 
 /// Minimal standard base64 for the OSC 52 clipboard payload.
@@ -7455,5 +7686,64 @@ mod tests {
         )));
         assert!(app.decisions.top().is_none());
     }
+}
 
+#[cfg(test)]
+mod terminal_tests {
+    use super::*;
+    use crossterm::event::KeyEvent;
+
+    fn terminal_app() -> App {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "nano-app-terminal-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let store = nano_terminal::TerminalStore::open(&root, "root").expect("terminal store");
+        let mut app = App::new(Cli::default(), "root".to_string(), false);
+        app.terminal = Some(nano_terminal::TerminalState::new(store, (80, 24)));
+        app
+    }
+
+    #[test]
+    fn terminal_scene_toggles_and_owns_the_keyboard() {
+        let mut app = terminal_app();
+        let toggle = KeyEvent::new(KeyCode::F(12), KeyModifiers::NONE);
+        assert!(app.handle_key(toggle));
+        assert!(app.terminal_active());
+        assert!(app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)));
+        assert!(!app.should_quit);
+        assert!(app.handle_key(toggle));
+        assert!(!app.terminal_active());
+    }
+
+    #[test]
+    fn switching_root_sessions_rebinds_the_terminal_view() {
+        let mut app = terminal_app();
+        app.terminal_data_root = Some(
+            std::env::temp_dir().join(format!("nano-app-terminal-switch-{}", std::process::id())),
+        );
+        if let Some(terminal) = app.terminal.as_mut() {
+            terminal.set_root_session_id("root".to_string());
+        }
+        app.reset_for_target(&SessionAddress::root("other".to_string()));
+        let terminal = app.terminal.as_ref().expect("terminal rebound");
+        assert_eq!(terminal.root_session_id(), "other");
+        assert_eq!(terminal.phase(), nano_terminal::Phase::Idle);
+        assert!(!app.terminal_active());
+    }
+
+    #[test]
+    fn terminal_paste_does_not_touch_the_conversation_draft() {
+        let mut app = terminal_app();
+        app.open_terminal();
+        app.handle_paste("ls -la".to_string());
+        assert_eq!(app.drafts.current().text(), "");
+        app.hide_terminal();
+        app.handle_paste("hello".to_string());
+        assert_eq!(app.drafts.current().text(), "hello");
+    }
 }

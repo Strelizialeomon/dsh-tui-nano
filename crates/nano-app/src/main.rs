@@ -39,7 +39,7 @@ fn run() -> Result<(), String> {
     }
     let options = cli.host_options();
     cli.ensure_profile(&options)?;
-    let (root_session_id, mode) = cli.session();
+    let (root_session_id, mode) = cli.session()?;
     let mut app = App::new(cli.clone(), root_session_id.clone(), false);
     let link = HostLink::start(&root_session_id, mode, &options)?;
     app.attach_link(link);
@@ -110,6 +110,7 @@ struct TerminalGuard {
     terminal: Terminal<CrosstermBackend<Stdout>>,
     alt_screen: bool,
     enhanced_keyboard: bool,
+    mouse_capture: bool,
 }
 
 impl TerminalGuard {
@@ -146,6 +147,7 @@ impl TerminalGuard {
                 terminal,
                 alt_screen,
                 enhanced_keyboard,
+                mouse_capture: true,
             })
         })();
         match result {
@@ -170,6 +172,9 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let mut stdout = io::stdout();
+        if self.mouse_capture {
+            let _ = execute!(stdout, DisableMouseCapture);
+        }
         if self.enhanced_keyboard {
             let _ = execute!(stdout, PopKeyboardEnhancementFlags);
         }

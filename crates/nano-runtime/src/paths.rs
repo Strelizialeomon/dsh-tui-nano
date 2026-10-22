@@ -83,7 +83,10 @@ impl Preflight {
             None => std::env::current_dir()?,
         };
         let cwd = fs::canonicalize(&cwd).map_err(|error| {
-            HostError::Spawn(format!("working directory {} is not accessible: {error}", cwd.display()))
+            HostError::Spawn(format!(
+                "working directory {} is not accessible: {error}",
+                cwd.display()
+            ))
         })?;
         if !cwd.is_dir() {
             return Err(HostError::Spawn(format!(
@@ -146,7 +149,11 @@ impl Preflight {
 
     /// Run the profile installer. Idempotent; safe to call before every spawn.
     pub fn install_profile(&self) -> Result<ProfileInstallSummary, HostError> {
-        let script = self.paths.bridge_package.join("profile").join("install.mjs");
+        let script = self
+            .paths
+            .bridge_package
+            .join("profile")
+            .join("install.mjs");
         if !script.is_file() {
             return Err(HostError::Spawn(format!(
                 "profile installer is missing: {}",
@@ -166,7 +173,9 @@ impl Preflight {
             .arg("--json")
             .env("DSH_HOME", &self.paths.dsh_home)
             .output()
-            .map_err(|error| HostError::Spawn(format!("could not run the profile installer: {error}")))?;
+            .map_err(|error| {
+                HostError::Spawn(format!("could not run the profile installer: {error}"))
+            })?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -183,8 +192,9 @@ impl Preflight {
             .rev()
             .find(|line| line.trim_start().starts_with('{'))
             .ok_or_else(|| HostError::Spawn("profile installer printed no JSON summary".into()))?;
-        serde_json::from_str(line)
-            .map_err(|error| HostError::Spawn(format!("profile installer summary is invalid: {error}")))
+        serde_json::from_str(line).map_err(|error| {
+            HostError::Spawn(format!("profile installer summary is invalid: {error}"))
+        })
     }
 }
 
@@ -204,6 +214,8 @@ pub fn write_runtime_patch(
     provider: Option<&str>,
     model: Option<&str>,
     reasoning_effort: Option<&str>,
+    terminal_unattended_timeout_ms: Option<u64>,
+    terminal_activity_poll_interval_ms: Option<u64>,
 ) -> Result<PathBuf, HostError> {
     let sessions_root = paths.data_root.join("sessions");
     let storage_root = paths
@@ -241,16 +253,16 @@ pub fn write_runtime_patch(
         }
     }
 
-    let patch = json!([
-        {
+    let mut patch = vec![
+        json!({
             "id": "session-persistence-jsonl",
             "config": { "root": sessions_root.to_string_lossy() }
-        },
-        {
+        }),
+        json!({
             "id": "storage-json",
             "config": { "root": storage_root.to_string_lossy() }
-        },
-        {
+        }),
+        json!({
             // S11 routes only the `schedule` domain to its dedicated backend.
             // The patch replaces the whole config, so `backend` must stay here
             // even though only `routes` differs from the bundle default.
@@ -262,16 +274,29 @@ pub fn write_runtime_patch(
                     "nano_probe": "nano-schedule-json"
                 }
             }
-        },
-        {
+        }),
+        json!({
             "id": "nano-bridge",
             "config": bridge_config
+        }),
+    ];
+    // S09 tests shorten the official unattended reclamation window. The row
+    // itself is mounted by the bridge bundle; this overlay only supplies config.
+    if terminal_unattended_timeout_ms.is_some() || terminal_activity_poll_interval_ms.is_some() {
+        let mut config = serde_json::Map::new();
+        if let Some(timeout) = terminal_unattended_timeout_ms {
+            config.insert("unattendedTimeoutMs".to_string(), json!(timeout));
         }
-    ]);
-    let patch_name = format!(
-        "generation-{generation}-{}.json",
-        &hex(&random_bytes(6))
-    );
+        if let Some(interval) = terminal_activity_poll_interval_ms {
+            config.insert("activityPollIntervalMs".to_string(), json!(interval));
+        }
+        patch.push(json!({
+            "id": "terminal-controller",
+            "config": Value::Object(config)
+        }));
+    }
+    let patch = Value::Array(patch);
+    let patch_name = format!("generation-{generation}-{}.json", &hex(&random_bytes(6)));
     let patch_path = paths.data_root.join("runtime").join(patch_name);
     let mut file = OpenOptions::new()
         .create_new(true)
@@ -330,10 +355,16 @@ fn resolve_executable(
         which(name).ok_or_else(|| HostError::Spawn(format!("{name} was not found on PATH")))?
     };
     let canonical = fs::canonicalize(&candidate).map_err(|error| {
-        HostError::Spawn(format!("{name} path {} is not accessible: {error}", candidate.display()))
+        HostError::Spawn(format!(
+            "{name} path {} is not accessible: {error}",
+            candidate.display()
+        ))
     })?;
     if !is_executable(&canonical) {
-        return Err(HostError::Spawn(format!("{name} path is not executable: {}", canonical.display())));
+        return Err(HostError::Spawn(format!(
+            "{name} path is not executable: {}",
+            canonical.display()
+        )));
     }
     Ok(canonical)
 }
@@ -403,7 +434,9 @@ fn run_version(executable: &Path, args: &[&str]) -> Result<String, HostError> {
     let output = Command::new(executable)
         .args(args)
         .output()
-        .map_err(|error| HostError::Spawn(format!("could not run {}: {error}", executable.display())))?;
+        .map_err(|error| {
+            HostError::Spawn(format!("could not run {}: {error}", executable.display()))
+        })?;
     if !output.status.success() {
         return Err(HostError::Spawn(format!(
             "{} --version exited {}",

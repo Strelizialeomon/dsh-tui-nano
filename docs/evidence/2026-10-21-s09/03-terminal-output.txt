@@ -1,0 +1,40 @@
+$ printf 'wide:世界 combining:e\u0301 color:\033[31mRED\033[0m\n'
+wide:世界 combining:é color:RED
+$
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+终端 · connected · zsh 140x39 · 运行中 · 可输入 · 终端已附着 · F12 返回 · F11 关闭 · F10 重附 · F9 选 shell · F8 复制

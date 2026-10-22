@@ -88,14 +88,28 @@ impl Cli {
             provider: self.provider.clone(),
             model: self.model.clone(),
             reasoning_effort: self.effort.clone(),
+            terminal_unattended_timeout_ms: None,
+            terminal_activity_poll_interval_ms: None,
         }
     }
 
-    /// Resolve the root session identity and mode.
-    pub fn session(&self) -> (String, SessionMode) {
+    /// Resolve the root session identity and mode. A resumed identity must be
+    /// a safe opaque id before it reaches any host-owned path join.
+    pub fn session(&self) -> Result<(String, SessionMode), String> {
         match &self.resume {
-            Some(id) if !id.is_empty() => (id.clone(), SessionMode::Resume),
-            _ => (new_root_session_id(), SessionMode::Create),
+            Some(id) if !id.is_empty() => {
+                let safe = id.len() <= 128
+                    && id.chars().all(|character| {
+                        character.is_ascii_alphanumeric() || character == '_' || character == '-'
+                    });
+                if !safe {
+                    return Err(format!(
+                        "--resume id {id:?} is not a safe session identity; expected [A-Za-z0-9_-]{{1,128}}"
+                    ));
+                }
+                Ok((id.clone(), SessionMode::Resume))
+            }
+            _ => Ok((new_root_session_id(), SessionMode::Create)),
         }
     }
 
@@ -169,4 +183,26 @@ nano — 极简 DeepSeek Harness 终端界面
   Ctrl+T 任务面板：↑↓ 选择，Enter 查看输出（非消费跟随），k 停止，r 刷新
   Alt+K 技能目录（↑↓ 选择、Enter 填入 /name、P 预览）；Alt+R 项目规矩来源
   PageUp/PageDown 翻阅记录；Ctrl+End 回到底部
+  F12 进入/返回交互终端；终端内 F11 关闭、F10 重新附着、F9 选择 shell
+  终端内 F8 复制所选文本（OSC 52；鼠标松开也会自动复制）
 ";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unsafe_resume_ids_are_rejected_before_the_host_starts() {
+        let mut cli = Cli::default();
+        for id in ["../escape", "/absolute", "with/slash", "with space"] {
+            cli.resume = Some(id.to_string());
+            assert!(cli.session().is_err(), "{id} must not be resumed");
+        }
+        cli.resume = Some("session-safe_123".to_string());
+        assert!(cli.session().is_ok());
+        cli.resume = None;
+        let (generated, mode) = cli.session().expect("generated id");
+        assert!(matches!(mode, SessionMode::Create));
+        assert!(generated.starts_with("session-"));
+    }
+}

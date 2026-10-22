@@ -81,7 +81,7 @@ pub const LIFECYCLE_TRANSITIONS: [(&str, &str); 15] = [
 ];
 
 /// Error code names shared with the bridge contract.
-pub const ERROR_CODE_NAMES: [(&str, i64); 53] = [
+pub const ERROR_CODE_NAMES: [(&str, i64); 61] = [
     ("jsonrpc/parse-error", -32700),
     ("jsonrpc/invalid-request", -32600),
     ("jsonrpc/method-not-found", -32601),
@@ -135,10 +135,18 @@ pub const ERROR_CODE_NAMES: [(&str, i64); 53] = [
     ("nano/decisions/answer-invalid", 1046),
     ("nano/decisions/reply-queued", 1047),
     ("nano/decisions/answer-failed", 1048),
+    ("nano/terminal/unavailable", 1049),
+    ("nano/terminal/limit-reached", 1050),
+    ("nano/terminal/control-unavailable", 1051),
+    ("nano/terminal/not-found", 1052),
+    ("nano/terminal/input", 1053),
+    ("nano/terminal/input-full", 1054),
+    ("nano/terminal/closed-id", 1055),
+    ("nano/terminal/failed", 1056),
 ];
 
 /// Method names implemented by this generation.
-pub const IMPLEMENTED_METHODS: [&str; 45] = [
+pub const IMPLEMENTED_METHODS: [&str; 61] = [
     "nano.hello",
     "nano.startupError",
     "nano.shutdown",
@@ -184,6 +192,29 @@ pub const IMPLEMENTED_METHODS: [&str; 45] = [
     "nano.approval.answer",
     "nano.question.answer",
     "nano.decisions.snapshot",
+    "nano.terminal.environment",
+    "nano.terminal.shells",
+    "nano.terminal.list",
+    "nano.terminal.create",
+    "nano.terminal.retain",
+    "nano.terminal.release",
+    "nano.terminal.attach",
+    "nano.terminal.detach",
+    "nano.terminal.rename",
+    "nano.terminal.close",
+    "nano.terminal.input",
+    "nano.terminal.resize",
+    "nano.terminal.output",
+    "nano.terminal.state",
+    "nano.terminal.ack",
+    "nano.terminal.ended",
+];
+/// Host-to-client terminal notifications understood by this client.
+pub const TERMINAL_NOTIFICATION_METHODS: [&str; 4] = [
+    "nano.terminal.output",
+    "nano.terminal.state",
+    "nano.terminal.ack",
+    "nano.terminal.ended",
 ];
 
 /// Event kinds this client accepts.

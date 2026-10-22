@@ -143,9 +143,9 @@ mod tests {
             for to in LIFECYCLE_STATES {
                 let from = LifecycleState::parse(from).unwrap();
                 let to = LifecycleState::parse(to).unwrap();
-                let expected = LIFECYCLE_TRANSITIONS
-                    .iter()
-                    .any(|(edge_from, edge_to)| *edge_from == from.as_str() && *edge_to == to.as_str());
+                let expected = LIFECYCLE_TRANSITIONS.iter().any(|(edge_from, edge_to)| {
+                    *edge_from == from.as_str() && *edge_to == to.as_str()
+                });
                 assert_eq!(is_allowed(from, to), expected);
             }
         }

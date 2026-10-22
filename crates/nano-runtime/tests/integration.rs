@@ -162,7 +162,9 @@ fn wait_for_stream_ended(host: &Host, subscription_id: &str) {
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         match host.next_event(Some(remaining)) {
-            Ok(HostEvent::StreamEnded(params)) if params.subscription_id == subscription_id => return,
+            Ok(HostEvent::StreamEnded(params)) if params.subscription_id == subscription_id => {
+                return
+            }
             Ok(HostEvent::Event(_)) => continue,
             Ok(other) => panic!("unexpected event before streamEnded: {other:?}"),
             Err(error) => panic!("streamEnded did not arrive: {error}"),
@@ -174,7 +176,9 @@ fn session_log_exists(data_root: &Path, session_id: &str) -> bool {
     let Ok(entries) = fs::read_dir(data_root.join("sessions")) else {
         return false;
     };
-    entries.flatten().any(|entry| entry.path().join(session_id).is_dir())
+    entries
+        .flatten()
+        .any(|entry| entry.path().join(session_id).is_dir())
 }
 
 fn listening_sockets(pid: u32) -> Result<Vec<String>, String> {
@@ -196,7 +200,10 @@ fn clean_report(outcome: &ShutdownOutcome) {
     assert!(outcome.clean, "shutdown report is not clean: {outcome:?}");
     let report = outcome.report.as_ref().expect("shutdown report");
     assert!(
-        report.steps.iter().all(|step| step.status == StepStatus::Stopped),
+        report
+            .steps
+            .iter()
+            .all(|step| step.status == StepStatus::Stopped),
         "non-stopped shutdown step: {report:?}"
     );
     let names: Vec<&str> = report.steps.iter().map(|step| step.name.as_str()).collect();
@@ -216,14 +223,29 @@ fn handshake_subscribe_shutdown_roundtrip() {
 
     assert_eq!(hello.root_session_id, session);
     assert_eq!(hello.session.mode, SessionFactMode::Created);
-    assert!(hello.session.seq >= 3, "session header events were expected");
+    assert!(
+        hello.session.seq >= 3,
+        "session header events were expected"
+    );
     assert_eq!(hello.versions.official, "0.2.1-rc.2");
     assert_eq!(hello.versions.bridge, "0.1.0");
     assert!(hello.versions.node.starts_with('v'));
-    assert_eq!(hello.capabilities["agent"].status, CapabilityStatus::Supported);
-    assert_eq!(hello.capabilities["approval"].status, CapabilityStatus::Supported);
-    assert_eq!(hello.capabilities["userQuestions"].status, CapabilityStatus::Supported);
-    assert_eq!(hello.capabilities["tool-ask-user"].status, CapabilityStatus::Supported);
+    assert_eq!(
+        hello.capabilities["agent"].status,
+        CapabilityStatus::Supported
+    );
+    assert_eq!(
+        hello.capabilities["approval"].status,
+        CapabilityStatus::Supported
+    );
+    assert_eq!(
+        hello.capabilities["userQuestions"].status,
+        CapabilityStatus::Supported
+    );
+    assert_eq!(
+        hello.capabilities["tool-ask-user"].status,
+        CapabilityStatus::Supported
+    );
     assert_eq!(
         hello.capabilities["tool-ask-user"].mode.as_deref(),
         Some("blocking")
@@ -232,7 +254,18 @@ fn handshake_subscribe_shutdown_roundtrip() {
         hello.capabilities["networkListener"].status,
         CapabilityStatus::Unsupported
     );
-    assert_eq!(hello.capabilities["schedule"].status, CapabilityStatus::Supported);
+    assert_eq!(
+        hello.capabilities["schedule"].status,
+        CapabilityStatus::Supported
+    );
+    assert_eq!(
+        hello.capabilities["terminal"].status,
+        CapabilityStatus::Supported
+    );
+    assert_eq!(
+        hello.capabilities["schedule"].status,
+        CapabilityStatus::Supported
+    );
 
     let owners = fixture.session_owners(&session);
     assert_eq!(owners, vec![host.pid()]);
@@ -244,12 +277,10 @@ fn handshake_subscribe_shutdown_roundtrip() {
         "the Nano host must not open a TCP listener"
     );
 
-    let cancelled = host.cancel_request("req-does-not-exist").expect("cancel request");
+    let cancelled = host
+        .cancel_request("req-does-not-exist")
+        .expect("cancel request");
     assert!(!cancelled.cancelled);
-    match host.request("nano.terminal.attach", json!({ "sessionId": session })) {
-        Err(HostError::Rpc(error)) => assert_eq!(error.code, 1008),
-        other => panic!("reserved method did not report unsupported: {other:?}"),
-    }
     match host.request("nano.mystery", json!({})) {
         Err(HostError::Rpc(error)) => assert_eq!(error.code, -32601),
         other => panic!("unknown method did not report method-not-found: {other:?}"),
@@ -288,12 +319,16 @@ fn handshake_subscribe_shutdown_roundtrip() {
         other => panic!("expected event, got {other:?}"),
     }
 
-    host.unsubscribe(&subscription.subscription_id).expect("unsubscribe");
+    host.unsubscribe(&subscription.subscription_id)
+        .expect("unsubscribe");
     wait_for_stream_ended(&host, &subscription.subscription_id);
 
     let outcome = host.shutdown();
     clean_report(&outcome);
-    assert!(fixture.session_owners(&session).is_empty(), "ledger record was not released");
+    assert!(
+        fixture.session_owners(&session).is_empty(),
+        "ledger record was not released"
+    );
     assert!(
         fixture.data.join("sessions").read_dir().unwrap().count() > 0,
         "session log was not created"
@@ -319,11 +354,21 @@ fn handshake_subscribe_shutdown_roundtrip() {
         "the host must not write $DSH_HOME/storages"
     );
     let runtime = fixture.paths();
-    assert!(!runtime.data_root.join("runtime").read_dir().unwrap().any(|entry| {
-        entry
-            .map(|entry| entry.file_name().to_string_lossy().starts_with("generation-"))
-            .unwrap_or(false)
-    }));
+    assert!(!runtime
+        .data_root
+        .join("runtime")
+        .read_dir()
+        .unwrap()
+        .any(|entry| {
+            entry
+                .map(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("generation-")
+                })
+                .unwrap_or(false)
+        }));
 }
 
 #[test]
@@ -337,7 +382,9 @@ fn second_host_same_session_is_occupied() {
 
     let second = fixture.start(&session, SessionMode::Create);
     match second.handshake(Some(Duration::from_secs(30))) {
-        Err(HostError::Startup { code, holder_pid, .. }) => {
+        Err(HostError::Startup {
+            code, holder_pid, ..
+        }) => {
             assert_eq!(code, "occupied");
             assert_eq!(holder_pid, Some(first.pid()));
         }
@@ -370,7 +417,9 @@ fn simultaneous_hosts_for_one_session_leave_exactly_one_winner() {
             assert_eq!(code, "occupied");
             (&second, &first)
         }
-        (first, second) => panic!("expected one winner and one occupied host, got {first:?} / {second:?}"),
+        (first, second) => {
+            panic!("expected one winner and one occupied host, got {first:?} / {second:?}")
+        }
     };
     assert!(loser.wait_for_exit(Duration::from_secs(10)));
     assert_eq!(fixture.session_owners(&session), vec![winner.pid()]);
@@ -404,7 +453,9 @@ fn reused_pid_causes_false_occupancy_without_double_write() {
     .unwrap();
     let host = fixture.start(&session, SessionMode::Create);
     match host.handshake(Some(Duration::from_secs(30))) {
-        Err(HostError::Startup { code, holder_pid, .. }) => {
+        Err(HostError::Startup {
+            code, holder_pid, ..
+        }) => {
             assert_eq!(code, "occupied");
             assert_eq!(holder_pid, Some(std::process::id()));
         }
@@ -511,7 +562,13 @@ fn multiple_windows_and_two_sessions_in_one_checkout_are_isolated() {
     assert_eq!(fixture.session_owners(&session_a), vec![first.pid()]);
     assert_eq!(fixture.session_owners(&session_b), vec![second.pid()]);
     assert_eq!(fixture.session_owners(&session_c), vec![third.pid()]);
-    let storage = |session: &str| fixture.data.join("runtime-data").join(session).join("storage");
+    let storage = |session: &str| {
+        fixture
+            .data
+            .join("runtime-data")
+            .join(session)
+            .join("storage")
+    };
     assert!(storage(&session_a).is_dir());
     assert!(storage(&session_b).is_dir());
     assert!(storage(&session_c).is_dir());
@@ -651,7 +708,10 @@ fn direct_signals_enter_the_shutdown_path() {
         );
         let outcome = host.shutdown();
         assert!(outcome.process_exited);
-        assert!(!outcome.clean, "a signalled host has no verified shutdown ACK");
+        assert!(
+            !outcome.clean,
+            "a signalled host has no verified shutdown ACK"
+        );
     }
 }
 
@@ -765,4 +825,595 @@ fn shutdown_budget_is_bounded_when_cleanup_hangs() {
     assert!(pid_alive(witness.pid()));
     let witness_outcome = witness.shutdown();
     clean_report(&witness_outcome);
+}
+
+fn wait_terminal_notification(
+    host: &Host,
+    method: &str,
+    mut predicate: impl FnMut(&serde_json::Value) -> bool,
+) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            panic!("timed out waiting for {method}");
+        }
+        match host.next_event(Some(remaining)) {
+            Ok(HostEvent::TerminalNotification {
+                method: received,
+                params,
+            }) if received == method && predicate(&params) => return params,
+            Ok(_) => continue,
+            Err(error) => panic!("no terminal notification arrived: {error}"),
+        }
+    }
+}
+
+fn wait_output_contains(host: &Host, attachment_id: &str, needle: &str) -> String {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut collected = String::new();
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            panic!("terminal output did not contain {needle:?}; collected: {collected:?}");
+        }
+        match host.next_event(Some(remaining)) {
+            Ok(HostEvent::TerminalNotification { method, params })
+                if method == "nano.terminal.output"
+                    && params["attachmentId"].as_str() == Some(attachment_id) =>
+            {
+                if let Some(data) = params["data"].as_str() {
+                    collected.push_str(data);
+                }
+                if collected.contains(needle) {
+                    return collected;
+                }
+            }
+            Ok(_) => continue,
+            Err(error) => panic!("no terminal output arrived: {error}"),
+        }
+    }
+}
+
+fn directory_contains(path: &Path, needle: &str) -> bool {
+    let Ok(entries) = fs::read_dir(path) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if directory_contains(&path, needle) {
+                return true;
+            }
+        } else if let Ok(bytes) = fs::read(&path) {
+            if String::from_utf8_lossy(&bytes).contains(needle) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn terminal_shell(shells: &serde_json::Value) -> String {
+    let shells = shells["shells"].as_array().expect("shell array");
+    assert!(
+        !shells.is_empty(),
+        "the execution environment must expose a shell"
+    );
+    let preferred = shells
+        .iter()
+        .find(|shell| matches!(shell["name"].as_str(), Some("zsh" | "bash")))
+        .unwrap_or(&shells[0]);
+    preferred["path"].as_str().expect("shell path").to_string()
+}
+
+#[test]
+#[ignore = "spawns a real dsh host; run with --ignored"]
+fn terminal_create_input_resize_reattach_close() {
+    let fixture = Fixture::new();
+    fixture.install();
+    let session = generate_root_session_id();
+    let host = fixture.start(&session, SessionMode::Create);
+    let hello = handshake(&host);
+    assert_eq!(
+        hello.capabilities["terminal"].status,
+        CapabilityStatus::Supported
+    );
+
+    let environment = host
+        .request("nano.terminal.environment", json!({}))
+        .expect("terminal environment");
+    assert!(environment["maxInputBytes"].as_u64().unwrap() >= 1024);
+    let shells = host
+        .request("nano.terminal.shells", json!({}))
+        .expect("terminal shells");
+    let shell = terminal_shell(&shells);
+
+    let terminal_id = format!("term-e2e-{}", generate_root_session_id());
+    let create = host
+        .request(
+            "nano.terminal.create",
+            json!({ "terminalId": terminal_id, "cols": 80, "rows": 24, "shellPath": shell }),
+        )
+        .expect("terminal create");
+    assert_eq!(create["terminal"]["id"], terminal_id);
+    assert_eq!(create["terminal"]["state"], "running");
+    let create_again = host
+        .request(
+            "nano.terminal.create",
+            json!({ "terminalId": terminal_id, "cols": 80, "rows": 24, "shellPath": shell }),
+        )
+        .expect("idempotent create");
+    assert_eq!(create_again["terminal"]["id"], terminal_id);
+
+    let hold = host
+        .request(
+            "nano.terminal.retain",
+            json!({ "sessionId": session, "terminalId": terminal_id }),
+        )
+        .expect("retain")["holdId"]
+        .as_str()
+        .expect("hold id")
+        .to_string();
+    let attached = host
+        .request(
+            "nano.terminal.attach",
+            json!({ "sessionId": session, "terminalId": terminal_id }),
+        )
+        .expect("attach");
+    let attachment_id = attached["attachmentId"]
+        .as_str()
+        .expect("attachment id")
+        .to_string();
+    assert_eq!(attached["info"]["state"], "running");
+    assert_eq!(attached["writable"], true);
+    assert!(attached["snapshot"].is_string());
+
+    let marker = format!("nano-terminal-ok-{}", std::process::id());
+    host.notify(
+        "nano.terminal.input",
+        json!({
+            "attachmentId": attachment_id,
+            "sequence": 1,
+            "bytes": format!("printf '{marker}\\n'\r"),
+        }),
+    )
+    .expect("terminal input");
+    let output = wait_output_contains(&host, &attachment_id, &marker);
+    assert!(output.contains(&marker));
+
+    host.notify(
+        "nano.terminal.resize",
+        json!({
+            "attachmentId": attachment_id,
+            "sequence": 2,
+            "cols": 100,
+            "rows": 30,
+        }),
+    )
+    .expect("terminal resize");
+    let state = wait_terminal_notification(&host, "nano.terminal.state", |params| {
+        params["attachmentId"].as_str() == Some(attachment_id.as_str())
+            && params["info"]["cols"].as_u64() == Some(100)
+            && params["info"]["rows"].as_u64() == Some(30)
+    });
+    assert_eq!(state["writable"], true);
+
+    host.request(
+        "nano.terminal.detach",
+        json!({ "attachmentId": attachment_id }),
+    )
+    .expect("detach");
+    wait_terminal_notification(&host, "nano.terminal.ended", |params| {
+        params["attachmentId"].as_str() == Some(attachment_id.as_str())
+    });
+
+    let reattached = host
+        .request(
+            "nano.terminal.attach",
+            json!({ "sessionId": session, "terminalId": terminal_id }),
+        )
+        .expect("reattach");
+    let screen = reattached["snapshot"].as_str().expect("screen");
+    assert!(
+        screen.contains(&marker),
+        "reattached screen lost the prior output: {screen:?}"
+    );
+    assert_eq!(reattached["info"]["cols"].as_u64(), Some(100));
+
+    // A real full-screen program drives the same snapshot/output path: vim
+    // enters and leaves the alternate screen, so the parser must survive both.
+    let reattached_id = reattached["attachmentId"].as_str().expect("reattached id");
+    host.notify(
+        "nano.terminal.input",
+        json!({
+            "attachmentId": reattached_id,
+            "sequence": 1,
+            "bytes": "vim -u NONE -N -n\r",
+        }),
+    )
+    .expect("start vim");
+    wait_output_contains(&host, reattached_id, "\u{1b}[?1049h");
+    host.notify(
+        "nano.terminal.input",
+        json!({
+            "attachmentId": reattached_id,
+            "sequence": 2,
+            "bytes": "\u{1b}:q!\r",
+        }),
+    )
+    .expect("quit vim");
+    wait_output_contains(&host, reattached_id, "\u{1b}[?1049l");
+
+    // The provider may report one surviving pid while its grace-period reap is
+    // still settling; a repeated close must succeed without reviving the id.
+    let mut closed = None;
+    for _ in 0..5 {
+        match host.request("nano.terminal.close", json!({ "terminalId": terminal_id })) {
+            Ok(value) => {
+                closed = Some(value);
+                break;
+            }
+            Err(HostError::Rpc(error)) if error.code == 1056 => {
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            Err(error) => panic!("unexpected close error: {error:?}"),
+        }
+    }
+    assert!(closed.is_some(), "terminal close did not settle");
+    let list = host.request("nano.terminal.list", json!({})).expect("list");
+    assert!(list["terminals"].as_array().unwrap().is_empty());
+    host.request("nano.terminal.release", json!({ "holdId": hold }))
+        .expect("release after close");
+
+    assert!(
+        !directory_contains(&fixture.data.join("sessions"), &marker),
+        "terminal output must not enter the session transcript"
+    );
+    let outcome = host.shutdown();
+    clean_report(&outcome);
+}
+
+#[test]
+#[ignore = "spawns a real dsh host; run with --ignored"]
+fn terminal_retain_protects_the_process_until_release() {
+    let fixture = Fixture::new();
+    fixture.install();
+    let session = generate_root_session_id();
+    let mut options = fixture.options.clone();
+    options.terminal_unattended_timeout_ms = Some(200);
+    options.terminal_activity_poll_interval_ms = Some(50);
+    let host = fixture.start_with(&session, SessionMode::Create, &options);
+    handshake(&host);
+
+    let shells = host
+        .request("nano.terminal.shells", json!({}))
+        .expect("terminal shells");
+    let shell = terminal_shell(&shells);
+    let terminal_id = format!("term-retain-{}", generate_root_session_id());
+    host.request(
+        "nano.terminal.create",
+        json!({ "terminalId": terminal_id, "cols": 80, "rows": 24, "shellPath": shell }),
+    )
+    .expect("terminal create");
+    let hold = host
+        .request(
+            "nano.terminal.retain",
+            json!({ "sessionId": session, "terminalId": terminal_id }),
+        )
+        .expect("retain")["holdId"]
+        .as_str()
+        .expect("hold id")
+        .to_string();
+
+    std::thread::sleep(Duration::from_millis(900));
+    let held = host.request("nano.terminal.list", json!({})).expect("list");
+    assert_eq!(
+        held["terminals"].as_array().unwrap().len(),
+        1,
+        "a retained terminal must survive the unattended timeout"
+    );
+
+    host.request("nano.terminal.release", json!({ "holdId": hold }))
+        .expect("release");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let list = host.request("nano.terminal.list", json!({})).expect("list");
+        if list["terminals"].as_array().unwrap().is_empty() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!("released terminal was not reclaimed: {list}");
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let outcome = host.shutdown();
+    clean_report(&outcome);
+}
+
+#[test]
+#[ignore = "spawns a real dsh host; run with --ignored"]
+fn terminal_process_exit_disables_input_then_drains() {
+    let fixture = Fixture::new();
+    fixture.install();
+    let session = generate_root_session_id();
+    let host = fixture.start(&session, SessionMode::Create);
+    handshake(&host);
+    let shells = host
+        .request("nano.terminal.shells", json!({}))
+        .expect("terminal shells");
+    let shell = terminal_shell(&shells);
+    let terminal_id = format!("term-exit-{}", generate_root_session_id());
+    host.request(
+        "nano.terminal.create",
+        json!({ "terminalId": terminal_id, "cols": 80, "rows": 24, "shellPath": shell }),
+    )
+    .expect("terminal create");
+    let hold = host
+        .request(
+            "nano.terminal.retain",
+            json!({ "sessionId": session, "terminalId": terminal_id }),
+        )
+        .expect("retain")["holdId"]
+        .as_str()
+        .expect("hold id")
+        .to_string();
+    let attached = host
+        .request(
+            "nano.terminal.attach",
+            json!({ "sessionId": session, "terminalId": terminal_id }),
+        )
+        .expect("attach");
+    let attachment_id = attached["attachmentId"]
+        .as_str()
+        .expect("attachment id")
+        .to_string();
+    host.notify(
+        "nano.terminal.input",
+        json!({ "attachmentId": attachment_id, "sequence": 1, "bytes": "exit\r" }),
+    )
+    .expect("exit shell");
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut saw_exited_state = false;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            panic!("process exit was not reported; exited_state={saw_exited_state}");
+        }
+        match host.next_event(Some(remaining)) {
+            Ok(HostEvent::TerminalNotification { method, params })
+                if params["attachmentId"].as_str() == Some(attachment_id.as_str()) =>
+            {
+                if method == "nano.terminal.state"
+                    && params["info"]["state"].as_str() == Some("exited")
+                    && params["writable"].as_bool() == Some(false)
+                {
+                    saw_exited_state = true;
+                    break;
+                }
+            }
+            Ok(_) => continue,
+            Err(error) => panic!("no terminal notification arrived: {error}"),
+        }
+    }
+    assert!(saw_exited_state, "the final state must disable input");
+
+    // The official attachment stays open after process exit so the final screen
+    // remains readable; close drains it and then ends the attachment.
+    host.request("nano.terminal.close", json!({ "terminalId": terminal_id }))
+        .expect("close exited terminal");
+    let ended = wait_terminal_notification(&host, "nano.terminal.ended", |params| {
+        params["attachmentId"].as_str() == Some(attachment_id.as_str())
+    });
+    assert_eq!(ended["reason"].as_str(), Some("closed"));
+    host.request("nano.terminal.release", json!({ "holdId": hold }))
+        .expect("release");
+    let outcome = host.shutdown();
+    clean_report(&outcome);
+}
+
+#[test]
+#[ignore = "spawns a real dsh host; run with --ignored"]
+fn terminal_without_a_retain_hold_is_reclaimed() {
+    let fixture = Fixture::new();
+    fixture.install();
+    let session = generate_root_session_id();
+    let mut options = fixture.options.clone();
+    options.terminal_unattended_timeout_ms = Some(200);
+    options.terminal_activity_poll_interval_ms = Some(50);
+    let host = fixture.start_with(&session, SessionMode::Create, &options);
+    handshake(&host);
+    let shells = host
+        .request("nano.terminal.shells", json!({}))
+        .expect("terminal shells");
+    let shell = terminal_shell(&shells);
+    let terminal_id = format!("term-no-retain-{}", generate_root_session_id());
+    host.request(
+        "nano.terminal.create",
+        json!({ "terminalId": terminal_id, "cols": 80, "rows": 24, "shellPath": shell }),
+    )
+    .expect("terminal create");
+    let attached = host
+        .request(
+            "nano.terminal.attach",
+            json!({ "sessionId": session, "terminalId": terminal_id }),
+        )
+        .expect("attach without retain");
+    let attachment_id = attached["attachmentId"]
+        .as_str()
+        .expect("attachment id")
+        .to_string();
+
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let list = host.request("nano.terminal.list", json!({})).expect("list");
+        if list["terminals"].as_array().unwrap().is_empty() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!("an unretained terminal outlived the unattended timeout: {list}");
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            panic!("reclaimed terminal never ended its attachment");
+        }
+        match host.next_event(Some(remaining)) {
+            Ok(HostEvent::TerminalNotification { method, params }) => {
+                if method == "nano.terminal.ended"
+                    && params["attachmentId"].as_str() == Some(attachment_id.as_str())
+                {
+                    break;
+                }
+            }
+            Ok(_) => continue,
+            Err(error) => panic!("no terminal notification arrived: {error}"),
+        }
+    }
+    let outcome = host.shutdown();
+    clean_report(&outcome);
+}
+
+#[test]
+#[ignore = "spawns a real dsh host; run with --ignored"]
+fn terminals_are_scoped_to_their_root_session_host() {
+    let fixture = Fixture::new();
+    fixture.install();
+    let session_a = generate_root_session_id();
+    let session_b = generate_root_session_id();
+    let host_a = fixture.start(&session_a, SessionMode::Create);
+    handshake(&host_a);
+    let host_b = fixture.start(&session_b, SessionMode::Create);
+    handshake(&host_b);
+    let shells = host_a
+        .request("nano.terminal.shells", json!({}))
+        .expect("terminal shells");
+    let shell = terminal_shell(&shells);
+    let terminal_id = format!("term-scope-{}", generate_root_session_id());
+    host_a
+        .request(
+            "nano.terminal.create",
+            json!({ "terminalId": terminal_id, "cols": 80, "rows": 24, "shellPath": shell }),
+        )
+        .expect("terminal create on A");
+    let list_a = host_a
+        .request("nano.terminal.list", json!({}))
+        .expect("list A");
+    assert_eq!(list_a["terminals"].as_array().unwrap().len(), 1);
+    let list_b = host_b
+        .request("nano.terminal.list", json!({}))
+        .expect("list B");
+    assert!(
+        list_b["terminals"].as_array().unwrap().is_empty(),
+        "a different root session must not see this host's terminal: {list_b}"
+    );
+    let mut closed = None;
+    for _ in 0..5 {
+        match host_a.request("nano.terminal.close", json!({ "terminalId": terminal_id })) {
+            Ok(value) => {
+                closed = Some(value);
+                break;
+            }
+            Err(HostError::Rpc(error)) if error.code == 1056 => {
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            Err(error) => panic!("unexpected close error: {error:?}"),
+        }
+    }
+    assert!(closed.is_some(), "terminal close did not settle");
+    clean_report(&host_a.shutdown());
+    clean_report(&host_b.shutdown());
+}
+
+#[test]
+#[ignore = "spawns a real dsh host; run with --ignored"]
+fn nano_profile_has_no_user_terminal_agent_tool() {
+    let fixture = Fixture::new();
+    fixture.install();
+    let dsh_home = fixture
+        .options
+        .dsh_home
+        .clone()
+        .expect("fixture sets DSH_HOME");
+    let work = fixture.options.cwd.clone().expect("fixture sets cwd");
+    let output = Command::new("dsh")
+        .args(["--profile", "dsh-tui-nano", "--dump-config"])
+        .current_dir(&work)
+        .env("DSH_HOME", &dsh_home)
+        .output()
+        .expect("dsh --dump-config");
+    assert!(
+        output.status.success(),
+        "dump-config failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        text.contains("terminal-controller") && text.contains("dsh-api-terminal-controller"),
+        "the official user-terminal controller must be composed"
+    );
+    assert!(
+        !text.contains("dsh-tool-terminal"),
+        "the model-facing Agent terminal tool must not be composed: {text}"
+    );
+    assert!(
+        !text.contains("dsh-monitor"),
+        "the Monitor delivery path must not be composed by S09: {text}"
+    );
+}
+
+#[test]
+#[ignore = "spawns a real dsh host; run with --ignored"]
+fn host_shutdown_closes_a_live_terminal() {
+    let fixture = Fixture::new();
+    fixture.install();
+    let session = generate_root_session_id();
+    let host = fixture.start(&session, SessionMode::Create);
+    handshake(&host);
+    let shells = host
+        .request("nano.terminal.shells", json!({}))
+        .expect("terminal shells");
+    // Use the plain bash profile here: the developer's zsh prompt can spawn
+    // transient helper processes that outlive the test's grace window.
+    let shell = shells["shells"]
+        .as_array()
+        .expect("shell array")
+        .iter()
+        .find(|shell| shell["name"].as_str() == Some("bash"))
+        .and_then(|shell| shell["path"].as_str())
+        .expect("bash is available in the test environment")
+        .to_string();
+    let terminal_id = format!("term-shutdown-{}", generate_root_session_id());
+    host.request(
+        "nano.terminal.create",
+        json!({ "terminalId": terminal_id, "cols": 80, "rows": 24, "shellPath": shell }),
+    )
+    .expect("terminal create");
+    host.request("nano.terminal.retain", json!({ "terminalId": terminal_id }))
+        .expect("retain");
+    host.request(
+        "nano.terminal.attach",
+        json!({ "sessionId": session, "terminalId": terminal_id }),
+    )
+    .expect("attach");
+    let outcome = host.shutdown();
+    clean_report(&outcome);
+    assert!(
+        outcome
+            .report
+            .as_ref()
+            .expect("report")
+            .steps
+            .iter()
+            .any(|step| step.name == "agents" && step.status == StepStatus::Stopped),
+        "the shutdown agents step owns terminal process cleanup: {outcome:?}"
+    );
 }

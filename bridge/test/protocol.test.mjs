@@ -14,6 +14,7 @@ import {
   RESERVED_METHODS,
 } from '../../protocol/index.mjs'
 import {
+  IMPLEMENTED_CLIENT_NOTIFICATION_METHODS,
   IMPLEMENTED_METHODS,
   IMPLEMENTED_NOTIFICATION_METHODS,
   IMPLEMENTED_REQUEST_METHODS,
@@ -38,8 +39,13 @@ test('implemented methods match the contract', () => {
     )
     if (method.kind === 'request') {
       assert.ok(IMPLEMENTED_REQUEST_METHODS.includes(name), `${name} must be dispatched as a request`)
-    } else {
+    } else if (method.direction === 'host-to-client') {
       assert.ok(IMPLEMENTED_NOTIFICATION_METHODS.includes(name), `${name} must be emitted as a notification`)
+    } else {
+      assert.ok(
+        IMPLEMENTED_CLIENT_NOTIFICATION_METHODS.includes(name),
+        `${name} must be accepted as a client notification`,
+      )
     }
   }
 })
@@ -61,6 +67,9 @@ test('limits and error codes match the contract', () => {
   assert.equal(LIMITS.maxSubmitTextBytes, 32768)
   assert.equal(LIMITS.maxSkillPreviewBytes, 65536)
   assert.equal(ERROR_CODES.get('nano/conversation/too-large'), 1018)
+  assert.equal(ERROR_CODES.get('nano/terminal/unavailable'), 1049)
+  assert.equal(ERROR_CODES.get('nano/terminal/input-full'), 1054)
+  assert.equal(ERROR_CODES.get('nano/terminal/failed'), 1056)
   assert.equal(ERROR_CODES.get('nano/generation-mismatch'), 1005)
   assert.equal(ERROR_CODES.get('nano/unsupported'), 1008)
   assert.equal(ERROR_CODES.get('nano/closed'), 1010)
@@ -186,6 +195,22 @@ test('conversation fixtures parse on the bridge side', () => {
   assert.equal(validated.payload.status, 'running')
 })
 
+test('terminal fixtures parse on the bridge side', () => {
+  const attach = parseFrameLine(JSON.stringify(CONTRACT.fixtures.terminalAttach))
+  assert.equal(attach.type, 'request')
+  assert.equal(attach.method, 'nano.terminal.attach')
+  assert.equal(attach.params.sessionId, 'session-fixture')
+  assert.equal(attach.params.terminalId, 'term-fixture')
+  const result = parseFrameLine(JSON.stringify(CONTRACT.fixtures.terminalAttachResult))
+  assert.equal(result.type, 'response')
+  assert.equal(result.result.info.state, 'running')
+  assert.equal(result.result.writable, true)
+  assert.equal(typeof result.result.snapshot, 'string')
+  const output = parseFrameLine(JSON.stringify(CONTRACT.fixtures.terminalOutput))
+  assert.equal(output.type, 'notification')
+  assert.equal(output.params.sequence, 7)
+})
+
 test('sessions fixtures parse on the bridge side', () => {
   const list = CONTRACT.fixtures.sessionsList
   assert.equal(list.result.sessions[0].sessionId, 'session-fixture')
@@ -242,6 +267,9 @@ test('capability names match the contract and unanswered seams are unavailable',
   assert.equal(capabilities.userQuestions.status, 'unsupported')
   assert.equal(capabilities['tool-ask-user'].status, 'unsupported')
   assert.equal(capabilities.schedule.status, 'unsupported')
+  assert.equal(capabilities.terminal.status, 'unsupported')
+  const composed = buildCapabilities({ get: (key) => (key === 'terminalController' ? {} : undefined) }, {})
+  assert.equal(composed.terminal.status, 'supported')
 })
 
 test('composed interaction seams report the S03 answerer as supported', () => {

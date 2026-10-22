@@ -1,7 +1,7 @@
 # [2026-10-20-nano-v1/S09] 交互终端
 
 - 组标识：`2026-10-20-nano-v1`；角色：子件 S09，单交付为真实 PTY、输入/缩放/屏幕恢复的交互终端。
-- 状态：草案，未批准实施；Issue：待规格合入后创建。
+- 状态：已批准实施；执行单 #12。
 - 总纲：[共享约定与依据](README.md)。上游：S02（D02）、S01（D06/D07）。下游：S13（D09）。
 - 合入前提：S01 的 PTY 双向流与背压契约可用，且 D07 的完整 snapshot/output/input 示例与断流证据齐全；S02 可运行（D02）。本份用真实 shell 进程完成输入、缩放、断线恢复和关闭验证。发布由 S13 承担。
 
@@ -119,4 +119,25 @@
 
 ## 10. 审核修订记录
 
-待本稿逐份过闸；上述验收均未执行。
+2026-10-21 实施 PR #25 重审（用户点重审；2 个只读 agent：规格符合性 + 对抗找 bug）。原始结论见 PR #25 评论。处置如下：
+
+| # | 严重度 | 发现 | 处置 |
+| --- | --- | --- | --- |
+| 1 | 重大 | 未知 create 的 pending id 被 list 结果误删，超时后另起新 id，旧 shell 变孤儿 | 已修：pending 不在 list 时保留并按同一 id 重试；close 按 pending id 发 `nano.terminal.close`；相关单测 |
+| 2 | 重大 | `nano.terminal.attach` 只收 terminalId、返回 screen，偏离 S01 的 sessionId/snapshot | 已修：协议、桥接、Rust、夹具与真实宿主测试全部对齐 S01 |
+| 3 | 重大 | 点击/拖选后 selection 不清，滚轮永久失效 | 已修：鼠标释放后清选择；单击不产生剪贴板；回归测试 |
+| 4 | 重大 | F9 选择器可在创建/连接中打开，选中后吞掉活动终端 | 已修：创建/连接/持有/pending 时拒绝；picker 入口再校验；epoch 丢弃迟到响应 |
+| 5 | 重大 | 正常状态下选择器不渲染（parser 为空时提前 return）；窄窗口越界 panic | 已修：picker 在占位页也绘制；按区域裁剪；TestBackend 回归 |
+| 6 | 次要 | 传输断开后迟到请求结果覆盖 disconnected；关闭成功后仍显示旧错误 | 已修：Disconnected 守卫 + epoch；close 成功清 error |
+| 7 | 次要 | 桥接输入队列无字节上限，失败后仍消费已排队命令 | 已修：按 maxBufferedBytes 计费、ack 释放、fail 清空；单测 |
+| 8 | 次要 | X10/UTF-8 鼠标释放按按下编码；选区列号未按 parser 宽度 clamp；鼠标捕获不随 panic 恢复 | 已修：release code 3、列 clamp、捕获移入 TerminalGuard::drop |
+| 9 | 次要 | Agent/Monitor 负向夹具是空断言 | 已修：真实 `--dump-config` 证明无 `dsh-tool-terminal`/`dsh-monitor` 行 |
+| 10 | 记录 | `slow-consumer` 不可达、未知 info.state 被吞、`--resume` 非安全 id 写路径、宿主关停终端 close 偶发失败 | 已修：原因分类、显式拒绝未知 state、id 校验、关停 close 有限重试 |
+| 11 | 记录 | 协议声明的部分错误码未使用；in-process carrier 无 inputWindow，Rust 以 maxBufferedBytes 为硬上限 | 保留：契约预留错误码；输入窗口简化写入 PR 自定细节，不伪造等待队列 |
+| 12 | 重大 | 修订后重附路径的 attach 漏 `sessionId`，被桥接拒绝（轻审发现） | 已修：`begin_attach` 两条路径都带 `sessionId`；新增初附/重附两条参数断言 |
+| 13 | 次要 | 进程退出但附件仍开时误标“输出未确认排空” | 已改“输出已收完”，与官方 drained 后发布 exited 的语义一致 |
+| 14 | 记录 | `--resume` 非安全 id 仍会在终端 store 校验前传给宿主 | 已修：`Cli::session` 在启动宿主前拒绝非 `[A-Za-z0-9_-]{1,128}` 的 id |
+| 15 | 记录 | 三处弱覆盖测试（选区 clamp、ack 释放、closeAll 重试） | 已补有效断言与失败路径测试 |
+| 16 | 重大 | 合入 S07 后切换根会话未重建终端，旧屏幕/attachment/store 残留 | 已修：`bind_terminal` 按新 rootSessionId 重建；`Switched`/`attach_link` 刷新数据根；`fail_switch` 标 disconnected；新增切换重绑测试 |
+
+上述验收均未执行；真实 PTY 证据见 `docs/evidence/2026-10-21-s09/`，合并前逐项勾选。

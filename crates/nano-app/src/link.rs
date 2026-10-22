@@ -273,6 +273,19 @@ impl HostLink {
         self.request_with_timeout(method, params, timeout)
     }
 
+    /// Send one client-to-host notification. Failure means the transport is
+    /// unusable; the caller reports it instead of replaying input.
+    pub fn notify(&self, method: &str, params: Value) -> Result<(), String> {
+        self.host
+            .notify(method, params)
+            .map_err(|error| format!("{error}"))
+    }
+
+    /// Resolved Nano data root for terminal identity persistence.
+    pub fn data_root(&self) -> std::path::PathBuf {
+        self.host.paths().data_root.clone()
+    }
+
     /// Run the one ordered shutdown after the terminal is restored.
     pub fn shutdown(&self) -> nano_runtime::ShutdownOutcome {
         self.stop.store(true, Ordering::SeqCst);
