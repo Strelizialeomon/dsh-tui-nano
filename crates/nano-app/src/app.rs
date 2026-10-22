@@ -10258,4 +10258,14 @@ mod terminal_tests {
         assert!(app.click_at(12, 5));
         assert!(app.view.scroll().sticky());
     }
+
+    #[test]
+    fn ctrl_end_returns_to_the_bottom() {
+        let mut app = app();
+        app.view.scroll_mut().to_top(100, 10);
+        assert!(!app.view.scroll().sticky());
+        app.handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL));
+        assert!(app.view.scroll().sticky());
+        assert_eq!(app.view.scroll().back(), 0);
+    }
 }

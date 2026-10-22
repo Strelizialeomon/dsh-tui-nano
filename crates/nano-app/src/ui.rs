@@ -1685,17 +1685,17 @@ fn question_height(card: &QuestionCard, width: u16) -> u16 {
     if card.page() == card.questions().len() {
         rows += 1; // submit title
         rows += card.questions().len() as u16;
-        rows += 1; // footer
+        rows += display_rows(&submit_footer(card), width as usize).len() as u16;
     } else if let Some(question) = card.questions().get(card.page()) {
-        rows += display_rows(&question.question, width as usize).len() as u16;
+        rows += capped_rows(&question.question, width as usize, 3).len() as u16;
         for option in &question.options {
             rows += 1;
-            if let Some(description) = &option.description {
-                rows += display_rows(description, width.saturating_sub(5) as usize).len() as u16;
+            if option.description.is_some() {
+                rows += 1;
             }
         }
         rows += 1; // Other row
-        rows += 1; // footer
+        rows += display_rows(&question_footer(card, question), width as usize).len() as u16;
     } else {
         rows += 1;
     }
@@ -1854,6 +1854,42 @@ fn render_approval(
     (title, lines, hits)
 }
 
+fn capped_rows(text: &str, width: usize, max_rows: usize) -> Vec<String> {
+    let mut rows = display_rows(text, width);
+    if rows.len() > max_rows {
+        rows.truncate(max_rows);
+        if let Some(last) = rows.last_mut() {
+            *last = format!("{}…", truncate(last, width.saturating_sub(1)));
+        }
+    }
+    rows
+}
+
+fn question_footer(card: &QuestionCard, question: &nano_decisions::Question) -> String {
+    let action = if question.multi_select {
+        "空格勾选 · Enter 确认"
+    } else {
+        "Enter 选择"
+    };
+    let mut footer = format!("↑↓ 移动 · {action} · Alt+N 跳过 · Alt+T 停止计时 · Esc 收起");
+    if let Some(remaining) = card.timed().remaining_at(Instant::now()) {
+        footer.push_str(&format!(" · 剩 {}", format_duration(remaining)));
+    } else if card.timed().indefinite {
+        footer.push_str(" · 计时已停");
+    }
+    footer
+}
+
+fn submit_footer(card: &QuestionCard) -> String {
+    let mut footer = String::from("Enter 提交 · Tab/←→ 回看 · Esc 收起");
+    if let Some(remaining) = card.timed().remaining_at(Instant::now()) {
+        footer.push_str(&format!(" · 剩 {}", format_duration(remaining)));
+    } else if card.timed().indefinite {
+        footer.push_str(" · 计时已停");
+    }
+    footer
+}
+
 fn render_question(
     card: &QuestionCard,
     area: Rect,
@@ -1951,13 +1987,15 @@ fn render_question(
             ]));
             hits.push(Some(DecisionClick::QuestionOption(index)));
         }
-        lines.push(Line::from(Span::styled(
-            "Enter 提交 · Tab/←→ 回看 · Esc 收起",
-            Style::default().fg(Color::DarkGray),
-        )));
-        hits.push(Some(DecisionClick::QuestionSubmit));
+        for row in display_rows(&submit_footer(card), width) {
+            lines.push(Line::from(Span::styled(
+                row,
+                Style::default().fg(Color::DarkGray),
+            )));
+            hits.push(Some(DecisionClick::QuestionSubmit));
+        }
     } else if let Some(question) = card.questions().get(card.page()) {
-        for row in display_rows(&question.question, width) {
+        for row in capped_rows(&question.question, width, 3) {
             lines.push(Line::from(Span::styled(
                 row,
                 Style::default().add_modifier(Modifier::BOLD),
@@ -1981,13 +2019,16 @@ fn render_question(
             ));
             hits.push(Some(DecisionClick::QuestionOption(index)));
             if let Some(description) = &option.description {
-                for row in display_rows(description, width.saturating_sub(5)) {
-                    lines.push(Line::from(Span::styled(
-                        format!("     {row}"),
-                        Style::default().fg(Color::DarkGray),
-                    )));
-                    hits.push(Some(DecisionClick::QuestionOption(index)));
+                let rows = display_rows(description, width.saturating_sub(5));
+                let mut row = rows.first().cloned().unwrap_or_default();
+                if rows.len() > 1 {
+                    row = format!("{}…", truncate(&row, width.saturating_sub(6)));
                 }
+                lines.push(Line::from(Span::styled(
+                    format!("     {row}"),
+                    Style::default().fg(Color::DarkGray),
+                )));
+                hits.push(Some(DecisionClick::QuestionOption(index)));
             }
         }
         let other_focused = card.focus() == question.options.len();
@@ -2008,22 +2049,13 @@ fn render_question(
             ),
         ]));
         hits.push(Some(DecisionClick::QuestionOther));
-        let action = if question.multi_select {
-            "空格勾选 · Enter 确认"
-        } else {
-            "Enter 选择"
-        };
-        let mut footer = format!("↑↓ 移动 · {action} · Alt+N 跳过 · Alt+T 计时 · Esc 收起");
-        if let Some(remaining) = card.timed().remaining_at(Instant::now()) {
-            footer.push_str(&format!(" · 剩 {}", format_duration(remaining)));
-        } else if card.timed().indefinite {
-            footer.push_str(" · 计时已停");
+        for row in display_rows(&question_footer(card, question), width) {
+            lines.push(Line::from(Span::styled(
+                row,
+                Style::default().fg(Color::DarkGray),
+            )));
+            hits.push(Some(DecisionClick::QuestionSkip));
         }
-        lines.push(Line::from(Span::styled(
-            footer,
-            Style::default().fg(Color::DarkGray),
-        )));
-        hits.push(None);
     }
     if let Some(error) = card.error() {
         lines.push(Line::from(Span::styled(
@@ -2203,20 +2235,13 @@ fn option_line(
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD)
     } else if selected {
-        Style::default()
-            .fg(Color::Green)
-            .add_modifier(Modifier::BOLD)
+        Style::default().fg(Color::Green)
     } else {
         Style::default()
     };
     spans.push(Span::styled(label.to_string(), label_style));
     if checkbox.is_none() && selected {
-        spans.push(Span::styled(
-            " ✓",
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        ));
+        spans.push(Span::styled(" ✓", Style::default().fg(Color::Green)));
     }
     Line::from(spans)
 }
@@ -3122,7 +3147,7 @@ fn truncate(text: &str, max: usize) -> String {
 mod tests {
     use super::*;
     use nano_decisions::contract::parse_questions;
-    use nano_decisions::{ApprovalCard, QuestionCard};
+    use nano_decisions::{ApprovalCard, QuestionCard, TimedState};
     use serde_json::json;
     use std::time::Duration;
 
@@ -3255,6 +3280,35 @@ mod tests {
     }
 
     #[test]
+    fn the_jump_button_follows_the_actual_scroll_state() {
+        let mut app = app();
+        let text = (1..=40)
+            .map(|index| format!("line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let payload = json!({
+            "address": {"rootSessionId": "root"},
+            "seq": 1,
+            "type": "assistant/message",
+            "data": {
+                "turn": 1,
+                "step": 1,
+                "message": {
+                    "id": "a-1",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": text}]
+                }
+            }
+        });
+        app.model.apply_event("session.event", &payload);
+        app.view.sync(&app.model, Instant::now());
+        app.transcript_dirty = false;
+        app.view.scroll_mut().to_top(200, 10);
+        let rows = compact(&screen(&mut app, 100, 30));
+        assert!(rows.iter().any(|row| row.contains("回到最新")));
+    }
+
+    #[test]
     fn a_single_select_question_hides_checkboxes_and_renders_the_description_once() {
         let questions = parse_questions(Some(&json!([{
             "id": "q",
@@ -3316,6 +3370,55 @@ mod tests {
             lines.iter().all(|line| text_width(&line.to_string()) <= 60),
             "card must fit 60 columns"
         );
+    }
+
+    #[test]
+    fn a_timed_multi_select_footer_wraps_within_sixty_columns() {
+        let questions = parse_questions(Some(&json!([{
+            "id": "q",
+            "question": "Pick many",
+            "multi_select": true,
+            "options": [{"label": "A"}, {"label": "B"}]
+        }])));
+        let card = QuestionCard::new(
+            None,
+            None,
+            questions,
+            Some(TimedState::start(30_000, Instant::now())),
+        );
+        let (_, lines, _) = render_question(&card, Rect::new(0, 0, 60, 24));
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("Alt+T"));
+        assert!(text.contains("剩"));
+        assert!(lines.iter().all(|line| text_width(&line.to_string()) <= 60));
+    }
+
+    #[test]
+    fn a_long_question_keeps_every_option_and_the_footer_visible() {
+        let long = "很长的题目。".repeat(30);
+        let detail = "很长的描述。".repeat(20);
+        let questions = parse_questions(Some(&json!([{
+            "id": "q",
+            "question": long,
+            "options": [
+                {"label": "A", "description": detail},
+                {"label": "B", "description": detail},
+                {"label": "C", "description": detail},
+                {"label": "D", "description": detail}
+            ]
+        }])));
+        let card = QuestionCard::new(None, None, questions, None);
+        let (_, lines, _) = render_question(&card, Rect::new(0, 0, 60, 24));
+        let visible: Vec<String> = lines.iter().take(23).map(ToString::to_string).collect();
+        let text = visible.join("\n");
+        assert!(text.contains("4. D"), "fourth option stays visible");
+        assert!(text.contains("其他"));
+        assert!(text.contains("Alt+N 跳过"));
+        assert!(visible.iter().all(|line| text_width(line) <= 60));
     }
 
     #[test]

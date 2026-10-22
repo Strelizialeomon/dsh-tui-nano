@@ -1669,11 +1669,14 @@ mod tests {
             }),
         };
         let rendered = render_one(entry, true, 80);
-        assert!(rendered
+        let backgrounds: Vec<Color> = rendered
             .lines
             .iter()
             .flat_map(|line| line.spans.iter())
-            .any(|span| span.style.bg.is_some()));
+            .filter_map(|span| span.style.bg)
+            .collect();
+        assert!(backgrounds.contains(&Color::Rgb(0, 42, 0)));
+        assert!(backgrounds.contains(&Color::Rgb(48, 0, 0)));
         assert!(rendered
             .lines
             .iter()
