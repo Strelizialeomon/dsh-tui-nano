@@ -1,7 +1,7 @@
 # [2026-10-20-nano-v1/S10] Monitor
 
 - 组标识：`2026-10-20-nano-v1`；角色：子件 S10，单交付为有界流式监听、行通知合并与真实模型收件。
-- 状态：已批准实施；执行单 #13。
+- 状态：已实施（PR #33，待合并）；执行单 #13。
 - 总纲：[共享约定与依据](README.md)。上游：S08 任务/输出/停止契约（D05）。下游：S13（D09）。D08 是发布闸：S03/S04 → S08/S10，真实审批响应、权限切换不能被旁路。
 - 合入前提：S08 的非消费观察与任务终态可用；本份用真实任务输出触发真实 Agent 收件并核对费用边界。发布由 S13 承担。
 
@@ -115,6 +115,20 @@ Monitor 不是一个独立进程执行器，也不是第二套调度器。它参
 
 ## 10. 审核修订记录
 
-待本稿逐份过闸；上述验收均未执行。
+2026-10-22 实施 PR #33 重审（规格符合性 + 对抗找 bug）。完整发现见 PR #33 评论 6331559401 / 6331608192；下表记录处置。
 
-2026-10-21 参考 Claude Code 2.1.88：`local_bash` `kind: 'monitor'`、每行一条通知、流结束 ≠ 条件满足、`notified` 去重、`next` 优先级、`sleep N≥2` 反轮询。本稿据此简化了原来的独立匹配/唤醒引擎；完整宿主收件仍需 S10 验收。
+| # | 严重度 | 发现 | 处置 |
+| --- | --- | --- | --- |
+| 1 | blocker | 流结束未换行的尾部被静默丢弃；超长行最后一块尾部也丢 | `flushCarry` 在 settled/removed/terminal create 时补投未换行尾部；长行块尾部同样补投；补单元测试与真实模型/TUI 证据（`monitor-line-tail`） |
+| 2 | blocker | running job 选「从开头」时附着不重放 retained head | `create` 对 `from:"earliest"` 立即 `drain`；补 running-job 重放测试与真实模型证据（settle 前 `used.lines:1`、`stream:"watching"`） |
+| 3 | major | capability 只检查 jobs/agents 存在，缺事件流或 `readAt` 时仍报 supported，监听永远看不见新输出 | capability 与 `assertAvailable` 检查 `readAt` / `events.subscribe`；缺任一抛 `nano/monitor/unavailable`（1057）；补测试 |
+| 4 | major | 正则过滤器只有长度上限，`^(a+)+$` 可阻塞宿主事件循环 | 拒绝反向引用、嵌套量词、超过 64 个量词记号；补测试 |
+| 5 | major | 旧监听代际的迟到回执发布旧投影，覆盖新监听；deliveries Map 无界 | `publish` 只接受当前代际；替换时清理旧 delivery；Map 封顶；补替换 + 迟到回执测试 |
+| 6 | major | 订阅重建后不刷新监听列表，live-only 期间的终态永久陈旧 | `Pending::Resubscribe` 成功分支补 `refresh_monitor_snapshot()` |
+| 7 | major | 官方完成通知「恰好一条、不抑制」缺可复核证据 | 真实模型证据记录两个任务各 `OFFICIAL_COMPLETION_NOTICE.count=1`；代码不触碰官方通知路径 |
+| 8 | minor | stop 后 settled 把匹配行算成 held（不可恢复），而非 dropped；ready 队列单次 drain 可超上限；create 响应先于事件时选错；notice+error 同时到达时 error 被清；过滤编辑可超 UTF-8 字节上限；监听面板 PageUp/PageDown 方向相反；reset 忽略 mergeWindowMs；空 chunks 但 next 前进静默跳字节；blocked / step 被拒未归类为失败 | 逐项修复并补测试：stop 后计入 `droppedMatches`；queue 注释如实说明单次读可超上限；延迟选中；notice/error 都保留；按 UTF-8 字节封顶；交换 PageUp/PageDown；reset 赋值 mergeWindowMs；空 chunks 标 lossy/gap；`pre-step reject` 与 `turn/end blocked` 归为 failed |
+| 9 | 保留 | 重置后的 held 摘要可能超过 `maxLinesPerNotification` | 保留为摘要行为：内容仍只有首/末行且受字节/token 上限；证据 README 明确记录 |
+| 10 | 保留 | S10 定义了任务面板内的临时操作键 | 规格 §9 要求等 S13 design-contract；当前作为临时入口记录，S13 冻结时统一 |
+| 11 | 未测 | 长时间空闲（数分钟以上）的 quiet 注入 | 证据明确标注未测；已验证空闲数秒后由普通用户回合唤醒 |
+
+2026-10-21 参考 Claude Code 2.1.88：`local_bash` `kind: 'monitor'`、每行一条通知、流结束 ≠ 条件满足、`notified` 去重、`next` 优先级、`sleep N≥2` 反轮询。本稿据此简化了原来的独立匹配/唤醒引擎；完整宿主收件仍以本轮真实证据为准。

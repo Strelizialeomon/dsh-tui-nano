@@ -78,6 +78,11 @@ function fakeRegistry({ job, text = '', chunks } = {}) {
     readAt(id, from) {
       state.reads.push(from)
       if (id !== JOB) throw new Error(`unknown job ${id}`)
+      if (state.nextRead !== undefined) {
+        const read = state.nextRead
+        state.nextRead = undefined
+        return read
+      }
       if (state.chunks.length > 0) {
         const available = state.chunks.filter((chunk) => chunk.at + Buffer.byteLength(chunk.text, 'utf8') > from)
         const next = available.length === 0 ? state.bytes.length : Math.max(...available.map((chunk) => chunk.at + Buffer.byteLength(chunk.text, 'utf8')))
@@ -172,6 +177,43 @@ test('a new monitor starts at the current total and reports skipped bytes', () =
   assert.ok(published.some((event) => event.kind === 'monitor.updated'))
 })
 
+test('earliest replays retained output while the job is still running', () => {
+  const { create, time, followups, list } = setup({ text: 'old line\n' })
+  const result = create({ from: 'earliest' })
+  assert.equal(result.monitor.stream, 'watching')
+  time.advance(800)
+  assert.equal(followups.length, 1)
+  assert.match(followups[0].content[0].text, /old line/)
+  assert.equal(list().stream, 'watching')
+  assert.equal(list().used.lines, 1)
+})
+
+test('the final line without a newline is delivered at settlement', () => {
+  const { create, state, output, settled, time, followups, list } = setup()
+  create()
+  state.bytes = Buffer.from('done-no-newline')
+  state.chunks = [{ at: 0, text: 'done-no-newline' }]
+  output(state.bytes.length)
+  settled('completed', 'exit code: 0')
+  time.advance(800)
+  assert.equal(followups.length, 1)
+  assert.match(followups[0].content[0].text, /done-no-newline/)
+  assert.equal(list().stream, 'stream-ended')
+})
+
+test('a long-line tail after the block cap is not dropped', () => {
+  const { create, state, output, settled, time, followups } = setup()
+  create()
+  const text = `${'x'.repeat(16_384)}TAILMATCH`
+  state.bytes = Buffer.from(text)
+  state.chunks = [{ at: 0, text }]
+  output(state.bytes.length)
+  settled('completed', 'exit code: 0')
+  time.advance(800)
+  const all = followups.map((message) => message.content[0].text).join('\n')
+  assert.match(all, /TAILMATCH/)
+})
+
 test('earliest replays the retained head exactly once', () => {
   const { create, list, followups, time } = setup({
     job: { status: 'completed', output: { total: 10, earliest: 0 } },
@@ -222,6 +264,31 @@ test('a long line without a newline is a marked block, not a complete line', () 
   const text = followups[0].content[0].text
   assert.match(text, /long-line block/)
   assert.ok(Buffer.byteLength(text, 'utf8') <= 8192)
+})
+
+test('a catastrophic-backtracking regex filter is rejected', () => {
+  const { service, address } = setup()
+  for (const pattern of ['^(a+)+$', '(a*)*', '(ab+){2,}', '(a)\\1']) {
+    assert.throws(
+      () =>
+        service.create({
+          address,
+          jobId: JOB,
+          from: 'new',
+          mode: 'notify',
+          filter: { pattern, regex: true },
+        }),
+      (error) => error.rpcName === 'nano/monitor/filter-invalid',
+    )
+  }
+  const normal = service.create({
+    address,
+    jobId: JOB,
+    from: 'new',
+    mode: 'notify',
+    filter: { pattern: '^err \\d$', regex: true },
+  })
+  assert.equal(normal.monitor.filter.pattern, '^err \\d$')
 })
 
 test('literal and regex filters select only matching lines', () => {
@@ -438,6 +505,101 @@ test('a lossy read is visible and never splices the carry', () => {
   assert.ok(!followups[0].content[0].text.includes('partial-after'))
 })
 
+test('a late receipt for a replaced monitor cannot overwrite the new one', () => {
+  const { create, state, output, time, list, handlers } = setup({
+    budgets: { maxNotifications: 1, mergeWindowMs: 100, minIntervalMs: 0 },
+  })
+  create()
+  state.bytes = Buffer.from('one\n')
+  state.chunks = [{ at: 0, text: 'one\n' }]
+  output(4)
+  time.advance(100)
+  const oldMessage = list().deliveries[0].messageId
+  const replacement = create({ mode: 'notify' })
+  assert.equal(replacement.existing, false)
+  assert.equal(list().used.notifications, 0)
+  handlers['session/event'](
+    { id: ROOT },
+    { type: 'user/message', data: { id: oldMessage, source: { kind: 'monitor' } } },
+  )
+  assert.equal(list().used.notifications, 0)
+  assert.equal(list().deliveries.length, 0)
+})
+
+test('a stopped monitor counts a final settled match as dropped, not held', () => {
+  const { create, service, address, state, settled, list } = setup()
+  create()
+  service.stop({ address, jobId: JOB })
+  state.bytes = Buffer.from('late\n')
+  state.chunks = [{ at: 0, text: 'late\n' }]
+  settled('completed', 'exit code: 0')
+  assert.equal(list().droppedMatches, 1)
+  assert.equal(list().heldMatches, 0)
+  assert.equal(list().deliveries.length, 0)
+})
+
+test('a blocked turn marks a claimed delivery failed', () => {
+  const { create, state, output, time, list, handlers, followups } = setup()
+  create()
+  state.bytes = Buffer.from('line\n')
+  state.chunks = [{ at: 0, text: 'line\n' }]
+  output(5)
+  time.advance(800)
+  const message = followups[0]
+  handlers['agent/inbox/claimed']({ agent: { id: ROOT }, message, turn: 1 })
+  handlers['session/event'](
+    { id: ROOT },
+    { type: 'turn/end', data: { turn: 1, reason: { kind: 'blocked' } } },
+  )
+  assert.equal(list().deliveries[0].state, 'failed')
+})
+
+test('a rejected step marks its claimed message failed', async () => {
+  const { create, state, output, time, list, handlers, followups } = setup()
+  create()
+  state.bytes = Buffer.from('line\n')
+  state.chunks = [{ at: 0, text: 'line\n' }]
+  output(5)
+  time.advance(800)
+  const preStep = handlers['agent/pre-step']
+  assert.equal(typeof preStep, 'function')
+  const decision = await preStep(
+    { agent: { id: ROOT }, messages: [followups[0]] },
+    async () => ({ kind: 'reject' }),
+  )
+  assert.deepEqual(decision, { kind: 'reject' })
+  assert.equal(list().deliveries[0].state, 'failed')
+})
+
+test('expiry stops delivery and an explicit reset resumes it', () => {
+  const { create, service, address, state, output, time, list, followups } = setup({
+    budgets: { expiresInMs: 1000, mergeWindowMs: 100, minIntervalMs: 0, maxNotifications: 10 },
+  })
+  create()
+  time.advance(1000)
+  assert.equal(list().exhausted, true)
+  assert.equal(list().exhaustReason, 'expired')
+  state.bytes = Buffer.from('after\n')
+  state.chunks = [{ at: 0, text: 'after\n' }]
+  output(6)
+  time.advance(200)
+  assert.equal(followups.length, 0)
+  assert.equal(list().heldMatches, 1)
+  service.resetBudget({
+    address,
+    jobId: JOB,
+    budgets: { expiresInMs: 1000, mergeWindowMs: 500, minIntervalMs: 0 },
+  })
+  assert.equal(list().mergeWindowMs, 500)
+  time.advance(100)
+  assert.equal(followups.length, 1)
+})
+
+test('the registry subscription is owner-scoped', () => {
+  const { state } = setup()
+  assert.deepEqual(state.listeners[0].filter, { owner: ROOT })
+})
+
 test('a duplicate active create returns the existing monitor', () => {
   const { create, followups, state, output, time } = setup()
   const first = create()
@@ -459,6 +621,46 @@ test('stopping a monitor never stops the observed job', () => {
   const result = service.stop({ address, jobId: JOB })
   assert.equal(result.monitor.listening, false)
   assert.deepEqual(state.kills, [])
+})
+
+test('a registry without live events or readAt is explicitly unavailable', () => {
+  const cases = [
+    {
+      events: { subscribe() { throw new Error('no event stream') } },
+      get() { return {} },
+      readAt() {},
+    },
+    {
+      events: { subscribe: () => () => {} },
+      get() { return {} },
+    },
+  ]
+  for (const registry of cases) {
+    const ctx = { get: (name) => (name === 'jobs' ? registry : undefined), on: () => () => {} }
+    const service = new MonitorService({
+      ctx,
+      hub: { publish() {} },
+      agent: { followup() {}, inject() {} },
+      session: {},
+      rootSessionId: ROOT,
+      timers: clock(),
+    })
+    assert.throws(
+      () => service.create({ address: { rootSessionId: ROOT }, jobId: JOB, from: 'new', mode: 'notify' }),
+      (error) => error.rpcName === 'nano/monitor/unavailable',
+    )
+  }
+})
+
+test('an advancing empty read is a visible gap, not a silent jump', () => {
+  const { create, state, output, time, list } = setup()
+  create()
+  state.nextRead = { chunks: [], next: 100, lossy: false }
+  output(100)
+  time.advance(800)
+  assert.equal(list().offset, 100)
+  assert.equal(list().gaps, 1)
+  assert.equal(list().lossy, true)
 })
 
 test('an unknown job is not-found and a foreign address is refused', () => {

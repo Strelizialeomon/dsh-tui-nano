@@ -215,7 +215,7 @@ async function main() {
     log('CONTEXT_BEFORE', beforeContext.result ?? beforeContext.error)
 
     const jobPrompt =
-      "只做一件事：用 bash 工具运行命令 `sh -c 'sleep 3; echo monitor-line-1; echo noise-ignore-me; sleep 1; echo monitor-line-2; sleep 1; echo monitor-line-3'`，" +
+      "只做一件事：用 bash 工具运行命令 `sh -c 'sleep 3; echo monitor-line-1; echo noise-ignore-me; sleep 1; echo monitor-line-2; sleep 1; echo monitor-line-3; printf monitor-line-tail'`，" +
       '并把 run_in_background 设为 true。不要运行其他命令，不要读写文件。启动后用一句很短的话回复 job id，然后结束这一轮。'
     const first = await call('nano.conversation.submit', {
       address,
@@ -233,10 +233,13 @@ async function main() {
     )
     const job = registered.params.payload.job
     log('JOB_REGISTERED', { id: job.id, kind: job.kind, label: job.label })
+    // Wait until line 1 is in the ring but the job is still running, so the
+    // earliest attach has retained bytes to replay immediately.
+    await new Promise((resolve) => setTimeout(resolve, 3500))
     const quietCreate = await call('nano.monitor.create', {
       address,
       jobId: job.id,
-      from: 'new',
+      from: 'earliest',
       mode: 'quiet',
       filter: { pattern: 'monitor-line', regex: false },
       budgets: { mergeWindowMs: 200, minIntervalMs: 200, maxNotifications: 20 },
@@ -251,7 +254,23 @@ async function main() {
 
     // Wait for the job to finish and the quiet delivery to be inserted. Quiet
     // does not wake, so the expected state is inserted until a user turn opens.
-    // Wait for the whole job: three matching lines, one noise line. Quiet must
+    const runningReplay = await waitFor(
+      (frame) =>
+        frame.method === 'nano.event' &&
+        frame.params.kind === 'monitor.updated' &&
+        frame.params.payload.monitor.jobId === job.id &&
+        frame.params.payload.monitor.stream === 'watching' &&
+        frame.params.payload.monitor.used.lines >= 1,
+      30_000,
+    )
+    log('QUIET_RUNNING_REPLAY', {
+      offset: runningReplay.params.payload.monitor.offset,
+      stream: runningReplay.params.payload.monitor.stream,
+      used: runningReplay.params.payload.monitor.used,
+      texts: runningReplay.params.payload.monitor.deliveries.map((delivery) => delivery.textPreview),
+    })
+
+    // Wait for the whole job: four matching lines, one noise line. Quiet must
     // leave every delivery merely inserted until a user turn opens.
     const quietSettled = await waitFor(
       (frame) =>
@@ -270,7 +289,7 @@ async function main() {
         frame.method === 'nano.event' &&
         frame.params.kind === 'monitor.updated' &&
         frame.params.payload.monitor.jobId === job.id &&
-        frame.params.payload.monitor.used.lines >= 3 &&
+        frame.params.payload.monitor.used.lines >= 4 &&
         frame.params.payload.monitor.stream !== 'watching',
       60_000,
     )
@@ -305,7 +324,8 @@ async function main() {
         frame.method === 'nano.event' &&
         frame.params.kind === 'monitor.updated' &&
         frame.params.payload.monitor.jobId === job.id &&
-        frame.params.payload.monitor.deliveries.length >= 3 &&
+        frame.params.payload.monitor.used.lines >= 4 &&
+        frame.params.payload.monitor.deliveries.length > 0 &&
         frame.params.payload.monitor.deliveries.every((delivery) => delivery.state === 'accepted'),
       120_000,
     )
@@ -320,11 +340,30 @@ async function main() {
     const sawMonitorMessage = userMessages.some(
       (message) => message?.source?.kind === 'monitor',
     )
+    const monitorMessages = userMessages.filter(
+      (message) => message?.source?.kind === 'monitor',
+    )
+    const monitorTexts = monitorMessages.map((message) => messageText(message))
     log('QUIET_DURABLE_USER_MESSAGE', {
       present: sawMonitorMessage,
-      monitorMessageIds: userMessages
-        .filter((message) => message?.source?.kind === 'monitor')
-        .map((message) => message.id),
+      monitorMessageIds: monitorMessages.map((message) => message.id),
+      tailPresent: monitorTexts.some((text) => text.includes('monitor-line-tail')),
+      texts: monitorTexts,
+    })
+    const completionNotices = (jobId) => {
+      const matches = userMessages.filter((message) =>
+        messageText(message).includes(`background job ${jobId}`),
+      )
+      const unique = [...new Map(matches.map((message) => [message.id, message])).values()]
+      return {
+        count: unique.length,
+        ids: unique.map((message) => message.id),
+        texts: unique.map((message) => messageText(message).slice(0, 300)),
+      }
+    }
+    log('OFFICIAL_COMPLETION_NOTICE', {
+      jobId: job.id,
+      ...completionNotices(job.id),
     })
 
     // Second job: notify mode. The followup itself wakes the agent, so the
@@ -373,6 +412,30 @@ async function main() {
         lines: delivery.lines,
         text: delivery.textPreview,
       })),
+    })
+    // Open one tiny turn so a quiet-injected official completion notice is
+    // claimed and becomes a durable user/message.
+    await call('nano.conversation.submit', {
+      address,
+      requestId: `prompt-${randomUUID()}`,
+      delivery: 'queue',
+      content: [{ type: 'text', text: '请只回复 ok。' }],
+    })
+    try {
+      await waitFor(
+        (frame) =>
+          frame.method === 'nano.event' &&
+          frame.params.kind === 'session.event' &&
+          frame.params.payload.type === 'user/message' &&
+          messageText(frame.params.payload.data).includes(`background job ${notifyJob.id}`),
+        60_000,
+      )
+    } catch {
+      // The completion notice may remain pending; the log below reports it.
+    }
+    log('OFFICIAL_COMPLETION_NOTICE', {
+      jobId: notifyJob.id,
+      ...completionNotices(notifyJob.id),
     })
 
     // Stop the quiet monitor and prove the job is untouched.

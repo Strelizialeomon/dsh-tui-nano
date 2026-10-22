@@ -63,7 +63,7 @@ tmux new-session -d -s "$SESSION" -x 160 -y 48 \
 wait_ready
 capture "启动：已连接（临时 DSH_HOME，真实凭据副本）"
 
-send_line "只做一件事：用 bash 工具运行命令 \`sh -c 'sleep 4; echo monitor-line-1; echo noise-ignore-me; sleep 1; echo monitor-line-2; sleep 1; echo monitor-line-3'\`，并把 run_in_background 设为 true。不要运行其他命令，不要读写文件。启动后用一句很短的话回复 job id，然后结束这一轮。"
+send_line "只做一件事：用 bash 工具运行命令 \`sh -c 'sleep 4; echo monitor-line-1; echo noise-ignore-me; sleep 1; echo monitor-line-2; sleep 1; echo monitor-line-3; printf monitor-line-tail'\`，并把 run_in_background 设为 true。不要运行其他命令，不要读写文件。启动后用一句很短的话回复 job id，然后结束这一轮。"
 sleep 18
 capture "模型已启动后台任务并回复 job id"
 

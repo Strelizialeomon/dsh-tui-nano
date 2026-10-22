@@ -506,6 +506,8 @@ pub struct App {
     pub monitor_form: Option<MonitorForm>,
     /// A monitor list request is in flight.
     pub monitor_snapshot_pending: bool,
+    /// Select this job's monitor after its projection arrives.
+    pub monitor_select_after_refresh: Option<String>,
     /// Local `!` records shown until the official synthetic message is durable.
     pub bash_records: Vec<BashRecord>,
     /// Local bash record id sequence.
@@ -646,6 +648,7 @@ impl App {
             monitor_open: false,
             monitor_form: None,
             monitor_snapshot_pending: false,
+            monitor_select_after_refresh: None,
             bash_records: Vec::new(),
             bash_counter: 0,
             shell_notice_acked: false,
@@ -1719,13 +1722,23 @@ impl App {
                         let previous_notice = self.monitor.last_notice().map(str::to_string);
                         let previous_error = self.monitor.last_error().map(str::to_string);
                         let changed = self.monitor.apply_event(&params.kind, &params.payload);
-                        if self.monitor.last_notice().map(str::to_string) != previous_notice {
-                            self.notice = self.monitor.last_notice().map(str::to_string);
+                        let notice = self.monitor.last_notice().map(str::to_string);
+                        let error = self.monitor.last_error().map(str::to_string);
+                        let notice_changed = notice != previous_notice;
+                        let error_changed = error != previous_error;
+                        if notice_changed {
+                            self.notice = notice;
+                        }
+                        if error_changed {
+                            self.error = error;
+                        }
+                        if notice_changed || error_changed {
+                            // Copy both diagnostics before clearing, otherwise a
+                            // projected notice would erase a simultaneous error.
                             self.monitor.clear_diagnostics();
                         }
-                        if self.monitor.last_error().map(str::to_string) != previous_error {
-                            self.error = self.monitor.last_error().map(str::to_string);
-                            self.monitor.clear_diagnostics();
+                        if changed {
+                            self.select_pending_monitor();
                         }
                         changed
                     }
@@ -1996,9 +2009,11 @@ impl App {
                         self.notice = Some("订阅已重建；正在对齐官方 baseline".to_string());
                         self.refresh_snapshot();
                         self.refresh_context();
-                        // Jobs events are live-only, so re-read the official
-                        // baseline after a gap instead of trusting the old list.
+                        // Jobs and monitor events are live-only, so re-read the
+                        // official baselines after a gap instead of trusting
+                        // the old lists.
                         self.refresh_jobs_snapshot();
+                        self.refresh_monitor_snapshot();
                         self.refresh_skills();
                         self.refresh_instructions();
                     }
@@ -2774,6 +2789,8 @@ impl App {
                     Ok(value) => {
                         if let Err(message) = self.monitor.apply_list(&value) {
                             self.error = Some(format!("监听列表无效：{message}"));
+                        } else {
+                            self.select_pending_monitor();
                         }
                     }
                     Err(error) => {
@@ -2802,7 +2819,13 @@ impl App {
                             .and_then(Value::as_u64)
                             .unwrap_or(unread_bytes);
                         self.monitor_form = None;
-                        self.monitor.select_job(&job_id);
+                        if !self.monitor.select_job(&job_id) {
+                            // The control response may overtake the live event;
+                            // select once the projection arrives.
+                            self.monitor_select_after_refresh = Some(job_id.clone());
+                        } else {
+                            self.monitor_select_after_refresh = None;
+                        }
                         self.monitor_open = true;
                         self.notice = Some(if existing {
                             "已有活动监听；未重复创建".to_string()
@@ -2818,7 +2841,10 @@ impl App {
                     }
                     Err(error) => {
                         let message = match error.code {
-                            Some(1058) => "任务不存在或不可见（monitor/not-found）".to_string(),
+                            Some(1028) => "任务不存在或不可见（job/not-found）".to_string(),
+                            Some(1057) => {
+                                "当前宿主不支持 Monitor（monitor/unavailable）".to_string()
+                            }
                             Some(1059) => "过滤器无效（monitor/filter-invalid）".to_string(),
                             Some(1060) => "预算参数无效（monitor/budget-invalid）".to_string(),
                             Some(1061) => "监听数量已达上限（monitor/limit-reached）".to_string(),
@@ -2838,7 +2864,14 @@ impl App {
                         self.refresh_monitor_snapshot();
                     }
                     Err(error) => {
-                        self.error = Some(format!("停止监听失败（{}）：{}", job_id, error.message));
+                        let message = match error.code {
+                            Some(1057) => {
+                                "当前宿主不支持 Monitor（monitor/unavailable）".to_string()
+                            }
+                            Some(1058) => "监听记录不存在（monitor/not-found）".to_string(),
+                            _ => format!("停止监听失败（{}）：{}", job_id, error.message),
+                        };
+                        self.error = Some(message);
                     }
                 }
             }
@@ -2852,8 +2885,15 @@ impl App {
                         self.refresh_monitor_snapshot();
                     }
                     Err(error) => {
-                        self.error =
-                            Some(format!("重置监听预算失败（{}）：{}", job_id, error.message));
+                        let message = match error.code {
+                            Some(1057) => {
+                                "当前宿主不支持 Monitor（monitor/unavailable）".to_string()
+                            }
+                            Some(1058) => "监听记录不存在（monitor/not-found）".to_string(),
+                            Some(1060) => "预算参数无效（monitor/budget-invalid）".to_string(),
+                            _ => format!("重置监听预算失败（{}）：{}", job_id, error.message),
+                        };
+                        self.error = Some(message);
                     }
                 }
             }
@@ -3021,6 +3061,7 @@ impl App {
         self.monitor_snapshot_pending = false;
         self.monitor_open = false;
         self.monitor_form = None;
+        self.monitor_select_after_refresh = None;
         self.following.clear();
         self.follow_dirty.clear();
         self.jobs_scroll_back = 0;
@@ -4043,7 +4084,7 @@ impl App {
                     true
                 }
                 KeyCode::Char(character) => {
-                    if !character.is_control() && form.filter.len() < 512 {
+                    if !character.is_control() && form.filter.len() + character.len_utf8() <= 512 {
                         form.filter.push(character);
                     }
                     true
@@ -4081,6 +4122,16 @@ impl App {
                 true
             }
             _ => false,
+        }
+    }
+
+    /// Select a created monitor once its projection has arrived.
+    fn select_pending_monitor(&mut self) {
+        let Some(job_id) = self.monitor_select_after_refresh.clone() else {
+            return;
+        };
+        if self.monitor.select_job(&job_id) {
+            self.monitor_select_after_refresh = None;
         }
     }
 
@@ -4165,11 +4216,13 @@ impl App {
                 true
             }
             KeyCode::PageUp => {
-                self.jobs_scroll_back = self.jobs_scroll_back.saturating_add(10);
+                // The monitor panel draws from the top, so PageUp moves toward
+                // the beginning (smaller offset).
+                self.jobs_scroll_back = self.jobs_scroll_back.saturating_sub(10);
                 true
             }
             KeyCode::PageDown => {
-                self.jobs_scroll_back = self.jobs_scroll_back.saturating_sub(10);
+                self.jobs_scroll_back = self.jobs_scroll_back.saturating_add(10);
                 true
             }
             _ => false,
@@ -5652,6 +5705,7 @@ impl App {
         self.monitor_open = false;
         self.monitor_form = None;
         self.monitor_snapshot_pending = false;
+        self.monitor_select_after_refresh = None;
         let root_session_id = address.root_session_id.clone();
         self.bind_terminal(root_session_id);
     }
@@ -6267,6 +6321,107 @@ mod tests {
             .identity_label()
             .contains("role=user / source=monitor"));
         assert!(app.model.items().is_empty());
+    }
+
+    #[test]
+    fn a_simultaneous_monitor_notice_and_error_are_both_kept() {
+        let mut app = app();
+        let mut projection = monitor_projection("bash-a", false);
+        projection["exhausted"] = json!(true);
+        projection["exhaustReason"] = json!("notifications");
+        projection["deliveries"] = json!([{
+            "messageId": "message-1",
+            "mode": "notify",
+            "state": "failed",
+            "at": 2,
+            "lines": 1,
+            "bytes": 20,
+            "estimatedTokens": 5,
+            "firstOffset": 0,
+            "lastOffset": 0,
+            "omittedLines": 0,
+            "textPreview": "[monitor] job=bash-a matched=1",
+            "detail": "投递调用失败"
+        }]);
+        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::Event(
+            nano_runtime::protocol::EventParams {
+                runtime_id: "rt".into(),
+                generation: 1,
+                subscription_id: "sub-1".into(),
+                sequence: 2,
+                kind: "monitor.updated".into(),
+                payload: json!({
+                    "address": {"rootSessionId": "root"},
+                    "seq": 2,
+                    "monitor": projection
+                }),
+            },
+        )));
+        assert!(app
+            .notice
+            .as_deref()
+            .is_some_and(|notice| notice.contains("预算已用尽")));
+        assert!(app
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("监听投递")));
+    }
+
+    #[test]
+    fn monitor_filter_editing_respects_the_utf8_byte_cap() {
+        let mut app = app();
+        app.jobs_open = true;
+        app.monitor_form = Some(MonitorForm {
+            job_id: "bash-a".into(),
+            job_label: "sleep 30".into(),
+            unread_bytes: 0,
+            from_earliest: false,
+            quiet: false,
+            filter: "a".repeat(511),
+            filter_regex: false,
+            editing_filter: true,
+        });
+        app.handle_key(KeyEvent::new(KeyCode::Char('€'), KeyModifiers::NONE));
+        assert_eq!(app.monitor_form.as_ref().unwrap().filter.len(), 511);
+    }
+
+    #[test]
+    fn monitor_page_keys_match_the_top_anchored_view() {
+        let mut app = app();
+        app.jobs_open = true;
+        app.monitor_open = true;
+        app.jobs_scroll_back = 25;
+        app.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
+        assert_eq!(app.jobs_scroll_back, 15);
+        app.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+        assert_eq!(app.jobs_scroll_back, 25);
+    }
+
+    #[test]
+    fn a_pending_monitor_selection_survives_an_event_arriving_after_create() {
+        let mut app = app();
+        app.monitor_select_after_refresh = Some("bash-a".to_string());
+        app.handle_link(LinkEvent::Host(nano_runtime::HostEvent::Event(
+            nano_runtime::protocol::EventParams {
+                runtime_id: "rt".into(),
+                generation: 1,
+                subscription_id: "sub-1".into(),
+                sequence: 2,
+                kind: "monitor.updated".into(),
+                payload: json!({
+                    "address": {"rootSessionId": "root"},
+                    "seq": 2,
+                    "monitor": monitor_projection("bash-a", false)
+                }),
+            },
+        )));
+        assert_eq!(
+            app.monitor
+                .selected_monitor()
+                .map(|monitor| monitor.job_id.as_str()),
+            Some("bash-a")
+        );
+        assert!(app.monitor_select_after_refresh.is_none());
     }
 
     #[test]

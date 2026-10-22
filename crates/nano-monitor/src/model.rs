@@ -178,7 +178,8 @@ impl MonitorModel {
         }
         let seq = payload.get("seq").and_then(Value::as_u64).unwrap_or(0);
         let Some(item) = payload.get("monitor") else {
-            return false;
+            self.last_error = Some("监听事件缺少 monitor 投影".to_string());
+            return true;
         };
         let Ok(monitor) = serde_json::from_value::<MonitorView>(item.clone()) else {
             self.last_error = Some("监听投影不是可解析的官方事件".to_string());

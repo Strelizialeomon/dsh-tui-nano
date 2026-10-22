@@ -182,6 +182,17 @@ fn discarded_and_failed_are_failures() {
 }
 
 #[test]
+fn a_monitor_event_without_a_projection_is_an_explicit_error() {
+    let mut model = MonitorModel::new(ROOT);
+    let changed = model.apply_event(
+        "monitor.updated",
+        &json!({"address": {"rootSessionId": ROOT}, "seq": 1}),
+    );
+    assert!(changed);
+    assert!(model.last_error().is_some());
+}
+
+#[test]
 fn a_foreign_address_is_ignored_instead_of_merging_sessions() {
     let mut model = MonitorModel::new(ROOT);
     let changed = model.apply_event(

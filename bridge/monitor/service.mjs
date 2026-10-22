@@ -49,6 +49,7 @@ export const MONITOR_LIMITS = Object.freeze({
   maxReadyWindows: 20,
   publishThrottleMs: 500,
   maxDeliveriesKept: 20,
+  maxDeliveryEntries: 4096,
 })
 
 const TERMINAL_STREAM = new Set(['stream-ended', 'failed', 'stopped'])
@@ -89,6 +90,7 @@ export class MonitorService {
     this.disposers = []
     this.closed = false
     this.eventSeq = 0
+    this.eventsAvailable = false
     this.publishTimers = new Map()
     this.listen()
   }
@@ -102,9 +104,12 @@ export class MonitorService {
             this.onJobEvent(event)
           }),
         )
+        this.eventsAvailable = true
       } catch {
-        // A registry without an event stream cannot drive a live monitor; the
-        // create call reports `nano/unsupported` rather than pretending.
+        // A registry without an event stream cannot drive a live monitor;
+        // `assertAvailable` reports `nano/monitor/unavailable` instead of
+        // returning a monitor that can never see new output.
+        this.eventsAvailable = false
       }
     }
     const onAgent = (event, handler) => {
@@ -116,13 +121,30 @@ export class MonitorService {
       if (typeof disposer === 'function') this.disposers.push(disposer)
     }
     onAgent('agent/inbox/inserted', ({ message }) => this.onInbox(message, 'inserted'))
-    onAgent('agent/inbox/claimed', ({ message }) => this.onInbox(message, 'claimed'))
+    onAgent('agent/inbox/claimed', ({ message, turn }) => this.onInbox(message, 'claimed', turn))
     onAgent('agent/inbox/discarded', ({ message }) => this.onInbox(message, 'discarded'))
     const sessionDisposer = this.ctx.on('session/event', (subject, event) => {
-      if (this.closed || subject.id !== this.rootSessionId || event.type !== 'user/message') return
-      this.onUserMessage(event.data)
+      if (this.closed || subject.id !== this.rootSessionId) return
+      if (event.type === 'user/message') this.onUserMessage(event.data)
+      else if (event.type === 'turn/end') this.onTurnEnd(event.data)
     })
     if (typeof sessionDisposer === 'function') this.disposers.push(sessionDisposer)
+    // A rejected step ends the claimed message without a `discarded` event.
+    // Observe the waterfall without changing the decision.
+    const preStepDisposer = this.ctx.on('agent/pre-step', async (payload, next) => {
+      const decision = await next()
+      if (
+        !this.closed &&
+        payload?.agent?.id === this.rootSessionId &&
+        decision?.kind === 'reject'
+      ) {
+        for (const message of payload.messages ?? []) {
+          this.failDelivery(message?.id, '步骤被拒绝（pre-step reject）；模型不会收到')
+        }
+      }
+      return decision
+    })
+    if (typeof preStepDisposer === 'function') this.disposers.push(preStepDisposer)
   }
 
   /** Stop publishing and clear every timer; observed jobs are untouched. */
@@ -132,6 +154,7 @@ export class MonitorService {
     for (const timer of this.publishTimers.values()) this.clearTimer(timer)
     this.publishTimers.clear()
     for (const monitor of this.monitors.values()) this.clearMonitorTimers(monitor)
+    this.deliveries.clear()
     for (const disposer of this.disposers.splice(0)) {
       try {
         disposer()
@@ -166,8 +189,12 @@ export class MonitorService {
       return { existing: true, monitor: this.project(existing) }
     }
     if (existing !== undefined) {
-      // An inactive record is replaced by a fresh listening generation.
+      // An inactive record is replaced by a fresh listening generation. Drop
+      // its delivery map entries so a late receipt cannot resurrect it.
       this.clearMonitorTimers(existing)
+      for (const [messageId, entry] of this.deliveries) {
+        if (entry.monitor === existing) this.deliveries.delete(messageId)
+      }
     }
     if (existing === undefined && this.monitors.size >= MONITOR_LIMITS.maxMonitors) {
       throw new RpcError('nano/monitor/limit-reached', `at most ${MONITOR_LIMITS.maxMonitors} monitors are kept`)
@@ -227,7 +254,7 @@ export class MonitorService {
       ready: [],
       held: null,
       paused: false,
-      carry: { text: '', offset: initialOffset },
+      carry: { text: '', offset: initialOffset, partial: false },
       gapBeforeNext: false,
       reading: false,
       dirty: false,
@@ -241,13 +268,17 @@ export class MonitorService {
     this.monitors.set(jobId, monitor)
     this.scheduleExpiry(monitor)
 
-    // A settled job has no later `settled` event to wait for. Replay retained
-    // bytes when the user asked for the beginning, then show the terminal fact.
-    if (job.status === 'completed' || job.status === 'killed' || job.status === 'failed') {
-      this.drain(monitor)
+    // `earliest` replays the retained head immediately, even while the job is
+    // still running. A settled job has no later `settled` event to wait for,
+    // so it also needs the final carry flushed now.
+    const status = job?.status
+    const terminal = status === 'completed' || status === 'killed' || status === 'failed'
+    if (from === 'earliest' || terminal) this.drain(monitor)
+    if (terminal) {
+      this.flushCarry(monitor)
       this.markStreamFromJob(monitor, job)
-      this.scheduleFlush(monitor, true)
     }
+    this.scheduleFlush(monitor, true)
     this.publish(monitor)
     return { existing: false, monitor: this.project(monitor) }
   }
@@ -285,6 +316,7 @@ export class MonitorService {
       monitor.pending = null
       monitor.ready = []
       monitor.held = null
+      monitor.carry = { text: '', offset: monitor.offset, partial: false }
       monitor.heldMatches = 0
       monitor.heldBytes = 0
       monitor.paused = false
@@ -310,6 +342,7 @@ export class MonitorService {
       throw new RpcError('nano/monitor/not-found', 'no monitor is attached to this job')
     }
     const budgets = parseBudgets(params.budgets, monitor)
+    monitor.mergeWindowMs = budgets.mergeWindowMs
     monitor.budgets.maxNotifications = budgets.maxNotifications
     monitor.budgets.minIntervalMs = budgets.minIntervalMs
     monitor.budgets.maxLinesPerNotification = budgets.maxLinesPerNotification
@@ -362,12 +395,14 @@ export class MonitorService {
       // One read at our own offset catches the final output; waiting for a
       // post-settlement output frame would never arrive.
       this.drain(monitor)
+      this.flushCarry(monitor)
       this.markStreamFromJob(monitor, event.job)
       this.scheduleFlush(monitor, true)
       this.publish(monitor)
       return
     }
     if (event.type === 'removed') {
+      this.flushCarry(monitor)
       this.markStream(monitor, 'stream-ended', '任务记录已从官方列表移除')
       this.scheduleFlush(monitor, true)
       this.publish(monitor)
@@ -404,7 +439,19 @@ export class MonitorService {
           monitor.lossy = true
           this.markGap(monitor)
         }
-        for (const chunk of read.chunks ?? []) {
+        const chunks = read.chunks ?? []
+        if (
+          chunks.length === 0 &&
+          typeof read.next === 'number' &&
+          read.next > monitor.offset &&
+          read.lossy !== true
+        ) {
+          // The provider advanced without returning bytes. Never jump the
+          // cursor silently; show the discontinuity like a lossy read.
+          monitor.lossy = true
+          this.markGap(monitor)
+        }
+        for (const chunk of chunks) {
           this.consumeChunk(monitor, chunk)
         }
         if (typeof read.next === 'number' && read.next > monitor.offset) {
@@ -467,6 +514,7 @@ export class MonitorService {
         const offset = carry.offset
         carry.offset += consumed
         carry.text = carry.text.slice(newline + 1)
+        carry.partial = false
         if (line.endsWith('\r')) line = line.slice(0, -1)
         this.emitLine(monitor, line, offset, false)
         continue
@@ -480,14 +528,36 @@ export class MonitorService {
       const offset = carry.offset
       carry.offset += consumed
       carry.text = sliceUtf8(carry.text, consumed)
+      carry.partial = true
       this.emitLine(monitor, block, offset, true)
     }
+  }
+
+  /** Emit the final line when the observed stream ends without a newline. */
+  flushCarry(monitor) {
+    if (this.closed) return
+    const carry = monitor.carry
+    if (carry.text === '') return
+    const text = carry.text
+    const offset = carry.offset
+    const partial = carry.partial === true
+    carry.offset += byteLength(text)
+    carry.text = ''
+    carry.partial = false
+    this.emitLine(monitor, text, offset, partial)
   }
 
   /** Apply the filter and merge one line event into the pending notification. */
   emitLine(monitor, text, offset, partial) {
     if (!this.matches(monitor, text)) return
-    if (monitor.exhausted || monitor.stoppedByUser) {
+    if (monitor.stoppedByUser) {
+      // The user stopped delivery. A settlement may still drain the final
+      // bytes; count those matches as dropped, never as held for a resume.
+      monitor.droppedMatches += 1
+      this.schedulePublish(monitor)
+      return
+    }
+    if (monitor.exhausted) {
       // Keep the bounded summary visible instead of silently dropping the
       // match. The UI reports how many matching lines are held.
       this.holdLine(monitor, text, offset, partial)
@@ -611,6 +681,10 @@ export class MonitorService {
       monitor.deliveries.shift()
     }
     this.deliveries.set(messageId, { monitor, delivery })
+    while (this.deliveries.size > MONITOR_LIMITS.maxDeliveryEntries) {
+      const oldest = this.deliveries.keys().next().value
+      this.deliveries.delete(oldest)
+    }
 
     const message = Object.freeze({
       id: messageId,
@@ -679,13 +753,13 @@ export class MonitorService {
   /** Record a discontinuity without splicing text across it. */
   markGap(monitor) {
     monitor.gaps += 1
-    monitor.carry = { text: '', offset: monitor.offset }
+    monitor.carry = { text: '', offset: monitor.offset, partial: false }
     monitor.gapBeforeNext = true
     this.schedulePublish(monitor)
   }
 
   /** Apply one official inbox receipt for a monitor message. */
-  onInbox(message, state) {
+  onInbox(message, state, turn) {
     if (message?.id === undefined) return
     const entry = this.deliveries.get(message.id)
     if (entry === undefined) return
@@ -695,6 +769,7 @@ export class MonitorService {
       delivery.state = 'discarded'
       delivery.detail = '官方在步骤前丢弃了该消息；模型不会收到'
     } else if (state === 'claimed') {
+      if (typeof turn === 'number') delivery.turn = turn
       if (delivery.state === 'claimed') return
       delivery.state = 'claimed'
       delivery.detail = '已交给步骤批次；步骤仍可能被拒绝，尚不证明模型收到'
@@ -720,6 +795,33 @@ export class MonitorService {
     delivery.state = 'accepted'
     delivery.detail = 'durable user/message：官方记录已接受该用户回合'
     this.clearDeliveryTimer(monitor, delivery.messageId)
+    monitor.updatedAt = this.timers.now()
+    this.publish(monitor)
+  }
+
+  /** A blocked turn means claimed messages never reached the model. */
+  onTurnEnd(data) {
+    if (data?.reason?.kind !== 'blocked' || typeof data.turn !== 'number') return
+    for (const entry of this.deliveries.values()) {
+      const { delivery } = entry
+      if (delivery.turn !== data.turn) continue
+      this.failDelivery(
+        delivery.messageId,
+        '回合被阻断（blocked）；模型没有收到该消息',
+      )
+    }
+  }
+
+  /** Mark one delivery as a definite failure without inventing a receipt. */
+  failDelivery(messageId, detail) {
+    if (typeof messageId !== 'string') return
+    const entry = this.deliveries.get(messageId)
+    if (entry === undefined) return
+    const { monitor, delivery } = entry
+    if (delivery.state === 'accepted' || delivery.state === 'failed' || delivery.state === 'discarded') return
+    delivery.state = 'failed'
+    delivery.detail = detail
+    this.clearDeliveryTimer(monitor, messageId)
     monitor.updatedAt = this.timers.now()
     this.publish(monitor)
   }
@@ -762,6 +864,9 @@ export class MonitorService {
   /** Publish the full monitor projection (absolute replacement). */
   publish(monitor) {
     if (this.closed) return
+    // A replaced generation must never resurrect its projection over the
+    // current monitor for the same job.
+    if (this.monitors.get(monitor.jobId) !== monitor) return
     const scheduled = this.publishTimers.get(monitor.jobId)
     if (scheduled !== undefined) {
       this.clearTimer(scheduled)
@@ -835,11 +940,18 @@ export class MonitorService {
   }
 
   assertAvailable() {
-    if (this.registry === undefined) {
-      throw new RpcError('nano/unsupported', 'the official job registry is not composed')
+    if (
+      this.registry === undefined ||
+      typeof this.registry.readAt !== 'function' ||
+      !this.eventsAvailable
+    ) {
+      throw new RpcError(
+        'nano/monitor/unavailable',
+        'the official job registry does not expose live, non-consuming output observation',
+      )
     }
     if (this.agent === undefined || typeof this.agent.followup !== 'function' || typeof this.agent.inject !== 'function') {
-      throw new RpcError('nano/unsupported', 'the official Agent delivery surface is not available')
+      throw new RpcError('nano/monitor/unavailable', 'the official Agent delivery surface is not available')
     }
   }
 
@@ -917,6 +1029,10 @@ function parseFilter(value) {
   const regex = value.regex === true
   const filter = { pattern, regex }
   if (regex) {
+    const rejected = regexComplexity(pattern)
+    if (rejected !== null) {
+      throw new RpcError('nano/monitor/filter-invalid', rejected)
+    }
     try {
       filter.expression = new RegExp(pattern)
     } catch (error) {
@@ -924,6 +1040,23 @@ function parseFilter(value) {
     }
   }
   return filter
+}
+
+/** A bounded heuristic for patterns with catastrophic backtracking risk. */
+function regexComplexity(pattern) {
+  if (/\\[1-9]/.test(pattern)) {
+    return 'backreferences are not allowed in monitor filters'
+  }
+  // A quantified group whose body already contains a quantifier, e.g. (a+)+
+  // or (a*){2,}. This is the common exponential-backtracking shape.
+  if (/\((?:[^()\\]|\\.)*[+*](?:[^()\\]|\\.)*\)\s*(?:[+*?]|\{\d*,?\d*\})/.test(pattern)) {
+    return 'nested quantifiers are not allowed in monitor filters'
+  }
+  const quantifiers = (pattern.match(/[*+?{]/g) ?? []).length
+  if (quantifiers > 64) {
+    return 'monitor filter has too many quantifier tokens'
+  }
+  return null
 }
 
 /** Validate per-monitor budgets, bounded by hard limits. */
