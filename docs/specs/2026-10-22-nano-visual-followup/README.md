@@ -254,3 +254,5 @@ N 只数**本地直接子代理**：含 Running 与尚未到 30 秒清理的终�
 | 20 | minor | 子代理历史未限定 `MessageKind::User`、未说明 2000 条投影上限 | §3.4/§7 补限定与上限 |
 
 - 2026-10-22：第二轮 6 条全部按上表修订。
+- 2026-10-22：实施发现视觉第二批（#48）已先落地 `NANO_THEME`/`DiffTheme` 读取；本单复用 `DiffTheme` 选择 dock 焦点底色，不新增第二个读取。长期决定已落 ADR：`docs/decisions/2026-10-22-input-history.md`、`docs/decisions/2026-10-22-subagent-dock-lifecycle.md`、`docs/decisions/2026-10-22-nano-theme-scope.md`。
+- 2026-10-22：实施期轻审修订（PR #50）：历史窗口按项目匹配反向扫描、粘贴/队列编辑退出浏览、历史行单次 append、external 不进 dock、队列编辑不写历史。spec 正文口径不变，澄清落在 ADR 与 PR #50。

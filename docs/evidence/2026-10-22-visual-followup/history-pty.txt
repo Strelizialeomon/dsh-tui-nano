@@ -1,0 +1,91 @@
+{
+  "ok": true,
+  "checks": [
+    [
+      "connected",
+      true
+    ],
+    [
+      "up shows newest",
+      true
+    ],
+    [
+      "up shows older",
+      true
+    ],
+    [
+      "down shows newer",
+      true
+    ],
+    [
+      "down restores draft",
+      true
+    ],
+    [
+      "history file exists",
+      true
+    ],
+    [
+      "both prompts recorded",
+      true
+    ],
+    [
+      "project is the canonical cwd",
+      true
+    ],
+    [
+      "history file is 0600",
+      true
+    ],
+    [
+      "clean exit",
+      true
+    ]
+  ],
+  "exit": 0
+}
+--- SCREEN ---
+[>nano  …/work
+
+  > first history prompt
+
+  上下文 3 段 · 点击展开
+
+  llm-deepseek: no API key for provider route "deepseek-official"; store DEEPSEEK_API_KEY through the credentials serv
+  ice (the web Models page writes it), or export DEEPSEEK_API_KEY in the launching environment
+
+  > second history prompt
+
+  llm-deepseek: no API key for provider route "deepseek-official"; store DEEPSEEK_API_KEY through the credentials serv
+  ice (the web Models page writes it), or export DEEPSEEK_API_KEY in the launching environment
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  > 继续提问…                                                                                                        ↑
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  权限：workspace-write                                                                                         …/work
+--- HISTORY ---
+{"display":"first history prompt","project":"/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-history-pty-y0gf97x5/work","sessionId":"session-9526e65c-9db0-4437-a7f6-8aed91ed8bb5","timestamp":1792665084022}
+{"display":"second history prompt","project":"/private/var/folders/p5/7655pl_j5kdg9xjfbypfg8h80000gn/T/nano-history-pty-y0gf97x5/work","sessionId":"session-9526e65c-9db0-4437-a7f6-8aed91ed8bb5","timestamp":1792665086050}
+
