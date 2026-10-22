@@ -20,6 +20,12 @@
 - 原始输出：`dock-running-pty.txt`
 - 覆盖：mock 子代理启动后，dock 行显示 `● followup-tui … 执行中`；无标题、无用时。
 
+## 子代理输入历史（真实 PTY）
+
+- 命令：`python3 scripts/pty-evidence-child-history.py`
+- 原始输出：`child-history-pty.txt`
+- 覆盖：进入子代理视图（gate `可输入`）→ 发送 `child history prompt` → 上键回看，composer 行恢复该提示；任务结束干净退出。
+
 ## 自动化
 
 | 文件 | 命令 | 结果 |
@@ -49,5 +55,4 @@
 ## 未覆盖 / 注意
 
 - **历史跨进程回看**：由单测与真实 PTY 文件检查覆盖；未做第二次启动后的 Ghostty 截图。
-- **子代理输入历史**：由 `child_history_uses_only_user_messages_from_the_child_projection` 单测覆盖；未做真实 PTY 子代理输入回看。
 - 浅色证据只覆盖 dock 焦点行；第二批的 diff 浅色证据在 `docs/evidence/2026-10-22-visual/batch2/`。
