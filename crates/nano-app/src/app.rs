@@ -942,10 +942,19 @@ impl App {
         self.attachments.switch_to(address.clone());
         self.completion.clear();
         self.transcript_dirty = true;
-        let from = row
-            .seq
-            .unwrap_or(0)
-            .saturating_sub(nano_conversation::MAX_REPLAY_EVENTS);
+        // A cached child model already holds everything up to its last
+        // applied seq. Re-subscribing from the bounded window would replay
+        // those events and duplicate transcript rows; resume at the next seq.
+        let from = self
+            .child_models
+            .get(&key)
+            .and_then(|model| model.last_applied_seq())
+            .map(|seq| seq.saturating_add(1))
+            .unwrap_or_else(|| {
+                row.seq
+                    .unwrap_or(0)
+                    .saturating_sub(nano_conversation::MAX_REPLAY_EVENTS)
+            });
         self.subscribe_child(&address, from);
         true
     }
@@ -2251,11 +2260,8 @@ impl App {
                         let from = self
                             .child_models
                             .get(&key)
-                            .map(|model| {
-                                model
-                                    .seq()
-                                    .saturating_sub(nano_conversation::MAX_REPLAY_EVENTS)
-                            })
+                            .and_then(|model| model.last_applied_seq())
+                            .map(|seq| seq.saturating_add(1))
                             .unwrap_or(0);
                         self.subscribe_child(&mounted.address, from);
                     }
