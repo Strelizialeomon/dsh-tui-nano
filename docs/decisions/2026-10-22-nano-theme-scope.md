@@ -1,11 +1,11 @@
 # ADR-20261022-nano-theme-scope：`NANO_THEME` 同时管 diff token 与 dock 焦点底色
 
-- 状态：生效中
+- 状态：已被取代
 - 日期：2026-10-22
 - 决策人：用户
 - 适用范围：`NANO_THEME=dark|light` 影响的视觉 token
 - 取代：`2026-10-22-nano-visual-v1` §9「`NANO_THEME` 只影响 diff 底色与行内强调，不影响其他 token」
-- 被取代：无
+- 被取代：[ADR-20261022-independent-tui-theme](2026-10-22-independent-tui-theme.md)
 - 决策来源：`docs/specs/2026-10-22-nano-visual-followup/README.md` §3.2；用户 2026-10-22 选择「完全按设计稿」
 
 ## 决定
