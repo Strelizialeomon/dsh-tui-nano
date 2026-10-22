@@ -1,7 +1,7 @@
 # [2026-10-20-nano-v1/S09] 交互终端
 
 - 组标识：`2026-10-20-nano-v1`；角色：子件 S09，单交付为真实 PTY、输入/缩放/屏幕恢复的交互终端。
-- 状态：已批准实施；执行单 #12。
+- 状态：已实施（PR #25）；执行单 #12。
 - 总纲：[共享约定与依据](README.md)。上游：S02（D02）、S01（D06/D07）。下游：S13（D09）。
 - 合入前提：S01 的 PTY 双向流与背压契约可用，且 D07 的完整 snapshot/output/input 示例与断流证据齐全；S02 可运行（D02）。本份用真实 shell 进程完成输入、缩放、断线恢复和关闭验证。发布由 S13 承担。
 
@@ -63,25 +63,27 @@
 
 ## 7. 验收
 
-- [ ] 在真实 shell 中创建终端、输入命令、看到输出；普通字符、宽字符、组合字符和 ANSI 颜色正确。
-- [ ] 附着先收到受限 scrollback 的屏幕快照，随后增量 sequence 连续；人为断流后重附着得到一致屏幕，不拼接错位内容；只标注「受 scrollback 限制」，不伪造缺口标记。
-- [ ] 终端 id 预生成并持久化；create 响应丢失时用同一 id 重试且幂等；孤儿 id 能查询/关闭，不占满 `maxTerminals`。
-- [ ] 进程退出时先禁用输入、drained 后发最终 `exited` state；ack refusal 与最终 state 都能让 UI 禁用输入；不要求进程退出瞬间的 writable=false 帧。
-- [ ] 输入/缩放带 attachment-local 序列号；控制权转移/rename/resize 时 state 帧更新 `writable`；分离不杀进程。
-- [ ] 序列缺口、单条超过 `maxInputBytes`、越界 resize 分别按官方失败路径处理；控制权拒绝仍回带 `refusal` 的 ack，不把两种失败混为一谈。
-- [ ] 重连不回放未确认输入；输入被拒绝时输出仍可读、输入禁用并说明原因。
-- [ ] 缩放受官方尺寸约束，客户端先 clamp；Host 侧越界错误结束附件但保留进程/恢复屏幕，终端内容不被 Rust 重新软换行。
-- [ ] 终端滚轮在 Ghostty 与 xterm.js 上按设备分曲线，反向不继承加速；拖选/复制期间滚动不破坏选择。
-- [ ] 同一根会话第二个窗口被 S01 拒绝，不能附着该终端；不同根会话的终端互不可见。
-- [ ] 切换根会话后，旧终端视图、屏幕和输入历史不出现在新会话；新会话只显示自己的终端。
-- [ ] `retain()` hold 生效：只 attach 不 retain 的终端会在无人值守超时后被回收；关闭窗口释放自己的 hold；没有跨窗口/跨宿主墓碑。
-- [ ] 关闭状态用官方 phase（closing/closed/failed/disconnected）；进程退出、输出排空、附件关闭分别可见，不把「输入禁用」当「输出已收完」。
+- [x] 在真实 shell 中创建终端、输入命令、看到输出；普通字符、宽字符、组合字符和 ANSI 颜色正确。
+- [x] 附着先收到受限 scrollback 的屏幕快照，随后增量 sequence 连续；人为断流后重附着得到一致屏幕，不拼接错位内容；只标注「受 scrollback 限制」，不伪造缺口标记。
+- [x] 终端 id 预生成并持久化；create 响应丢失时用同一 id 重试且幂等；孤儿 id 能查询/关闭，不占满 `maxTerminals`。
+- [x] 进程退出时先禁用输入、drained 后发最终 `exited` state；ack refusal 与最终 state 都能让 UI 禁用输入；不要求进程退出瞬间的 writable=false 帧。
+- [x] 输入/缩放带 attachment-local 序列号；控制权转移/rename/resize 时 state 帧更新 `writable`；分离不杀进程。
+- [x] 序列缺口、单条超过 `maxInputBytes`、越界 resize 分别按官方失败路径处理；控制权拒绝仍回带 `refusal` 的 ack，不把两种失败混为一谈。
+- [x] 重连不回放未确认输入；输入被拒绝时输出仍可读、输入禁用并说明原因。
+- [x] 缩放受官方尺寸约束，客户端先 clamp；Host 侧越界错误结束附件但保留进程/恢复屏幕，终端内容不被 Rust 重新软换行。
+- [x] 终端滚轮在 Ghostty 与 xterm.js 上按设备分曲线，反向不继承加速；拖选/复制期间滚动不破坏选择。
+- [x] 同一根会话第二个窗口被 S01 拒绝，不能附着该终端；不同根会话的终端互不可见。
+- [x] 切换根会话后，旧终端视图、屏幕和输入历史不出现在新会话；新会话只显示自己的终端。
+- [x] `retain()` hold 生效：只 attach 不 retain 的终端会在无人值守超时后被回收；关闭窗口释放自己的 hold；没有跨窗口/跨宿主墓碑。
+- [x] 关闭状态用官方 phase（closing/closed/failed/disconnected）；进程退出、输出排空、附件关闭分别可见，不把「输入禁用」当「输出已收完」。
 - [ ] 最后一个 hold 释放后按官方超时回收；测试用缩短的 `unattendedTimeoutMs` 和受支持 shell（`bash -i`/`zsh -i`）；未知 shell 不误判回收。
 - [ ] vim/less/tmux 的 alt-screen、滚动区、光标定位、鼠标上报渲染正确；复制宽字符/组合字符/换行不串行。
-- [ ] Agent 工具表/Monitor 投递路径没有 `terminal.create/attach/retain/close`；负向夹具证明不能借用户终端绕过审批。
-- [ ] 终端输出不出现在会话历史或模型请求中；诊断不含完整屏幕或输入。
-- [ ] 关闭窗口、宿主退出、macOS 强杀三种情况分别报告进程范围和未保证项。
-- [ ] 本份的真实 PTY 证据、快照样本和失败夹具随交付提供；未测的逃逸进程范围明确标注。
+- [x] Agent 工具表/Monitor 投递路径没有 `terminal.create/attach/retain/close`；负向夹具证明不能借用户终端绕过审批。
+- [x] 终端输出不出现在会话历史或模型请求中；诊断不含完整屏幕或输入。
+- [x] 关闭窗口、宿主退出、macOS 强杀三种情况分别报告进程范围和未保证项。
+- [x] 本份的真实 PTY 证据、快照样本和失败夹具随交付提供；未测的逃逸进程范围明确标注。
+
+未勾项（证据缺口）：14 的未知 shell 活动观察、15 的 `less`/`tmux` 端到端与真实鼠标上报。证据与未测范围见 `docs/evidence/2026-10-21-s09/README.md`；这两项不阻断 S09 交付，留 S13 组合验收或后续专项补测。
 
 ## 8. 机制清单
 
@@ -140,4 +142,4 @@
 | 15 | 记录 | 三处弱覆盖测试（选区 clamp、ack 释放、closeAll 重试） | 已补有效断言与失败路径测试 |
 | 16 | 重大 | 合入 S07 后切换根会话未重建终端，旧屏幕/attachment/store 残留 | 已修：`bind_terminal` 按新 rootSessionId 重建；`Switched`/`attach_link` 刷新数据根；`fail_switch` 标 disconnected；新增切换重绑测试 |
 
-上述验收均未执行；真实 PTY 证据见 `docs/evidence/2026-10-21-s09/`，合并前逐项勾选。
+验收已按本表勾选执行；未勾项与证据缺口见 §7 注。真实 PTY 证据见 `docs/evidence/2026-10-21-s09/`。
