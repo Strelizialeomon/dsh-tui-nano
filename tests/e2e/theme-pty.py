@@ -246,16 +246,18 @@ class Session:
         # The official host runs in its own process group; kill anything that
         # still references this throwaway DSH_HOME so the next scenario can
         # acquire the data-root lock.
-        dsh_home = self.env.get("DSH_HOME")
-        if dsh_home:
+        data_root = self.env.get("NANO_DATA_ROOT")
+        if data_root:
+            # The host argv carries `--patch <data_root>/runtime/...`; its
+            # DSH_HOME lives only in the environment, where pgrep cannot see it.
             result = subprocess.run(
-                ["pgrep", "-f", "--", dsh_home],
+                ["pgrep", "-f", "--", data_root],
                 capture_output=True, text=True,
             )
             for line in result.stdout.split():
                 try:
                     os.kill(int(line), signal.SIGKILL)
-                except (ValueError, ProcessLookupError):
+                except (ValueError, ProcessLookupError, PermissionError):
                     pass
         try:
             os.close(self.master)

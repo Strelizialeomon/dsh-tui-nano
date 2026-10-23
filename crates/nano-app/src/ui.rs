@@ -3709,7 +3709,7 @@ mod tests {
             assert_eq!(
                 cell.bg,
                 Color::Reset,
-                "ordinary 60-column background stays Reset at ({x},{y}): {cell:?}"
+                "ordinary frame background stays Reset at ({x},{y}): {cell:?}"
             );
             skip = cell
                 .symbol()
@@ -3773,16 +3773,17 @@ mod tests {
         );
         use ratatui::backend::TestBackend;
         use ratatui::Terminal;
-        let wide = TestBackend::new(100, 30);
-        let mut wide_terminal = Terminal::new(wide).expect("wide terminal");
-        wide_terminal
-            .draw(|frame| draw(frame, &mut app))
-            .expect("wide frame");
-        let backend = TestBackend::new(60, 20);
+        let backend = TestBackend::new(100, 30);
         let mut terminal = Terminal::new(backend).expect("test terminal");
         terminal
             .draw(|frame| draw(frame, &mut app))
-            .expect("draw the frame");
+            .expect("wide frame");
+        terminal
+            .resize(Rect::new(0, 0, 60, 20))
+            .expect("resize to 60 columns");
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("60-column frame");
         let mut skip = 0usize;
         let mut saw_rule = false;
         for (index, cell) in terminal.backend().buffer().content().iter().enumerate() {
@@ -3799,7 +3800,7 @@ mod tests {
             assert_eq!(
                 cell.bg,
                 Color::Reset,
-                "ordinary 60-column background stays Reset at ({x},{y}): {cell:?}"
+                "ordinary frame background stays Reset at ({x},{y}): {cell:?}"
             );
             if cell.symbol() == "─" && cell.fg == Theme::Light.colors().rule {
                 saw_rule = true;
