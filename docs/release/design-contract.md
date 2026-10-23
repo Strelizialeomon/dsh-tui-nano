@@ -7,7 +7,7 @@
 
 > **视觉条款已被取代（2026-10-22）**：`docs/specs/2026-10-22-nano-visual-v1/README.md` 按用户拍板「统一以设计稿为准」重新冻结了标题/底栏/输入区/决策卡/子代理 dock 等视觉口径，以及 §3 符号白名单与主题选择规则中与设计稿冲突的部分；与本文件冲突时以新 spec 为准。本文件其余条款继续有效，0.1.0 的证据与历史记录保留。
 
-> **主题条款已被取代（2026-10-22）**：`docs/specs/2026-10-22-nano-theme-transparency/README.md` 与 `docs/decisions/2026-10-22-independent-tui-theme.md` 按用户拍板把 `NANO_THEME` 扩展到全部自有界面，由 TUI 输出明确 RGB、普通背景保留终端默认背景。§3 主题规则与 token 表中依赖终端决定主题、或把 ANSI 色名/默认前景作为最终颜色的条款，以新 spec 为准；本文件其余条款继续有效。
+> **主题条款已被取代（2026-10-22）**：`docs/specs/2026-10-22-nano-theme-transparency/README.md` 与 `docs/decisions/2026-10-22-independent-tui-theme.md` 按用户拍板把 `NANO_THEME` 扩展到全部自有界面，由 TUI 输出明确 RGB、普通背景保留终端默认背景。§3 主题规则与 token 表中与新 spec §3.2 唯一色表或 §3.3 背景规则冲突的条款（含显式 RGB、ANSI 色名、默认前景与 REVERSED），以新 spec 为准；本文件其余条款继续有效。
 
 ## 1. 布局槽位
 
