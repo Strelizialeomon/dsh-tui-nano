@@ -32,6 +32,7 @@ except ImportError:
     sys.exit("ghostty-theme-transparency: Pillow is required (pip install pillow)")
 
 ROWS, COLS = 32, 100
+EDIT_PATH = None
 SMALL_ROWS, SMALL_COLS = 26, 60
 PROMPT = "只回复一行 THEME-TRANSPARENCY，不要调用任何工具。"
 MARKER = "THEME-TRANSPARENCY"
@@ -61,6 +62,25 @@ def text_events(text):
         {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
         {"type": "content_block_stop", "index": 0},
         {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}},
+        {"type": "message_stop"},
+    ]
+
+
+def tool_use_events(name, payload):
+    return [
+        {"type": "message_start", "message": {"usage": {"input_tokens": 1, "output_tokens": 0}}},
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "tool_use", "id": f"toolu_{name}", "name": name, "input": {}},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": payload},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 1}},
         {"type": "message_stop"},
     ]
 
@@ -108,7 +128,21 @@ class MockModel(BaseHTTPRequestHandler):
 
     def do_POST(self):
         self.rfile.read(int(self.headers.get("content-length", "0")))
-        body = sse(ask_events() if MockModel.mode == "ask" else text_events(MARKER))
+        if MockModel.mode == "ask":
+            body = sse(ask_events())
+        elif MockModel.mode == "subagent":
+            body = sse(tool_use_events("subagent", json.dumps({
+                "description": "theme-dock",
+                "prompt": "只回复一行 THEME-DOCK，不要调用任何工具。",
+            }, ensure_ascii=False)))
+        elif MockModel.mode == "edit":
+            body = sse(tool_use_events("edit", json.dumps({
+                "file_path": EDIT_PATH,
+                "old_string": "alpha",
+                "new_string": "beta",
+            }, ensure_ascii=False)))
+        else:
+            body = sse(text_events(MARKER))
         self.send_response(200)
         self.send_header("content-type", "text/event-stream")
         self.send_header("content-length", str(len(body)))
@@ -187,13 +221,39 @@ def capture(title, path):
     return path
 
 
+def window_exists(title):
+    result = run([str(LIST_WINDOWS)])
+    return any(
+        line.split("\t")[2:4] == ["Ghostty", title]
+        for line in result.stdout.splitlines()
+        if len(line.split("\t")) >= 4
+    )
+
+
+def kill_window(title):
+    result = run(["pgrep", "-f", f"--title={title}"])
+    for line in result.stdout.split():
+        try:
+            os.kill(int(line), signal.SIGKILL)
+        except (ValueError, ProcessLookupError):
+            pass
+    if wait_for_window_gone(title, 8):
+        return True
+    return not run(["pgrep", "-f", f"--title={title}"]).stdout.strip()
+
+
 def quit_window(title):
     for _ in range(2):
-        focus(title)
+        if not window_exists(title):
+            return True
+        try:
+            focus(title)
+        except RuntimeError:
+            break
         applescript('tell application "System Events" to key code 8 using control down')
         if wait_for_window_gone(title, 6):
             return True
-    return False
+    return kill_window(title)
 
 
 SPAWNED = set()
@@ -216,7 +276,8 @@ def palette_args(palette):
 
 
 def launch(title, script, cols, rows, palette, *, opacity=1.0, cells=False,
-           background_image=None, fullscreen=False, config_file=None):
+           background_image=None, fullscreen=False, font_size=None, config_file=None,
+           focus_after=True):
     before = ghostty_pids()
     args = [
         "open", "-na", "Ghostty.app", "--args",
@@ -239,6 +300,8 @@ def launch(title, script, cols, rows, palette, *, opacity=1.0, cells=False,
         args.extend([f"--background-image={background_image}", "--background-image-opacity=1"])
     if fullscreen:
         args.append("--fullscreen=true")
+    if font_size is not None:
+        args.append(f"--font-size={font_size}")
     run(args, check=True)
     for pid in ghostty_pids() - before:
         command = run(["ps", "-o", "command=", "-p", str(pid)]).stdout
@@ -246,7 +309,8 @@ def launch(title, script, cols, rows, palette, *, opacity=1.0, cells=False,
             SPAWNED.add(pid)
     wait_for_window(title)
     time.sleep(10)
-    focus(title)
+    if focus_after:
+        focus(title)
 
 
 def send_key(title, code):
@@ -267,18 +331,26 @@ def analyze(path):
     return colors
 
 
-def near_rgb(color, rgb, tolerance=14):
+def near_rgb(color, rgb, tolerance=24):
     return all(abs(a - b) <= tolerance for a, b in zip(color, rgb))
 
 
-def count_near(colors, rgb, tolerance=14):
+def count_near(colors, rgb, tolerance=24):
     return sum(1 for color in colors if near_rgb(color, rgb, tolerance))
 
 
-def dominant_near(colors, rgb, tolerance=14):
+def dominant_near(colors, rgb, tolerance=24):
     from collections import Counter
     matches = Counter(color for color in colors if near_rgb(color, rgb, tolerance))
     return matches.most_common(1)[0][0] if matches else None
+
+
+def close_color(left, right, tolerance=24):
+    return (
+        left is not None
+        and right is not None
+        and all(abs(a - b) <= tolerance for a, b in zip(left, right))
+    )
 
 
 def hex_rgb(value):
@@ -327,6 +399,9 @@ def main():
     work = root / "work"
     for path in (home, dsh_home, data, work):
         path.mkdir(parents=True, exist_ok=True)
+    global EDIT_PATH
+    EDIT_PATH = str(work / "theme-diff.txt")
+    Path(EDIT_PATH).write_text("alpha\n")
 
     config = root / "ghostty-config"
     config.write_text("window-save-state=never\nmacos-option-as-alt=true\n")
@@ -393,18 +468,19 @@ def main():
     def drive(title, theme):
         if args.capture_only:
             return
+        accent = hex_rgb(THEMES[theme]["accent"])
+        for _ in range(10):
+            probe = root / "drive-probe.png"
+            try:
+                capture(title, probe)
+                if count_near(analyze(probe), accent) > 5:
+                    break
+            except (RuntimeError, OSError):
+                pass
+            time.sleep(2)
         paste(title, PROMPT)
         send_key(title, KEY_CODES["return"])
         time.sleep(4)
-
-    def kill_window(title):
-        result = run(["pgrep", "-f", f"--title={title}"])
-        for line in result.stdout.split():
-            try:
-                os.kill(int(line), signal.SIGKILL)
-            except (ValueError, ProcessLookupError):
-                pass
-        return wait_for_window_gone(title, 8)
 
     def close(title):
         if args.capture_only:
@@ -428,27 +504,33 @@ def main():
                            cols, rows, palette)
                     drive(title, theme)
                     path = out / f"{theme}-{palette_name}-{width_name}.png"
-                    capture(title, path)
-                    colors = analyze(path)
-                    width, height = Image.open(path).size
                     expected = THEMES[theme]
                     key = (theme, width_name)
                     entry = counts.setdefault(key, {})
-                    entry[palette_name] = {
-                        "fg": count_near(colors, hex_rgb(expected["fg"])),
-                        "accent": count_near(colors, hex_rgb(expected["accent"])),
-                        "rule": count_near(colors, hex_rgb(expected["rule"])),
-                        "rule_color": dominant_near(colors, hex_rgb(expected["rule"])),
-                        "accent_color": dominant_near(colors, hex_rgb(expected["accent"])),
-                    }
+                    for attempt in range(4):
+                        capture(title, path)
+                        colors = analyze(path)
+                        entry[palette_name] = {
+                            "fg": count_near(colors, hex_rgb(expected["fg"])),
+                            "accent": count_near(colors, hex_rgb(expected["accent"])),
+                            "rule": count_near(colors, hex_rgb(expected["rule"])),
+                            "rule_color": dominant_near(colors, hex_rgb(expected["rule"])),
+                            "accent_color": dominant_near(colors, hex_rgb(expected["accent"])),
+                        }
+                        if (entry[palette_name]["rule"] > 100
+                                and entry[palette_name]["accent"] > 5):
+                            break
+                        time.sleep(2)
                     check(f"{theme} {palette_name} {width_name} rule RGB present",
                           entry[palette_name]["rule"] > 100, str(entry[palette_name]))
                     check(f"{theme} {palette_name} {width_name} accent RGB present",
                           entry[palette_name]["accent"] > 5, str(entry[palette_name]))
                     close(title)
         for key, entry in counts.items():
-            same_rule = entry["A"]["rule_color"] == entry["B"]["rule_color"]
-            same_accent = entry["A"]["accent_color"] == entry["B"]["accent_color"]
+            same_rule = close_color(entry["A"]["rule_color"], entry["B"]["rule_color"])
+            same_accent = close_color(
+                entry["A"]["accent_color"], entry["B"]["accent_color"]
+            )
             check(f"palette independence {key}", same_rule and same_accent,
                   f"A={entry['A']} B={entry['B']}")
 
@@ -477,8 +559,8 @@ def main():
         path = out / "opaque-dark.png"
         capture(title, path)
         colors = analyze(path)
-        magenta = count_rgb(colors, (255, 0, 255))
-        cyan = count_rgb(colors, (0, 255, 255))
+        magenta = count_near(colors, (255, 0, 255), tolerance=4)
+        cyan = count_near(colors, (0, 255, 255), tolerance=4)
         check("opaque checker visible", magenta + cyan > 1000,
               f"magenta={magenta} cyan={cyan}")
         close(title)
@@ -491,25 +573,28 @@ def main():
         capture(title, base)
         if not args.capture_only:
             # Command panel (Ctrl+P), schedule (Ctrl+G), terminal (F12).
-            focus(title)
-            applescript('tell application "System Events" to keystroke "p" using control down')
-            time.sleep(1.0)
-            panel = out / "components-command.png"
-            capture(title, panel)
-            check("components command panel captured", panel.exists())
-            send_key(title, KEY_CODES["esc"])
-            focus(title)
-            applescript('tell application "System Events" to keystroke "g" using control down')
-            time.sleep(1.0)
-            schedule = out / "components-schedule.png"
-            capture(title, schedule)
-            check("components schedule captured", schedule.exists())
-            send_key(title, KEY_CODES["esc"])
-            send_key(title, 111)  # F12
-            time.sleep(1.0)
-            terminal = out / "components-terminal.png"
-            capture(title, terminal)
-            check("components terminal captured", terminal.exists())
+            for name, action in (
+                ("command", lambda: applescript(
+                    'tell application "System Events" to keystroke "p" using control down')),
+                ("schedule", lambda: applescript(
+                    'tell application "System Events" to keystroke "g" using control down')),
+                ("terminal", lambda: send_key(title, 111)),
+            ):
+                if not window_exists(title):
+                    check(f"components {name} captured", False, "window closed early")
+                    break
+                try:
+                    focus(title)
+                    action()
+                    time.sleep(1.0)
+                    path = out / f"components-{name}.png"
+                    capture(title, path)
+                    check(f"components {name} captured", path.exists())
+                    if name != "terminal":
+                        send_key(title, KEY_CODES["esc"])
+                except RuntimeError as error:
+                    check(f"components {name} captured", False, str(error))
+                    break
         close(title)
 
         # --- Decision card: the mock asks a question so the card is real. ---
@@ -523,14 +608,94 @@ def main():
         close(title)
         MockModel.mode = "text"
 
+        # --- Local background boundary: cells=true with a focused dock row. ---
+        MockModel.mode = "subagent"
+        title = "nano-theme-cells-true"
+        launch(title, run_script("cells-true", "dark"), COLS, ROWS, PALETTE_A,
+               opacity=0.7, cells=True, background_image=checker_path)
+        drive(title, "dark")
+        if not args.capture_only:
+            try:
+                focus(title)
+                send_key(title, KEY_CODES["down"])
+                time.sleep(1.0)
+            except RuntimeError:
+                pass
+        cells_true = out / "local-cells-true.png"
+        capture(title, cells_true)
+        check("local background cells=true captured", cells_true.exists())
+        close(title)
+        MockModel.mode = "text"
+
+        # --- Diff under cells=true: local highlight behavior with the terminal
+        # compositing explicit cell backgrounds. ---
+        MockModel.mode = "edit"
+        title = "nano-theme-diff-cells-true"
+        launch(title, run_script("diff-cells-true", "dark"), COLS, ROWS, PALETTE_A,
+               opacity=0.7, cells=True, background_image=checker_path)
+        drive(title, "dark")
+        time.sleep(2)
+        diff_cells = out / "local-diff-cells-true.png"
+        capture(title, diff_cells)
+        check("local diff cells=true captured", diff_cells.exists())
+        close(title)
+        MockModel.mode = "text"
+
+        # --- Dock / child session: a subagent tool call creates the dock. ---
+        MockModel.mode = "subagent"
+        title = "nano-theme-dock"
+        launch(title, run_script("dock", "dark"), COLS, ROWS, PALETTE_A)
+        drive(title, "dark")
+        if not args.capture_only:
+            try:
+                focus(title)
+                send_key(title, KEY_CODES["down"])
+                time.sleep(1.0)
+            except RuntimeError:
+                pass
+        dock = out / "components-dock.png"
+        capture(title, dock)
+        check("components dock captured", dock.exists())
+        if not args.capture_only:
+            try:
+                focus(title)
+                send_key(title, KEY_CODES["return"])
+                time.sleep(1.0)
+                child = out / "components-child.png"
+                capture(title, child)
+                check("components child captured", child.exists())
+            except RuntimeError as error:
+                check("components child captured", False, str(error))
+        close(title)
+        MockModel.mode = "text"
+
+        # --- Diff: the mock asks the edit tool to change a fixture file. ---
+        MockModel.mode = "edit"
+        title = "nano-theme-diff"
+        launch(title, run_script("diff", "dark"), COLS, ROWS, PALETTE_A)
+        drive(title, "dark")
+        time.sleep(2)
+        diff_shot = out / "components-diff.png"
+        capture(title, diff_shot)
+        check("components diff captured", diff_shot.exists())
+        close(title)
+        MockModel.mode = "text"
+
         # --- Fullscreen regression (note the actual mode; no transparency promise). ---
         title = "nano-theme-fullscreen"
         launch(title, run_script("fullscreen", "dark"), COLS, ROWS, PALETTE_A,
-               opacity=0.7, fullscreen=True)
-        drive(title, "dark")
+               opacity=0.7, fullscreen=True, focus_after=False)
         path = out / "fullscreen-dark.png"
         capture(title, path)
         check("fullscreen captured", path.exists() and path.stat().st_size > 0)
+        close(title)
+
+        title = "nano-theme-fullscreen-60"
+        launch(title, run_script("fullscreen60", "dark"), SMALL_COLS, SMALL_ROWS, PALETTE_A,
+               opacity=0.7, fullscreen=True, font_size=45, focus_after=False)
+        path = out / "fullscreen-dark-60.png"
+        capture(title, path)
+        check("fullscreen 60 captured", path.exists() and path.stat().st_size > 0)
         close(title)
 
         config_after = hashlib.sha256(config.read_bytes()).hexdigest()

@@ -1,0 +1,409 @@
+{
+  "ghostty": "Ghostty 1.3.1",
+  "macos": "27.0.1",
+  "arch": "arm64",
+  "binary": "/Users/sunchongsheng/code/dsh-tui-nano/.claude/worktrees/issue-56/target/debug/nano",
+  "binary_mtime": 1792724789.1617367,
+  "checks": [
+    {
+      "check": "dark A 100 rule RGB present",
+      "ok": true,
+      "detail": "{'fg': 1900, 'accent': 2974, 'rule': 9098, 'rule_color': [57, 65, 73], 'accent_color': [110, 153, 214]}"
+    },
+    {
+      "check": "dark A 100 accent RGB present",
+      "ok": true,
+      "detail": "{'fg': 1900, 'accent': 2974, 'rule': 9098, 'rule_color': [57, 65, 73], 'accent_color': [110, 153, 214]}"
+    },
+    {
+      "check": "nano-theme-dark-A-100 closed",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "dark A 60 rule RGB present",
+      "ok": true,
+      "detail": "{'fg': 1900, 'accent': 2974, 'rule': 6522, 'rule_color': [57, 65, 73], 'accent_color': [110, 153, 214]}"
+    },
+    {
+      "check": "dark A 60 accent RGB present",
+      "ok": true,
+      "detail": "{'fg': 1900, 'accent': 2974, 'rule': 6522, 'rule_color': [57, 65, 73], 'accent_color': [110, 153, 214]}"
+    },
+    {
+      "check": "nano-theme-dark-A-60 closed",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "dark B 100 rule RGB present",
+      "ok": true,
+      "detail": "{'fg': 8281, 'accent': 3971, 'rule': 8088, 'rule_color': [57, 65, 73], 'accent_color': [110, 153, 214]}"
+    },
+    {
+      "check": "dark B 100 accent RGB present",
+      "ok": true,
+      "detail": "{'fg': 8281, 'accent': 3971, 'rule': 8088, 'rule_color': [57, 65, 73], 'accent_color': [110, 153, 214]}"
+    },
+    {
+      "check": "nano-theme-dark-B-100 closed",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "dark B 60 rule RGB present",
+      "ok": true,
+      "detail": "{'fg': 8274, 'accent': 3971, 'rule': 5461, 'rule_color': [57, 65, 73], 'accent_color': [110, 153, 214]}"
+    },
+    {
+      "check": "dark B 60 accent RGB present",
+      "ok": true,
+      "detail": "{'fg': 8274, 'accent': 3971, 'rule': 5461, 'rule_color': [57, 65, 73], 'accent_color': [110, 153, 214]}"
+    },
+    {
+      "check": "nano-theme-dark-B-60 closed",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "light A 100 rule RGB present",
+      "ok": true,
+      "detail": "{'fg': 6186, 'accent': 3043, 'rule': 6144, 'rule_color': [188, 191, 194], 'accent_color': [44, 86, 143]}"
+    },
+    {
+      "check": "light A 100 accent RGB present",
+      "ok": true,
+      "detail": "{'fg': 6186, 'accent': 3043, 'rule': 6144, 'rule_color': [188, 191, 194], 'accent_color': [44, 86, 143]}"
+    },
+    {
+      "check": "nano-theme-light-A-100 closed",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "light A 60 rule RGB present",
+      "ok": true,
+      "detail": "{'fg': 6170, 'accent': 3043, 'rule': 3584, 'rule_color': [188, 191, 194], 'accent_color': [44, 86, 143]}"
+    },
+    {
+      "check": "light A 60 accent RGB present",
+      "ok": true,
+      "detail": "{'fg': 6170, 'accent': 3043, 'rule': 3584, 'rule_color': [188, 191, 194], 'accent_color': [44, 86, 143]}"
+    },
+    {
+      "check": "nano-theme-light-A-60 closed",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "light B 100 rule RGB present",
+      "ok": true,
+      "detail": "{'fg': 3895, 'accent': 3553, 'rule': 8839, 'rule_color': [188, 191, 194], 'accent_color': [44, 86, 143]}"
+    },
+    {
+      "check": "light B 100 accent RGB present",
+      "ok": true,
+      "detail": "{'fg': 3895, 'accent': 3553, 'rule': 8839, 'rule_color': [188, 191, 194], 'accent_color': [44, 86, 143]}"
+    },
+    {
+      "check": "nano-theme-light-B-100 closed",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "light B 60 rule RGB present",
+      "ok": true,
+      "detail": "{'fg': 3837, 'accent': 3553, 'rule': 6269, 'rule_color': [188, 191, 194], 'accent_color': [44, 86, 143]}"
+    },
+    {
+      "check": "light B 60 accent RGB present",
+      "ok": true,
+      "detail": "{'fg': 3837, 'accent': 3553, 'rule': 6269, 'rule_color': [188, 191, 194], 'accent_color': [44, 86, 143]}"
+    },
+    {
+      "check": "nano-theme-light-B-60 closed",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "palette independence ('dark', '100')",
+      "ok": true,
+      "detail": "A={'fg': 1900, 'accent': 2974, 'rule': 9098, 'rule_color': [57, 65, 73], 'accent_color': [110, 153, 214]} B={'fg': 8281, 'accent': 3971, 'rule': 8088, 'rule_color': [57, 65, 73], 'accent_color': [110, 153, 214]}"
+    },
+    {
+      "check": "palette independence ('dark', '60')",
+      "ok": true,
+      "detail": "A={'fg': 1900, 'accent': 2974, 'rule': 6522, 'rule_color': [57, 65, 73], 'accent_color': [110, 153, 214]} B={'fg': 8274, 'accent': 3971, 'rule': 5461, 'rule_color': [57, 65, 73], 'accent_color': [110, 153, 214]}"
+    },
+    {
+      "check": "palette independence ('light', '100')",
+      "ok": true,
+      "detail": "A={'fg': 6186, 'accent': 3043, 'rule': 6144, 'rule_color': [188, 191, 194], 'accent_color': [44, 86, 143]} B={'fg': 3895, 'accent': 3553, 'rule': 8839, 'rule_color': [188, 191, 194], 'accent_color': [44, 86, 143]}"
+    },
+    {
+      "check": "palette independence ('light', '60')",
+      "ok": true,
+      "detail": "A={'fg': 6170, 'accent': 3043, 'rule': 3584, 'rule_color': [188, 191, 194], 'accent_color': [44, 86, 143]} B={'fg': 3837, 'accent': 3553, 'rule': 6269, 'rule_color': [188, 191, 194], 'accent_color': [44, 86, 143]}"
+    },
+    {
+      "check": "transparent dark background not a solid fill",
+      "ok": true,
+      "detail": "variance=28"
+    },
+    {
+      "check": "nano-theme-transparent-dark closed",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "transparent light background not a solid fill",
+      "ok": true,
+      "detail": "variance=28"
+    },
+    {
+      "check": "nano-theme-transparent-light closed",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "opaque checker visible",
+      "ok": true,
+      "detail": "magenta=678962 cyan=688305"
+    },
+    {
+      "check": "nano-theme-opaque closed",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "components command captured",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "components schedule captured",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "components terminal captured",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "nano-theme-components closed",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "components decision card captured",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "nano-theme-decision closed",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "local background cells=true captured",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "nano-theme-cells-true closed",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "local diff cells=true captured",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "nano-theme-diff-cells-true closed",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "components dock captured",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "components child captured",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "nano-theme-dock closed",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "components diff captured",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "nano-theme-diff closed",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "fullscreen captured",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "nano-theme-fullscreen closed",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "fullscreen 60 captured",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "nano-theme-fullscreen-60 closed",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "config unchanged",
+      "ok": true,
+      "detail": "387c4c29624e2000904e3a59b4f070e606540cbb66ebb12a70c518b608fff781 -> 387c4c29624e2000904e3a59b4f070e606540cbb66ebb12a70c518b608fff781"
+    }
+  ],
+  "color_counts": {
+    "dark-100": {
+      "A": {
+        "fg": 1900,
+        "accent": 2974,
+        "rule": 9098,
+        "rule_color": [
+          57,
+          65,
+          73
+        ],
+        "accent_color": [
+          110,
+          153,
+          214
+        ]
+      },
+      "B": {
+        "fg": 8281,
+        "accent": 3971,
+        "rule": 8088,
+        "rule_color": [
+          57,
+          65,
+          73
+        ],
+        "accent_color": [
+          110,
+          153,
+          214
+        ]
+      }
+    },
+    "dark-60": {
+      "A": {
+        "fg": 1900,
+        "accent": 2974,
+        "rule": 6522,
+        "rule_color": [
+          57,
+          65,
+          73
+        ],
+        "accent_color": [
+          110,
+          153,
+          214
+        ]
+      },
+      "B": {
+        "fg": 8274,
+        "accent": 3971,
+        "rule": 5461,
+        "rule_color": [
+          57,
+          65,
+          73
+        ],
+        "accent_color": [
+          110,
+          153,
+          214
+        ]
+      }
+    },
+    "light-100": {
+      "A": {
+        "fg": 6186,
+        "accent": 3043,
+        "rule": 6144,
+        "rule_color": [
+          188,
+          191,
+          194
+        ],
+        "accent_color": [
+          44,
+          86,
+          143
+        ]
+      },
+      "B": {
+        "fg": 3895,
+        "accent": 3553,
+        "rule": 8839,
+        "rule_color": [
+          188,
+          191,
+          194
+        ],
+        "accent_color": [
+          44,
+          86,
+          143
+        ]
+      }
+    },
+    "light-60": {
+      "A": {
+        "fg": 6170,
+        "accent": 3043,
+        "rule": 3584,
+        "rule_color": [
+          188,
+          191,
+          194
+        ],
+        "accent_color": [
+          44,
+          86,
+          143
+        ]
+      },
+      "B": {
+        "fg": 3837,
+        "accent": 3553,
+        "rule": 6269,
+        "rule_color": [
+          188,
+          191,
+          194
+        ],
+        "accent_color": [
+          44,
+          86,
+          143
+        ]
+      }
+    }
+  }
+}
