@@ -3706,9 +3706,10 @@ mod tests {
                 matches!(cell.fg, Color::Rgb(..)),
                 "foreground must be explicit RGB at ({x},{y}): {cell:?}"
             );
-            assert!(
-                matches!(cell.bg, Color::Reset | Color::Rgb(..)),
-                "background must be terminal default or an explicit local highlight at ({x},{y}): {cell:?}"
+            assert_eq!(
+                cell.bg,
+                Color::Reset,
+                "ordinary 60-column background stays Reset at ({x},{y}): {cell:?}"
             );
             skip = cell
                 .symbol()
@@ -3772,6 +3773,11 @@ mod tests {
         );
         use ratatui::backend::TestBackend;
         use ratatui::Terminal;
+        let wide = TestBackend::new(100, 30);
+        let mut wide_terminal = Terminal::new(wide).expect("wide terminal");
+        wide_terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("wide frame");
         let backend = TestBackend::new(60, 20);
         let mut terminal = Terminal::new(backend).expect("test terminal");
         terminal
@@ -3790,9 +3796,10 @@ mod tests {
                 matches!(cell.fg, Color::Rgb(..)),
                 "foreground must be explicit RGB at ({x},{y}): {cell:?}"
             );
-            assert!(
-                matches!(cell.bg, Color::Reset | Color::Rgb(..)),
-                "background must be terminal default or an explicit local highlight at ({x},{y}): {cell:?}"
+            assert_eq!(
+                cell.bg,
+                Color::Reset,
+                "ordinary 60-column background stays Reset at ({x},{y}): {cell:?}"
             );
             if cell.symbol() == "─" && cell.fg == Theme::Light.colors().rule {
                 saw_rule = true;
@@ -3823,6 +3830,11 @@ mod tests {
         };
         assert!(app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL)));
         let open = draw_once(&mut app);
+        let allowed_bg = [
+            Color::Reset,
+            app.theme.colors().selected_bg,
+            app.theme.colors().hover_bg,
+        ];
         let mut skip = 0usize;
         for cell in open.content() {
             if skip > 0 {
@@ -3832,6 +3844,10 @@ mod tests {
             assert!(
                 matches!(cell.fg, Color::Rgb(..)),
                 "overlay foreground must be explicit RGB: {cell:?}"
+            );
+            assert!(
+                allowed_bg.contains(&cell.bg),
+                "overlay background is a local highlight or Reset: {cell:?}"
             );
             skip = cell
                 .symbol()
@@ -3843,9 +3859,29 @@ mod tests {
         }
         app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         let closed = draw_once(&mut app);
-        let margin = &closed[(0, 15)];
-        assert_eq!(margin.fg, app.theme.colors().fg);
-        assert_eq!(margin.bg, Color::Reset);
+        let mut skip = 0usize;
+        for cell in closed.content() {
+            if skip > 0 {
+                skip -= 1;
+                continue;
+            }
+            assert!(
+                matches!(cell.fg, Color::Rgb(..)),
+                "closed frame foreground must be explicit RGB: {cell:?}"
+            );
+            assert_eq!(
+                cell.bg,
+                Color::Reset,
+                "no overlay background may remain after close: {cell:?}"
+            );
+            skip = cell
+                .symbol()
+                .chars()
+                .next()
+                .map(display_width)
+                .unwrap_or(0)
+                .saturating_sub(1);
+        }
     }
 
     fn running_event() -> serde_json::Value {

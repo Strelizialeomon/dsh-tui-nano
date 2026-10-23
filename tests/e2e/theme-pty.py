@@ -243,6 +243,20 @@ class Session:
             os.killpg(self.pgid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError):
             pass
+        # The official host runs in its own process group; kill anything that
+        # still references this throwaway DSH_HOME so the next scenario can
+        # acquire the data-root lock.
+        dsh_home = self.env.get("DSH_HOME")
+        if dsh_home:
+            result = subprocess.run(
+                ["pgrep", "-f", "--", dsh_home],
+                capture_output=True, text=True,
+            )
+            for line in result.stdout.split():
+                try:
+                    os.kill(int(line), signal.SIGKILL)
+                except (ValueError, ProcessLookupError):
+                    pass
         try:
             os.close(self.master)
         except OSError:
@@ -346,6 +360,7 @@ def main():
         ("dark-basic", "dark", "text", ["prompt"]),
         ("light-basic", "light", "text", ["prompt"]),
         ("dark-command", "dark", "text", ["command", "escape"]),
+        ("light-command", "light", "text", ["command", "escape"]),
         ("dark-decision", "dark", "ask", ["prompt"]),
         ("dark-diff", "dark", "edit", ["prompt"]),
         ("dark-dock", "dark", "subagent", ["prompt", "down"]),
@@ -380,8 +395,8 @@ def main():
                 for role in ("fg", "muted", "accent", "rule"):
                     check(f"{name} uses {role}", expected[role] in fg,
                           f"{role}={expected[role]} fg={sorted(fg)}")
-            if name == "dark-command":
-                check("dark-command uses selected_bg", expected["selected_bg"] in bg,
+            if name.endswith("-command"):
+                check(f"{name} uses selected_bg", expected["selected_bg"] in bg,
                       f"bg={sorted(bg)}")
             if name == "dark-decision":
                 check("dark-decision uses accent",

@@ -867,10 +867,10 @@ def main():
         )
         error_script.chmod(0o755)
         error_result = subprocess.run([str(error_script)], capture_output=True, text=True)
-        check("error exit is non-zero", error_result.returncode != 0,
+        check("nano startup failure is non-zero", error_result.returncode != 0,
               (error_result.stderr or error_result.stdout).strip()[-200:])
         config_error = hashlib.sha256(config.read_bytes()).hexdigest()
-        check("config unchanged after error exit", config_before == config_error,
+        check("config unchanged after nano startup failure", config_before == config_error,
               f"{config_before} -> {config_error}")
     finally:
         server.shutdown()

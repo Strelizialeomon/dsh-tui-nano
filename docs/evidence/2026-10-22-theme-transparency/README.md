@@ -4,7 +4,7 @@
 - 执行单：#56
 - 默认脚本：`tests/e2e/theme-pty.py`（无头 PTY）
 - 按需脚本：`tests/e2e/ghostty-theme-transparency.py`（Ghostty 截图）
-- 状态：无头 PTY 37 项全绿；Ghostty 截图报告 62 项全绿（透明项按 alpha 重算；本次修订未重新启动 GUI）
+- 状态：无头 PTY 全绿；透明 alpha 11 项全绿（由本轮早前 GUI 采集的截图重算）。矩阵/组件截图来自更早构建，标为历史，不参与本次结论；最终修正后未重跑 GUI。
 
 ## 怎么跑
 
@@ -36,13 +36,13 @@ GUI 前置：macOS 辅助功能权限（System Events 发键）与屏幕录制�
 | spec §3.4 surface | 可重复验证 | 真实终端 |
 | --- | --- | --- |
 | 标题、底栏、输入、队列、补全、活动行 | `nano-app` ui 单测（默认前景/边界、上下文线、`self_drawn_colors_are_explicit_rgb...`） | 8 组矩阵 + `components-main.png` |
-| 根/子 transcript、实时预览、Markdown、diff | `nano-transcript` 单测（主题缓存隔离、diff 背景/强调） | 8 组矩阵、`components-diff.png` |
+| 根/子 transcript、实时预览、Markdown、diff | `nano-transcript` 单测 + PTY diff 背景断言 | 历史截图（不参与结论） |
 | 会话、技能、规矩、任务、monitor、调度、面板 | ui 渲染单测 + 既有验收截图 | `components-command.png`、`components-schedule.png` |
 | 问卷/审批/计划卡 | `option_line`、审批首行 fg 单测 | `components-decision.png` |
-| dock、子代理列表 | dock hover/焦点单测 | `components-dock.png`、`components-child.png` |
+| dock、子代理列表 | dock hover/焦点单测 + PTY hover_bg 断言 | 历史截图（不参与结论） |
 | 局部高亮（diff/选择/hover） | diff 背景、选中行、dock hover 单测 | `local-cells-true.png`、`local-diff-cells-true.png` |
 | 交互终端外壳/占位/picker | terminal 默认前景与显式色保留单测 | `components-terminal.png` |
-| 全屏 | 既有全屏布局回归 | `fullscreen-dark.png`、`fullscreen-dark-60.png` |
+| 全屏 | 既有全屏布局回归 | 历史截图（不参与结论） |
 | 内嵌子程序显式颜色 | `default_foreground_follows_theme...` | `components-terminal.png` |
 
 单测断言精确语义 RGB；截图只证明真实终端下的颜色独立性与背景边界，精确值以 `nano-theme` 色表单测为准。
@@ -54,15 +54,11 @@ GUI 前置：macOS 辅助功能权限（System Events 发键）与屏幕录制�
 - `theme-pty.json`：37 项全绿；覆盖深浅主题 `fg/muted/accent/rule`、命令面板 `selected_bg`、决策卡 `accent`、diff 增删背景、dock `hover_bg`、普通背景 Reset、无 ANSI 命名色/Indexed、`TERM` 不改变 Nano RGB。
 - 截图不参与默认回归；精确色值以 PTY 的 SGR 真彩色断言为准。
 
-### Ghostty 截图（按需）
+### Ghostty 透明（按需，历史截图）
 
-- **8 组矩阵**：同一主题、同一列宽下，两套终端调色板实测的 `rule` / `accent` 主色一致（容差 ≤ 24）。截图经过 macOS 色彩管理，实测值相对语义 RGB 有固定偏移；暗色实测约 `rule=(57..65,65..74,73..82)`、`accent=(110..121,153..163,214..219)`，浅色实测约 `rule=(188..195,191..198,194..201)`、`accent=(44..50,86..97,143..154)`。
-- **主体透明**：深浅主题在 `background-opacity=0.7` 下，空白区域不是单一实色（颜色种类 26–28）。
-- **不透明回归**：`background-opacity=1` 时棋盘图仍可见（品红 + 青 > 67 万像素），证明普通背景没有被 Nano 实色填满。
-- **局部高亮**：`background-opacity-cells=true` 下捕获 dock 焦点行与 diff；`cells=false` 下捕获 diff。
-- **组件/退出**：命令面板、调度、交互终端、问卷决策卡、子代理 dock、子会话、diff、100/60 列全屏均捕获；窗口正常关闭。
-- **配置**：临时 Ghostty 配置前后 SHA-256 一致。
-- 机器报告：`theme-transparency.json`（62 项检查全绿；透明项用窗口 alpha 合成到棋盘图重算）。
+- `theme-transparency.json` 只保留能从提交截图复现的 **11 项透明 alpha 检查**：深浅主题的初始、运行、面板打开、面板关闭后、缩放后各 5 项（alpha=179），加不透明回归（alpha=255，棋盘不可见）。
+- 矩阵/组件/全屏截图来自更早的二进制（`dark-*.png`、`components-*.png` 等），仅作历史留存，**不参与本次结论**；颜色角色由 `theme-pty.json` 的 37 项覆盖。
+- 没有在最终二进制上重新启动 GUI；需要重跑时按上面的「按需」命令，并由用户确认当前可占用桌面。
 
 ## 产物
 
