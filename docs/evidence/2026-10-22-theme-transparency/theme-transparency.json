@@ -1,0 +1,63 @@
+{
+  "mode": "ghostty-historical-capture",
+  "captured_by": "tests/e2e/ghostty-theme-transparency.py (historical GUI run)",
+  "recomputed_from": "committed PNG alpha channel",
+  "note": "Only checks reproducible from the committed transparency/opaque PNGs are listed. Matrix/component screenshots come from earlier binaries and are not part of this verdict; color roles are covered by theme-pty.json.",
+  "checks": [
+    {
+      "check": "transparent dark initial stays transparent",
+      "ok": true,
+      "detail": "alpha=179"
+    },
+    {
+      "check": "transparent dark running stays transparent",
+      "ok": true,
+      "detail": "alpha=179"
+    },
+    {
+      "check": "transparent dark panel stays transparent",
+      "ok": true,
+      "detail": "alpha=179"
+    },
+    {
+      "check": "transparent dark after panel close stays transparent",
+      "ok": true,
+      "detail": "alpha=179"
+    },
+    {
+      "check": "transparent dark resized stays transparent",
+      "ok": true,
+      "detail": "alpha=179"
+    },
+    {
+      "check": "transparent light initial stays transparent",
+      "ok": true,
+      "detail": "alpha=179"
+    },
+    {
+      "check": "transparent light running stays transparent",
+      "ok": true,
+      "detail": "alpha=179"
+    },
+    {
+      "check": "transparent light panel stays transparent",
+      "ok": true,
+      "detail": "alpha=179"
+    },
+    {
+      "check": "transparent light after panel close stays transparent",
+      "ok": true,
+      "detail": "alpha=179"
+    },
+    {
+      "check": "transparent light resized stays transparent",
+      "ok": true,
+      "detail": "alpha=179"
+    },
+    {
+      "check": "opaque background is a solid terminal background",
+      "ok": true,
+      "detail": "alpha=255 exact_checker=844"
+    }
+  ]
+}

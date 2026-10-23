@@ -1,0 +1,471 @@
+{
+  "mode": "headless-pty",
+  "build_commit": "b82129dcddd83badacf246941654d10a00bc3166",
+  "terminal": "pty",
+  "size": [
+    100,
+    32
+  ],
+  "checks": [
+    {
+      "check": "dark-basic started",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "dark-basic no named ANSI colors",
+      "ok": true,
+      "detail": "[]"
+    },
+    {
+      "check": "dark-basic no indexed colors",
+      "ok": true,
+      "detail": "[]"
+    },
+    {
+      "check": "dark-basic ordinary background stays Reset",
+      "ok": true,
+      "detail": "bg=[]"
+    },
+    {
+      "check": "dark-basic uses fg",
+      "ok": true,
+      "detail": "fg=(232, 230, 224) fg=[(66, 73, 83), (125, 161, 222), (141, 149, 166), (218, 138, 147), (232, 230, 224)]"
+    },
+    {
+      "check": "dark-basic uses muted",
+      "ok": true,
+      "detail": "muted=(141, 149, 166) fg=[(66, 73, 83), (125, 161, 222), (141, 149, 166), (218, 138, 147), (232, 230, 224)]"
+    },
+    {
+      "check": "dark-basic uses accent",
+      "ok": true,
+      "detail": "accent=(125, 161, 222) fg=[(66, 73, 83), (125, 161, 222), (141, 149, 166), (218, 138, 147), (232, 230, 224)]"
+    },
+    {
+      "check": "dark-basic uses rule",
+      "ok": true,
+      "detail": "rule=(66, 73, 83) fg=[(66, 73, 83), (125, 161, 222), (141, 149, 166), (218, 138, 147), (232, 230, 224)]"
+    },
+    {
+      "check": "light-basic started",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "light-basic no named ANSI colors",
+      "ok": true,
+      "detail": "[]"
+    },
+    {
+      "check": "light-basic no indexed colors",
+      "ok": true,
+      "detail": "[]"
+    },
+    {
+      "check": "light-basic ordinary background stays Reset",
+      "ok": true,
+      "detail": "bg=[]"
+    },
+    {
+      "check": "light-basic uses fg",
+      "ok": true,
+      "detail": "fg=(52, 57, 69) fg=[(52, 57, 69), (54, 95, 157), (98, 105, 120), (196, 198, 201)]"
+    },
+    {
+      "check": "light-basic uses muted",
+      "ok": true,
+      "detail": "muted=(98, 105, 120) fg=[(52, 57, 69), (54, 95, 157), (98, 105, 120), (196, 198, 201)]"
+    },
+    {
+      "check": "light-basic uses accent",
+      "ok": true,
+      "detail": "accent=(54, 95, 157) fg=[(52, 57, 69), (54, 95, 157), (98, 105, 120), (196, 198, 201)]"
+    },
+    {
+      "check": "light-basic uses rule",
+      "ok": true,
+      "detail": "rule=(196, 198, 201) fg=[(52, 57, 69), (54, 95, 157), (98, 105, 120), (196, 198, 201)]"
+    },
+    {
+      "check": "dark-command started",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "dark-command no named ANSI colors",
+      "ok": true,
+      "detail": "[]"
+    },
+    {
+      "check": "dark-command no indexed colors",
+      "ok": true,
+      "detail": "[]"
+    },
+    {
+      "check": "dark-command ordinary background stays Reset",
+      "ok": true,
+      "detail": "bg=[(59, 74, 102)]"
+    },
+    {
+      "check": "dark-command uses selected_bg",
+      "ok": true,
+      "detail": "bg=[(59, 74, 102)]"
+    },
+    {
+      "check": "light-command started",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "light-command no named ANSI colors",
+      "ok": true,
+      "detail": "[]"
+    },
+    {
+      "check": "light-command no indexed colors",
+      "ok": true,
+      "detail": "[]"
+    },
+    {
+      "check": "light-command ordinary background stays Reset",
+      "ok": true,
+      "detail": "bg=[(213, 222, 242)]"
+    },
+    {
+      "check": "light-command uses selected_bg",
+      "ok": true,
+      "detail": "bg=[(213, 222, 242)]"
+    },
+    {
+      "check": "dark-decision started",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "dark-decision no named ANSI colors",
+      "ok": true,
+      "detail": "[]"
+    },
+    {
+      "check": "dark-decision no indexed colors",
+      "ok": true,
+      "detail": "[]"
+    },
+    {
+      "check": "dark-decision ordinary background stays Reset",
+      "ok": true,
+      "detail": "bg=[]"
+    },
+    {
+      "check": "dark-decision uses accent",
+      "ok": true,
+      "detail": "fg=[(66, 73, 83), (125, 161, 222), (141, 149, 166), (216, 178, 112), (232, 230, 224)] bg=[]"
+    },
+    {
+      "check": "dark-diff started",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "dark-diff no named ANSI colors",
+      "ok": true,
+      "detail": "[]"
+    },
+    {
+      "check": "dark-diff no indexed colors",
+      "ok": true,
+      "detail": "[]"
+    },
+    {
+      "check": "dark-diff ordinary background stays Reset",
+      "ok": true,
+      "detail": "bg=[(36, 56, 44), (56, 37, 42), (56, 91, 66), (101, 54, 65)]"
+    },
+    {
+      "check": "dark-diff uses diff backgrounds",
+      "ok": true,
+      "detail": "bg=[(36, 56, 44), (56, 37, 42), (56, 91, 66), (101, 54, 65)]"
+    },
+    {
+      "check": "dark-dock started",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "dark-dock no named ANSI colors",
+      "ok": true,
+      "detail": "[]"
+    },
+    {
+      "check": "dark-dock no indexed colors",
+      "ok": true,
+      "detail": "[]"
+    },
+    {
+      "check": "dark-dock ordinary background stays Reset",
+      "ok": true,
+      "detail": "bg=[(36, 43, 53)]"
+    },
+    {
+      "check": "dark-dock uses hover_bg",
+      "ok": true,
+      "detail": "bg=[(36, 43, 53)]"
+    },
+    {
+      "check": "TERM does not change Nano RGB",
+      "ok": true,
+      "detail": "fg [(66, 73, 83), (125, 161, 222), (141, 149, 166), (232, 230, 224)] vs [(66, 73, 83), (125, 161, 222), (141, 149, 166), (232, 230, 224)]"
+    }
+  ],
+  "scenarios": {
+    "dark-basic": {
+      "fg": [
+        [
+          66,
+          73,
+          83
+        ],
+        [
+          125,
+          161,
+          222
+        ],
+        [
+          141,
+          149,
+          166
+        ],
+        [
+          218,
+          138,
+          147
+        ],
+        [
+          232,
+          230,
+          224
+        ]
+      ],
+      "bg": [],
+      "named": [],
+      "indexed": []
+    },
+    "light-basic": {
+      "fg": [
+        [
+          52,
+          57,
+          69
+        ],
+        [
+          54,
+          95,
+          157
+        ],
+        [
+          98,
+          105,
+          120
+        ],
+        [
+          196,
+          198,
+          201
+        ]
+      ],
+      "bg": [],
+      "named": [],
+      "indexed": []
+    },
+    "dark-command": {
+      "fg": [
+        [
+          66,
+          73,
+          83
+        ],
+        [
+          125,
+          161,
+          222
+        ],
+        [
+          141,
+          149,
+          166
+        ],
+        [
+          232,
+          230,
+          224
+        ]
+      ],
+      "bg": [
+        [
+          59,
+          74,
+          102
+        ]
+      ],
+      "named": [],
+      "indexed": []
+    },
+    "light-command": {
+      "fg": [
+        [
+          52,
+          57,
+          69
+        ],
+        [
+          54,
+          95,
+          157
+        ],
+        [
+          98,
+          105,
+          120
+        ],
+        [
+          196,
+          198,
+          201
+        ]
+      ],
+      "bg": [
+        [
+          213,
+          222,
+          242
+        ]
+      ],
+      "named": [],
+      "indexed": []
+    },
+    "dark-decision": {
+      "fg": [
+        [
+          66,
+          73,
+          83
+        ],
+        [
+          125,
+          161,
+          222
+        ],
+        [
+          141,
+          149,
+          166
+        ],
+        [
+          216,
+          178,
+          112
+        ],
+        [
+          232,
+          230,
+          224
+        ]
+      ],
+      "bg": [],
+      "named": [],
+      "indexed": []
+    },
+    "dark-diff": {
+      "fg": [
+        [
+          66,
+          73,
+          83
+        ],
+        [
+          125,
+          161,
+          222
+        ],
+        [
+          141,
+          149,
+          166
+        ],
+        [
+          161,
+          200,
+          170
+        ],
+        [
+          226,
+          160,
+          170
+        ],
+        [
+          232,
+          230,
+          224
+        ]
+      ],
+      "bg": [
+        [
+          36,
+          56,
+          44
+        ],
+        [
+          56,
+          37,
+          42
+        ],
+        [
+          56,
+          91,
+          66
+        ],
+        [
+          101,
+          54,
+          65
+        ]
+      ],
+      "named": [],
+      "indexed": []
+    },
+    "dark-dock": {
+      "fg": [
+        [
+          66,
+          73,
+          83
+        ],
+        [
+          125,
+          161,
+          222
+        ],
+        [
+          141,
+          149,
+          166
+        ],
+        [
+          232,
+          230,
+          224
+        ]
+      ],
+      "bg": [
+        [
+          36,
+          43,
+          53
+        ]
+      ],
+      "named": [],
+      "indexed": []
+    }
+  }
+}

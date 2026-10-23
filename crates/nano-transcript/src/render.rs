@@ -7,10 +7,11 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use nano_theme::Theme;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::diff::{DiffLineKind, DiffView};
+use crate::diff::{DiffLine, DiffLineKind, DiffView};
 use crate::display::{char_width, display_text, elide, wrap_line};
 use crate::model::{Entry, EntryKind, PreviewEntry, TranscriptModel};
 use crate::scroll::{EntryOffset, ScrollState};
@@ -36,25 +37,6 @@ pub const MAX_MOUNTED_ROWS: usize = 300;
 const MAX_CACHED_ENTRIES: usize = 512;
 /// Wrapped source rows kept per block, even when expanded.
 const MAX_BLOCK_ROWS: usize = 4_000;
-
-/// Diff color tokens selected by `NANO_THEME`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DiffTheme {
-    /// Frozen dark tokens from design-contract §3.
-    Dark,
-    /// Light tokens from the visual-alignment spec §3.
-    Light,
-}
-
-impl DiffTheme {
-    /// Read `NANO_THEME`; anything other than `light` keeps the frozen dark set.
-    pub fn from_env() -> Self {
-        match std::env::var("NANO_THEME").as_deref() {
-            Ok("light") => Self::Light,
-            _ => Self::Dark,
-        }
-    }
-}
 
 /// What a click does on a rendered row.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,12 +150,19 @@ fn units(model: &TranscriptModel) -> Vec<Unit<'_>> {
     units
 }
 
-fn render_unit(unit: &Unit<'_>, width: usize, expanded: bool, theme: DiffTheme) -> RenderedEntry {
+fn render_unit(unit: &Unit<'_>, width: usize, expanded: bool, theme: Theme) -> RenderedEntry {
     match unit {
         Unit::Single(entry) => render_entry(entry, width, expanded, theme),
         Unit::Context(entries) => {
             let mut output = RenderedEntry::default();
-            render_context_group(&mut output, unit.identity(), entries, width, expanded);
+            render_context_group(
+                &mut output,
+                unit.identity(),
+                entries,
+                width,
+                expanded,
+                theme,
+            );
             output.lines.push(Line::default());
             output.hits.push(None);
             output
@@ -193,7 +182,7 @@ impl RenderCache {
         fingerprint: u64,
         width: usize,
         expanded: bool,
-        theme: DiffTheme,
+        theme: Theme,
         render: F,
     ) -> &RenderedEntry
     where
@@ -234,7 +223,7 @@ impl RenderCache {
         fingerprint: u64,
         width: usize,
         expanded: bool,
-        theme: DiffTheme,
+        theme: Theme,
         render: F,
     ) -> usize
     where
@@ -272,7 +261,7 @@ pub fn render(
     scroll: &mut ScrollState,
     width: usize,
     viewport: usize,
-    theme: DiffTheme,
+    theme: Theme,
 ) -> TranscriptRender {
     let width = width.max(1);
     let viewport = viewport.max(1);
@@ -364,7 +353,7 @@ pub fn render(
     }
 }
 
-fn render_entry(entry: &Entry, width: usize, expanded: bool, theme: DiffTheme) -> RenderedEntry {
+fn render_entry(entry: &Entry, width: usize, expanded: bool, theme: Theme) -> RenderedEntry {
     let mut output = RenderedEntry::default();
     if let EntryKind::Assistant {
         text, reasoning, ..
@@ -377,7 +366,7 @@ fn render_entry(entry: &Entry, width: usize, expanded: bool, theme: DiffTheme) -
         }
     }
     match &entry.kind {
-        EntryKind::User { text } => render_user(&mut output, width, text),
+        EntryKind::User { text } => render_user(&mut output, width, text, theme),
         EntryKind::Assistant {
             text,
             reasoning,
@@ -392,27 +381,27 @@ fn render_entry(entry: &Entry, width: usize, expanded: bool, theme: DiffTheme) -
                     *reasoning_ms,
                     width,
                     expanded,
+                    theme,
                 );
             }
             if !text.trim().is_empty() {
-                for row in markdown_rows(text, width) {
+                for row in markdown_rows(text, width, theme) {
                     output.lines.push(row);
                     output.hits.push(None);
                 }
             }
             if *interrupted {
-                output.lines.push(Line::from(Span::styled(
-                    "（中断前的片段）",
-                    Style::default().fg(Color::DarkGray),
-                )));
+                output
+                    .lines
+                    .push(Line::from(Span::styled("（中断前的片段）", muted(theme))));
                 output.hits.push(None);
             }
         }
         EntryKind::Notice { text, is_error } => {
             let color = if *is_error {
-                Color::Red
+                theme.colors().error
             } else {
-                Color::DarkGray
+                theme.colors().muted
             };
             for row in wrap_block(text, width, MAX_BLOCK_ROWS) {
                 output
@@ -428,26 +417,33 @@ fn render_entry(entry: &Entry, width: usize, expanded: bool, theme: DiffTheme) -
         } => {
             if *bash || *monitor {
                 let (label, color) = if *bash {
-                    ("bash", Color::Yellow)
+                    ("bash", theme.colors().warning)
                 } else {
-                    ("monitor · role=user", Color::Cyan)
+                    ("monitor · role=user", theme.colors().accent)
                 };
                 render_labeled_context(
                     &mut output,
                     &entry.identity,
                     width,
-                    label,
-                    color,
+                    ContextLabel { text: label, color },
                     text,
                     expanded,
+                    theme,
                 );
             } else {
-                render_context_group(&mut output, &entry.identity, &[entry], width, expanded);
+                render_context_group(
+                    &mut output,
+                    &entry.identity,
+                    &[entry],
+                    width,
+                    expanded,
+                    theme,
+                );
             }
         }
         EntryKind::Tool(record) => render_tool(&mut output, record, width, expanded, theme),
-        EntryKind::Preview(preview) => render_preview(&mut output, preview, width),
-        EntryKind::Echo { text, state } => render_echo(&mut output, width, text, state),
+        EntryKind::Preview(preview) => render_preview(&mut output, preview, width, theme),
+        EntryKind::Echo { text, state } => render_echo(&mut output, width, text, state, theme),
     }
     // One display row between entries keeps blocks visually separate and is
     // included in the measured height for anchor math.
@@ -456,13 +452,13 @@ fn render_entry(entry: &Entry, width: usize, expanded: bool, theme: DiffTheme) -
     output
 }
 
-fn muted() -> Style {
-    Style::default().fg(Color::DarkGray)
+fn muted(theme: Theme) -> Style {
+    Style::default().fg(theme.colors().muted)
 }
 
-fn render_user(output: &mut RenderedEntry, width: usize, text: &str) {
+fn render_user(output: &mut RenderedEntry, width: usize, text: &str, theme: Theme) {
     let style = Style::default()
-        .fg(Color::Cyan)
+        .fg(theme.colors().accent)
         .add_modifier(Modifier::BOLD);
     let rows = wrap_block(text, width.saturating_sub(2).max(1), MAX_BLOCK_ROWS);
     for (index, row) in rows.into_iter().enumerate() {
@@ -475,9 +471,9 @@ fn render_user(output: &mut RenderedEntry, width: usize, text: &str) {
     }
 }
 
-fn render_echo(output: &mut RenderedEntry, width: usize, text: &str, state: &str) {
+fn render_echo(output: &mut RenderedEntry, width: usize, text: &str, state: &str, theme: Theme) {
     let style = Style::default()
-        .fg(Color::Cyan)
+        .fg(theme.colors().accent)
         .add_modifier(Modifier::BOLD);
     let rows = wrap_block(text, width.saturating_sub(2).max(1), MAX_BLOCK_ROWS);
     let suffix = format!("（{state}）");
@@ -489,7 +485,7 @@ fn render_echo(output: &mut RenderedEntry, width: usize, text: &str, state: &str
         let row_width = row.chars().map(char_width).sum::<usize>();
         let mut spans = vec![Span::styled(prefix, style), Span::styled(row, style)];
         if index == last && 2 + row_width + suffix_width <= width {
-            spans.push(Span::styled(suffix.clone(), muted()));
+            spans.push(Span::styled(suffix.clone(), muted(theme)));
             appended = true;
         }
         output.lines.push(Line::from(spans));
@@ -498,7 +494,9 @@ fn render_echo(output: &mut RenderedEntry, width: usize, text: &str, state: &str
     // The state suffix never gets clipped: when the last text row has no
     // room, it becomes its own muted line.
     if !appended {
-        output.lines.push(Line::from(Span::styled(suffix, muted())));
+        output
+            .lines
+            .push(Line::from(Span::styled(suffix, muted(theme))));
         output.hits.push(None);
     }
 }
@@ -510,6 +508,7 @@ fn render_thinking(
     reasoning_ms: Option<u64>,
     width: usize,
     expanded: bool,
+    theme: Theme,
 ) {
     let marker = if expanded { "▾" } else { "▸" };
     let meta = reasoning_ms
@@ -521,8 +520,8 @@ fn render_thinking(
     });
     push_two_column(
         output,
-        vec![Span::styled(format!("{marker} 思考 已完成"), muted())],
-        vec![Span::styled(meta, muted())],
+        vec![Span::styled(format!("{marker} 思考 已完成"), muted(theme))],
+        vec![Span::styled(meta, muted(theme))],
         width,
         hit.clone(),
     );
@@ -530,7 +529,7 @@ fn render_thinking(
         for row in wrap_block(reasoning, width.saturating_sub(2).max(1), MAX_BLOCK_ROWS) {
             output
                 .lines
-                .push(Line::from(Span::styled(format!("  {row}"), muted())));
+                .push(Line::from(Span::styled(format!("  {row}"), muted(theme))));
             output.hits.push(hit.clone());
         }
     }
@@ -541,7 +540,7 @@ fn render_tool(
     record: &ToolRecord,
     width: usize,
     expanded: bool,
-    theme: DiffTheme,
+    theme: Theme,
 ) {
     let question_hit = question_hit(record);
     match &record.display {
@@ -594,44 +593,47 @@ fn render_tool(
                 .unwrap_or_else(|| "Bash".to_string());
             let marker = if expanded { "▾" } else { "▸" };
             let mut left = vec![
-                Span::styled(format!("{marker} "), muted()),
-                Span::styled("Bash", muted()),
-                Span::styled(format!(" {}", title.replace('\r', "")), muted()),
+                Span::styled(format!("{marker} "), muted(theme)),
+                Span::styled("Bash", muted(theme)),
+                Span::styled(format!(" {}", title.replace('\r', "")), muted(theme)),
             ];
             if hidden > 0 {
-                left.push(Span::styled(format!(" +{hidden} 行"), muted()));
+                left.push(Span::styled(format!(" +{hidden} 行"), muted(theme)));
             }
             push_two_column(
                 output,
                 left,
-                vec![Span::styled(status.label(), process_status_style(status))],
+                vec![Span::styled(
+                    status.label(),
+                    process_status_style(status, theme),
+                )],
                 width,
                 toggle_hit(record),
             );
             for row in &shown_command {
                 output
                     .lines
-                    .push(Line::from(Span::styled(format!("  {row}"), muted())));
+                    .push(Line::from(Span::styled(format!("  {row}"), muted(theme))));
                 output.hits.push(toggle_hit(record));
             }
             if status == DisplayStatus::Pending && !expanded {
                 output.lines.push(Line::from(Span::styled(
                     "  （等待结果；没有来源时不显示假输出）",
-                    muted(),
+                    muted(theme),
                 )));
                 output.hits.push(toggle_hit(record));
             }
             for row in &shown_output {
                 output
                     .lines
-                    .push(Line::from(Span::styled(format!("  {row}"), muted())));
+                    .push(Line::from(Span::styled(format!("  {row}"), muted(theme))));
                 output.hits.push(toggle_hit(record));
             }
             if !matches!(exit, ExitStatus::Code(0)) {
                 let exit_style = match exit {
-                    ExitStatus::Code(0) => Style::default().fg(Color::Green),
-                    ExitStatus::Unknown => Style::default().fg(Color::Yellow),
-                    _ => Style::default().fg(Color::Red),
+                    ExitStatus::Code(0) => Style::default().fg(theme.colors().success),
+                    ExitStatus::Unknown => Style::default().fg(theme.colors().warning),
+                    _ => Style::default().fg(theme.colors().error),
                 };
                 output.lines.push(Line::from(vec![
                     Span::raw("  "),
@@ -647,7 +649,7 @@ fn render_tool(
                 if let Some(added) = diff.added {
                     right.push(Span::styled(
                         format!("+{added}"),
-                        Style::default().fg(Color::Green),
+                        Style::default().fg(theme.colors().diff_add_fg),
                     ));
                 }
                 if let Some(deleted) = diff.deleted {
@@ -656,22 +658,22 @@ fn render_tool(
                     }
                     right.push(Span::styled(
                         format!("-{deleted}"),
-                        Style::default().fg(Color::Red),
+                        Style::default().fg(theme.colors().diff_del_fg),
                     ));
                 }
                 if right.is_empty() {
-                    right.push(Span::styled("±?", muted()));
+                    right.push(Span::styled("±?", muted(theme)));
                 }
             } else {
-                right.push(Span::styled("±?", muted()));
+                right.push(Span::styled("±?", muted(theme)));
             }
             let marker = if expanded { "▾" } else { "▸" };
             let path = path.clone().unwrap_or_else(|| "(未知文件)".to_string());
             push_two_column(
                 output,
                 vec![
-                    Span::styled(format!("{marker} "), muted()),
-                    Span::styled(format!("{name} "), muted()),
+                    Span::styled(format!("{marker} "), muted(theme)),
+                    Span::styled(format!("{name} "), muted(theme)),
                     Span::styled(path, Style::default().add_modifier(Modifier::BOLD)),
                 ],
                 right,
@@ -681,38 +683,38 @@ fn render_tool(
             if let Some(diff) = diff {
                 output.lines.push(Line::from(Span::styled(
                     format!("  {}", diff.state.label()),
-                    muted(),
+                    muted(theme),
                 )));
                 output.hits.push(toggle_hit(record));
                 render_diff_body(output, diff, width, expanded, record, theme);
             } else {
                 output.lines.push(Line::from(Span::styled(
                     "  （没有可显示的差异数据）",
-                    muted(),
+                    muted(theme),
                 )));
                 output.hits.push(toggle_hit(record));
             }
         }
         ToolDisplay::AskUser { record: question } => {
             output.lines.push(Line::from(vec![
-                Span::styled("问卷 ", Style::default().fg(Color::Magenta)),
+                Span::styled("问卷 ", Style::default().fg(theme.colors().accent)),
                 Span::styled(
                     question.state.label(),
                     Style::default().fg(match question.state {
-                        RecordedQuestionState::Settled => Color::Green,
-                        RecordedQuestionState::Cancelled => Color::Red,
-                        RecordedQuestionState::Submitted => Color::Yellow,
-                        _ => Color::Cyan,
+                        RecordedQuestionState::Settled => theme.colors().success,
+                        RecordedQuestionState::Cancelled => theme.colors().error,
+                        RecordedQuestionState::Submitted => theme.colors().warning,
+                        _ => theme.colors().accent,
                     }),
                 ),
-                Span::styled(format!(" · {} 题", question.questions.len()), muted()),
+                Span::styled(format!(" · {} 题", question.questions.len()), muted(theme)),
                 Span::styled(
                     if question_hit.is_some() {
                         " · 点击查看"
                     } else {
                         ""
                     },
-                    muted(),
+                    muted(theme),
                 ),
             ]));
             output.hits.push(question_hit.clone());
@@ -736,7 +738,7 @@ fn render_tool(
                 for (offset, row) in wrap_line(&text, width).into_iter().enumerate() {
                     output.lines.push(Line::from(vec![
                         Span::styled(if offset == 0 { "  " } else { "    " }, Style::default()),
-                        Span::styled(row, muted()),
+                        Span::styled(row, muted(theme)),
                     ]));
                     output.hits.push(question_hit.clone());
                 }
@@ -754,21 +756,21 @@ fn render_tool(
             let hidden = rows.len().saturating_sub(shown);
             let marker = if expanded { "▾" } else { "▸" };
             let mut left = vec![
-                Span::styled(format!("{marker} "), muted()),
-                Span::styled(name, muted()),
+                Span::styled(format!("{marker} "), muted(theme)),
+                Span::styled(name, muted(theme)),
             ];
             if let Some(target) = tool_target(record) {
-                left.push(Span::styled(format!(" {target}"), muted()));
+                left.push(Span::styled(format!(" {target}"), muted(theme)));
             }
             if hidden > 0 {
-                left.push(Span::styled(format!(" +{hidden} 行"), muted()));
+                left.push(Span::styled(format!(" +{hidden} 行"), muted(theme)));
             }
             push_two_column(
                 output,
                 left,
                 vec![Span::styled(
                     record.display_status.label(),
-                    process_status_style(record.display_status),
+                    process_status_style(record.display_status, theme),
                 )],
                 width,
                 toggle_hit(record),
@@ -776,17 +778,22 @@ fn render_tool(
             for row in rows.iter().take(shown) {
                 output
                     .lines
-                    .push(Line::from(Span::styled(format!("  {row}"), muted())));
+                    .push(Line::from(Span::styled(format!("  {row}"), muted(theme))));
                 output.hits.push(toggle_hit(record));
             }
         }
     }
     if let Some(approval) = &record.approval {
-        render_approval_line(output, approval, record);
+        render_approval_line(output, approval, record, theme);
     }
 }
 
-fn render_approval_line(output: &mut RenderedEntry, approval: &ApprovalView, record: &ToolRecord) {
+fn render_approval_line(
+    output: &mut RenderedEntry,
+    approval: &ApprovalView,
+    record: &ToolRecord,
+    theme: Theme,
+) {
     let reason = approval
         .display_reason
         .get("zh")
@@ -795,15 +802,21 @@ fn render_approval_line(output: &mut RenderedEntry, approval: &ApprovalView, rec
         .or(approval.reason.as_deref())
         .unwrap_or("");
     output.lines.push(Line::from(vec![
-        Span::styled("  审批 ", muted()),
+        Span::styled("  审批 ", muted(theme)),
         Span::styled(
             approval.outcome_label(),
             Style::default().fg(match approval.outcome {
-                Some(nano_decisions::approval::ApprovalOutcome::AllowedOnce) => Color::Green,
-                Some(nano_decisions::approval::ApprovalOutcome::Rejected) => Color::Red,
-                Some(nano_decisions::approval::ApprovalOutcome::Cancelled) => Color::Yellow,
-                Some(nano_decisions::approval::ApprovalOutcome::Unavailable) => Color::Red,
-                None => Color::DarkGray,
+                Some(nano_decisions::approval::ApprovalOutcome::AllowedOnce) => {
+                    theme.colors().success
+                }
+                Some(nano_decisions::approval::ApprovalOutcome::Rejected) => theme.colors().error,
+                Some(nano_decisions::approval::ApprovalOutcome::Cancelled) => {
+                    theme.colors().warning
+                }
+                Some(nano_decisions::approval::ApprovalOutcome::Unavailable) => {
+                    theme.colors().error
+                }
+                None => theme.colors().muted,
             }),
         ),
         Span::styled(
@@ -812,7 +825,7 @@ fn render_approval_line(output: &mut RenderedEntry, approval: &ApprovalView, rec
             } else {
                 format!(" · {reason}")
             },
-            muted(),
+            muted(theme),
         ),
     ]));
     output.hits.push(toggle_hit(record));
@@ -824,12 +837,12 @@ fn render_diff_body(
     width: usize,
     expanded: bool,
     record: &ToolRecord,
-    theme: DiffTheme,
+    theme: Theme,
 ) {
     if diff.coarse {
         output.lines.push(Line::from(Span::styled(
             "  （差异过大，仅显示统计）",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.colors().warning),
         )));
         output.hits.push(toggle_hit(record));
         return;
@@ -843,13 +856,7 @@ fn render_diff_body(
             )));
         }
         for line in &hunk.lines {
-            rows.push(DiffRow::Line(
-                line.kind,
-                line.old_no,
-                line.new_no,
-                line.text.clone(),
-                line.emphasis,
-            ));
+            rows.push(DiffRow::Line(line.clone()));
         }
     }
     let budget = if expanded { rows.len() } else { DIFF_BUDGET };
@@ -859,20 +866,18 @@ fn render_diff_body(
             DiffRow::Separator(label) => {
                 output
                     .lines
-                    .push(Line::from(Span::styled(format!("  {label}"), muted())));
+                    .push(Line::from(Span::styled(format!("  {label}"), muted(theme))));
                 output.hits.push(toggle_hit(record));
             }
-            DiffRow::Line(kind, old_no, new_no, text, emphasis) => {
-                render_diff_line(
-                    output, *kind, *old_no, *new_no, text, *emphasis, width, record, theme,
-                );
+            DiffRow::Line(line) => {
+                render_diff_line(output, line, width, record, theme);
             }
         }
     }
     if shown < rows.len() {
         output.lines.push(Line::from(Span::styled(
             format!("  … 还有 {} 行 · 点击展开", rows.len() - shown),
-            muted(),
+            muted(theme),
         )));
         output.hits.push(toggle_hit(record));
     }
@@ -880,53 +885,34 @@ fn render_diff_body(
 
 fn render_diff_line(
     output: &mut RenderedEntry,
-    kind: DiffLineKind,
-    old_no: Option<u64>,
-    new_no: Option<u64>,
-    text: &str,
-    emphasis: Option<(usize, usize)>,
+    line: &DiffLine,
     width: usize,
     record: &ToolRecord,
-    theme: DiffTheme,
+    theme: Theme,
 ) {
-    let number = old_no.or(new_no);
+    let kind = line.kind;
+    let number = line.old_no.or(line.new_no);
     let number = number
         .map(|number| format!("{number:>4}"))
         .unwrap_or_else(|| "    ".to_string());
-    let (marker, background, emphasis_background, emphasis_foreground, marker_color) =
-        match (theme, kind) {
-            (DiffTheme::Dark, DiffLineKind::Add) => (
-                '+',
-                Some(Color::Rgb(0, 42, 0)),
-                Some(Color::Rgb(0, 88, 0)),
-                Color::LightGreen,
-                Color::Green,
-            ),
-            (DiffTheme::Dark, DiffLineKind::Delete) => (
-                '-',
-                Some(Color::Rgb(48, 0, 0)),
-                Some(Color::Rgb(96, 0, 0)),
-                Color::LightRed,
-                Color::Red,
-            ),
-            (DiffTheme::Light, DiffLineKind::Add) => (
-                '+',
-                Some(Color::Rgb(220, 235, 221)),
-                Some(Color::Rgb(182, 214, 188)),
-                Color::Green,
-                Color::Green,
-            ),
-            (DiffTheme::Light, DiffLineKind::Delete) => (
-                '-',
-                Some(Color::Rgb(241, 220, 223)),
-                Some(Color::Rgb(233, 186, 195)),
-                Color::Red,
-                Color::Red,
-            ),
-            (_, DiffLineKind::Context) => (' ', None, None, Color::Reset, Color::DarkGray),
-        };
-    let number_style = Style::default().fg(Color::DarkGray);
-    let text_style = Style::default();
+    let colors = theme.colors();
+    let (marker, background, emphasis_background, marker_color) = match kind {
+        DiffLineKind::Add => (
+            '+',
+            Some(colors.diff_add_bg),
+            Some(colors.diff_add_word_bg),
+            colors.diff_add_fg,
+        ),
+        DiffLineKind::Delete => (
+            '-',
+            Some(colors.diff_del_bg),
+            Some(colors.diff_del_word_bg),
+            colors.diff_del_fg,
+        ),
+        DiffLineKind::Context => (' ', None, None, colors.muted),
+    };
+    let number_style = Style::default().fg(colors.muted);
+    let text_style = Style::default().fg(colors.fg);
     let (number_style, text_style) = match background {
         Some(background) => (number_style.bg(background), text_style.bg(background)),
         None => (number_style, text_style),
@@ -942,7 +928,7 @@ fn render_diff_line(
     };
     let text_width = width.saturating_sub(7).max(1);
     let mut text_offset = 0usize;
-    for (row_index, row) in wrap_line(text, text_width).into_iter().enumerate() {
+    for (row_index, row) in wrap_line(&line.text, text_width).into_iter().enumerate() {
         let mut spans = Vec::new();
         if row_index == 0 {
             spans.push(Span::styled(number.clone(), number_style));
@@ -953,11 +939,13 @@ fn render_diff_line(
             spans.push(Span::styled(" ".repeat(7), blank_style));
         }
         let mut run = String::new();
-        let mut current_bold = emphasis
+        let mut current_bold = line
+            .emphasis
             .map(|(start, end)| text_offset >= start && text_offset < end)
             .unwrap_or(false);
         for (index, character) in row.chars().enumerate() {
-            let bold = emphasis
+            let bold = line
+                .emphasis
                 .map(|(start, end)| {
                     let index = text_offset + index;
                     index >= start && index < end
@@ -968,7 +956,7 @@ fn render_diff_line(
                 if current_bold {
                     style = style
                         .add_modifier(Modifier::BOLD)
-                        .fg(emphasis_foreground)
+                        .fg(colors.fg)
                         .bg(emphasis_background.unwrap_or(Color::Reset));
                 }
                 spans.push(Span::styled(std::mem::take(&mut run), style));
@@ -981,7 +969,7 @@ fn render_diff_line(
             if current_bold {
                 style = style
                     .add_modifier(Modifier::BOLD)
-                    .fg(emphasis_foreground)
+                    .fg(colors.fg)
                     .bg(emphasis_background.unwrap_or(Color::Reset));
             }
             spans.push(Span::styled(run, style));
@@ -993,20 +981,14 @@ fn render_diff_line(
 }
 
 enum DiffRow {
-    Line(
-        DiffLineKind,
-        Option<u64>,
-        Option<u64>,
-        String,
-        Option<(usize, usize)>,
-    ),
+    Line(DiffLine),
     Separator(String),
 }
 
-fn render_preview(output: &mut RenderedEntry, preview: &PreviewEntry, width: usize) {
+fn render_preview(output: &mut RenderedEntry, preview: &PreviewEntry, width: usize, theme: Theme) {
     if !preview.reasoning.trim().is_empty() {
         output.lines.push(Line::from(vec![
-            Span::styled("▸ 思考 进行中…", muted()),
+            Span::styled("▸ 思考 进行中…", muted(theme)),
             Span::styled(
                 if preview.reasoning_ms.is_some() {
                     format!(
@@ -1019,7 +1001,7 @@ fn render_preview(output: &mut RenderedEntry, preview: &PreviewEntry, width: usi
                 } else {
                     String::new()
                 },
-                muted(),
+                muted(theme),
             ),
         ]));
         output.hits.push(None);
@@ -1044,7 +1026,9 @@ fn render_preview(output: &mut RenderedEntry, preview: &PreviewEntry, width: usi
     .flatten()
     {
         for row in wrap_block(message, width, MAX_BLOCK_ROWS) {
-            output.lines.push(Line::from(Span::styled(row, muted())));
+            output
+                .lines
+                .push(Line::from(Span::styled(row, muted(theme))));
             output.hits.push(None);
         }
     }
@@ -1057,7 +1041,7 @@ fn render_preview(output: &mut RenderedEntry, preview: &PreviewEntry, width: usi
         };
         output.lines.push(Line::from(Span::styled(
             format!("▸ {name} {state}"),
-            muted(),
+            muted(theme),
         )));
         output.hits.push(None);
     }
@@ -1070,6 +1054,7 @@ fn render_context_group(
     entries: &[&Entry],
     width: usize,
     expanded: bool,
+    theme: Theme,
 ) {
     let count = entries.len();
     let label = if count > 1 {
@@ -1078,14 +1063,14 @@ fn render_context_group(
         "上下文".to_string()
     };
     output.lines.push(Line::from(vec![
-        Span::styled(label, muted()),
+        Span::styled(label, muted(theme)),
         Span::styled(
             if expanded {
                 " · 已展开"
             } else {
                 " · 点击展开"
             },
-            muted(),
+            muted(theme),
         ),
     ]));
     let hit = Some(Hit {
@@ -1105,10 +1090,17 @@ fn render_context_group(
             continue;
         };
         for row in wrap_block(text, width, MAX_BLOCK_ROWS) {
-            output.lines.push(Line::from(Span::styled(row, muted())));
+            output
+                .lines
+                .push(Line::from(Span::styled(row, muted(theme))));
             output.hits.push(hit.clone());
         }
     }
+}
+
+struct ContextLabel<'a> {
+    text: &'a str,
+    color: Color,
 }
 
 /// Bash and monitor context keep their own labels and never merge.
@@ -1116,21 +1108,21 @@ fn render_labeled_context(
     output: &mut RenderedEntry,
     identity: &str,
     width: usize,
-    label: &str,
-    color: Color,
+    label: ContextLabel<'_>,
     text: &str,
     expanded: bool,
+    theme: Theme,
 ) {
     let rows = wrap_block(text, width, MAX_BLOCK_ROWS);
     output.lines.push(Line::from(vec![
-        Span::styled(label.to_string(), Style::default().fg(color)),
+        Span::styled(label.text.to_string(), Style::default().fg(label.color)),
         Span::styled(
             if expanded {
                 " · 已展开"
             } else {
                 " · 点击展开"
             },
-            muted(),
+            muted(theme),
         ),
     ]));
     let hit = Some(Hit {
@@ -1149,14 +1141,14 @@ fn render_labeled_context(
     for row in rows.iter().take(shown) {
         output.lines.push(Line::from(Span::styled(
             row.clone(),
-            Style::default().fg(color),
+            Style::default().fg(label.color),
         )));
         output.hits.push(hit.clone());
     }
     if shown < rows.len() {
         output.lines.push(Line::from(Span::styled(
             format!("  … 还有 {} 行 · 点击展开", rows.len() - shown),
-            muted(),
+            muted(theme),
         )));
         output.hits.push(hit);
     }
@@ -1165,7 +1157,7 @@ fn render_labeled_context(
 /// Minimal Markdown: headings lose their marker and turn bold, a leading
 /// paragraph acts as the answer's lead, list items use `-`, and `**…**`
 /// turns bold inline. No third-party parser is involved.
-fn markdown_rows(text: &str, width: usize) -> Vec<Line<'static>> {
+fn markdown_rows(text: &str, width: usize, theme: Theme) -> Vec<Line<'static>> {
     let text = display_text(text);
     let mut blocks: Vec<Vec<&str>> = Vec::new();
     let mut current: Vec<&str> = Vec::new();
@@ -1202,7 +1194,7 @@ fn markdown_rows(text: &str, width: usize) -> Vec<Line<'static>> {
                 let item_rows = inline_rows(item, width.saturating_sub(2).max(1), Style::default());
                 for (index, row) in item_rows.into_iter().enumerate() {
                     let prefix = if index == 0 { "- " } else { "  " };
-                    let mut spans = vec![Span::styled(prefix, muted())];
+                    let mut spans = vec![Span::styled(prefix, muted(theme))];
                     spans.extend(row.spans);
                     rows.push(Line::from(spans));
                 }
@@ -1339,11 +1331,13 @@ fn official_name(name: &str) -> String {
     }
 }
 
-fn process_status_style(status: DisplayStatus) -> Style {
+fn process_status_style(status: DisplayStatus, theme: Theme) -> Style {
     match status {
-        DisplayStatus::Failed => Style::default().fg(Color::Red),
-        DisplayStatus::Interrupted | DisplayStatus::Unknown => Style::default().fg(Color::Yellow),
-        DisplayStatus::Pending | DisplayStatus::Succeeded => muted(),
+        DisplayStatus::Failed => Style::default().fg(theme.colors().error),
+        DisplayStatus::Interrupted | DisplayStatus::Unknown => {
+            Style::default().fg(theme.colors().warning)
+        }
+        DisplayStatus::Pending | DisplayStatus::Succeeded => muted(theme),
     }
 }
 
@@ -1513,14 +1507,14 @@ mod tests {
     }
 
     fn render_one(entry: Entry, expanded: bool, width: usize) -> RenderedEntry {
-        render_one_with_theme(entry, expanded, width, DiffTheme::Dark)
+        render_one_with_theme(entry, expanded, width, Theme::Dark)
     }
 
     fn render_one_with_theme(
         entry: Entry,
         expanded: bool,
         width: usize,
-        theme: DiffTheme,
+        theme: Theme,
     ) -> RenderedEntry {
         render_entry(&entry, width, expanded, theme)
     }
@@ -1540,7 +1534,7 @@ mod tests {
         );
         let mut cache = RenderCache::new();
         let mut scroll = ScrollState::default();
-        let rendered = render(&model, &mut cache, &mut scroll, 80, 20, DiffTheme::Dark);
+        let rendered = render(&model, &mut cache, &mut scroll, 80, 20, Theme::Dark);
         assert!(rendered.total_height > 100);
         assert!(rendered.mounted <= MAX_MOUNTED_ROWS);
         assert_eq!(rendered.lines.len(), 20);
@@ -1563,14 +1557,7 @@ mod tests {
         let mut cache = RenderCache::new();
         let mut scroll = ScrollState::default();
         let viewport = 250;
-        let rendered = render(
-            &model,
-            &mut cache,
-            &mut scroll,
-            80,
-            viewport,
-            DiffTheme::Dark,
-        );
+        let rendered = render(&model, &mut cache, &mut scroll, 80, viewport, Theme::Dark);
         assert_eq!(rendered.lines.len(), viewport);
         assert_eq!(rendered.top + rendered.lines.len(), rendered.total_height);
         model.revision += 1;
@@ -1587,7 +1574,7 @@ mod tests {
         }]);
         let mut cache = RenderCache::new();
         let mut scroll = ScrollState::default();
-        let rendered = render(&model, &mut cache, &mut scroll, 4, 10, DiffTheme::Dark);
+        let rendered = render(&model, &mut cache, &mut scroll, 4, 10, Theme::Dark);
         assert!(rendered
             .lines
             .iter()
@@ -1679,8 +1666,9 @@ mod tests {
             .flat_map(|line| line.spans.iter())
             .filter_map(|span| span.style.bg)
             .collect();
-        assert!(backgrounds.contains(&Color::Rgb(0, 42, 0)));
-        assert!(backgrounds.contains(&Color::Rgb(48, 0, 0)));
+        let colors = Theme::Dark.colors();
+        assert!(backgrounds.contains(&colors.diff_add_bg));
+        assert!(backgrounds.contains(&colors.diff_del_bg));
         assert!(rendered
             .lines
             .iter()
@@ -1716,17 +1704,66 @@ mod tests {
                 },
             }),
         };
-        let rendered = render_one_with_theme(entry, true, 80, DiffTheme::Light);
+        let rendered = render_one_with_theme(entry, true, 80, Theme::Light);
         let backgrounds: Vec<Color> = rendered
             .lines
             .iter()
             .flat_map(|line| line.spans.iter())
             .filter_map(|span| span.style.bg)
             .collect();
-        assert!(backgrounds.contains(&Color::Rgb(220, 235, 221)));
-        assert!(backgrounds.contains(&Color::Rgb(241, 220, 223)));
-        assert!(!backgrounds.contains(&Color::Rgb(0, 42, 0)));
-        assert!(!backgrounds.contains(&Color::Rgb(48, 0, 0)));
+        let light = Theme::Light.colors();
+        let dark = Theme::Dark.colors();
+        assert!(backgrounds.contains(&light.diff_add_bg));
+        assert!(backgrounds.contains(&light.diff_del_bg));
+        assert!(!backgrounds.contains(&dark.diff_add_bg));
+        assert!(!backgrounds.contains(&dark.diff_del_bg));
+    }
+
+    #[test]
+    fn the_render_cache_does_not_mix_theme_colors() {
+        let diff = crate::diff::single_text_diff(
+            Some("a.txt".into()),
+            Some("hello world".into()),
+            Some("hello there".into()),
+            DiffState::Applied,
+        );
+        let entry = Entry {
+            identity: "call-cache".into(),
+            fingerprint: 1,
+            kind: EntryKind::Tool(ToolRecord {
+                call_id: "cache".into(),
+                name: "edit".into(),
+                status: ToolStatus::Succeeded,
+                display_status: DisplayStatus::Succeeded,
+                turn: None,
+                step: None,
+                arguments: "{}".into(),
+                result: None,
+                result_fact: None,
+                approval: None,
+                display: ToolDisplay::File {
+                    path: Some("a.txt".into()),
+                    diff: Some(diff),
+                },
+            }),
+        };
+        let model = model(vec![entry]);
+        let mut cache = RenderCache::new();
+        let mut dark_scroll = ScrollState::default();
+        let dark = render(&model, &mut cache, &mut dark_scroll, 80, 20, Theme::Dark);
+        let mut light_scroll = ScrollState::default();
+        let light = render(&model, &mut cache, &mut light_scroll, 80, 20, Theme::Light);
+        let backgrounds = |rendered: &TranscriptRender| -> Vec<Color> {
+            rendered
+                .lines
+                .iter()
+                .flat_map(|line| line.spans.iter())
+                .filter_map(|span| span.style.bg)
+                .collect()
+        };
+        assert!(backgrounds(&dark).contains(&Theme::Dark.colors().diff_add_bg));
+        assert!(backgrounds(&light).contains(&Theme::Light.colors().diff_add_bg));
+        assert!(!backgrounds(&light).contains(&Theme::Dark.colors().diff_add_bg));
     }
 
     #[test]
@@ -1846,7 +1883,7 @@ mod tests {
         let model = model(entries);
         let mut cache = RenderCache::new();
         let mut scroll = ScrollState::default();
-        let rendered = render(&model, &mut cache, &mut scroll, 80, 20, DiffTheme::Dark);
+        let rendered = render(&model, &mut cache, &mut scroll, 80, 20, Theme::Dark);
         let text = rendered
             .lines
             .iter()
@@ -1888,7 +1925,7 @@ mod tests {
         for identity in identities {
             model.reveal(&identity);
         }
-        let rendered = render(&model, cache, scroll, width, viewport, DiffTheme::Dark);
+        let rendered = render(&model, cache, scroll, width, viewport, Theme::Dark);
         rendered.lines.iter().map(ToString::to_string).collect()
     }
 
@@ -2051,8 +2088,9 @@ mod tests {
             .flat_map(|line| line.spans.iter())
             .map(|span| span.style.fg)
             .collect::<Vec<_>>();
-        assert!(styles.contains(&Some(Color::DarkGray)));
-        assert!(!styles.contains(&Some(Color::Yellow)));
+        let colors = Theme::Dark.colors();
+        assert!(styles.contains(&Some(colors.muted)));
+        assert!(!styles.contains(&Some(colors.warning)));
     }
 
     #[test]
@@ -2152,7 +2190,7 @@ mod tests {
             .all(|line| {
                 line.spans
                     .iter()
-                    .all(|span| span.style.fg == Some(Color::DarkGray))
+                    .all(|span| span.style.fg == Some(Theme::Dark.colors().muted))
             });
         assert!(muted, "preview notes are muted");
 

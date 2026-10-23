@@ -21,8 +21,9 @@ pub use display::{display_text, line_width, row_count, wrap_line, wrap_text};
 pub use model::{
     Enrichment, Entry, EntryKind, PreviewEntry, PreviewTool, TranscriptModel, TranscriptSource,
 };
+pub use nano_theme::Theme;
 pub use render::{
-    render, DiffTheme, Hit, HitKind, RenderCache, TranscriptRender, COMMAND_BUDGET, DIFF_BUDGET,
+    render, Hit, HitKind, RenderCache, TranscriptRender, COMMAND_BUDGET, DIFF_BUDGET,
     FAILURE_BUDGET, MAX_MOUNTED_ROWS, OUTPUT_BUDGET, OVERSCAN_ROWS, THINKING_BUDGET,
 };
 pub use scroll::{Anchor, EntryOffset, ScrollState, WheelProfile};

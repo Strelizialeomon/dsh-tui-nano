@@ -16,7 +16,7 @@ use nano_jobs::{BashRecord, BashState, JobStatus};
 use nano_schedule::RowKind;
 use nano_sessions::{format_clock, Occupancy};
 use nano_subagents::{ComposerGate, Lamp};
-use nano_transcript::DiffTheme;
+use nano_theme::Theme;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -28,6 +28,25 @@ use unicode_width::UnicodeWidthChar;
 
 /// Draw one frame.
 pub fn draw(frame: &mut Frame, app: &mut App) {
+    let full = frame.area();
+    frame.buffer_mut().set_style(full, app.theme.base_style());
+    draw_frame(frame, app);
+    // Wide-glyph continuation cells and any cleared region fall back to the
+    // theme foreground so no self-drawn cell is left on the terminal default.
+    let fg = app.theme.colors().fg;
+    let buffer = frame.buffer_mut();
+    for y in full.top()..full.bottom() {
+        for x in full.left()..full.right() {
+            if let Some(cell) = buffer.cell_mut((x, y)) {
+                if cell.fg == Color::Reset {
+                    cell.set_fg(fg);
+                }
+            }
+        }
+    }
+}
+
+fn draw_frame(frame: &mut Frame, app: &mut App) {
     let full = frame.area();
     app.send_area = Rect::default();
     app.jump_area = Rect::default();
@@ -155,13 +174,13 @@ fn draw_terminal(frame: &mut Frame, app: &mut App, area: Rect) {
     app.terminal_screen_area = layout[0];
     let status = match app.terminal.as_mut() {
         Some(terminal) => {
-            terminal.draw(frame, layout[0]);
+            terminal.draw(frame, layout[0], app.theme);
             terminal.status_line()
         }
         None => {
             frame.render_widget(
                 Paragraph::new("终端状态文件不可用；未附着官方终端。")
-                    .style(Style::default().fg(Color::Red)),
+                    .style(Style::default().fg(app.theme.colors().error)),
                 layout[0],
             );
             "终端不可用".to_string()
@@ -173,9 +192,9 @@ fn draw_terminal(frame: &mut Frame, app: &mut App, area: Rect) {
         .and_then(|terminal| terminal.error())
         .is_some()
     {
-        Color::Red
+        app.theme.colors().error
     } else {
-        Color::DarkGray
+        app.theme.colors().muted
     };
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
@@ -204,11 +223,11 @@ fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
         .mounted_gate()
         .unwrap_or(ComposerGate::Resolving);
     let (state, color) = match gate {
-        ComposerGate::Enabled => ("可输入", Color::Green),
-        ComposerGate::ReadOnly => ("只读", Color::DarkGray),
-        ComposerGate::StopOnly => ("仅停止", Color::Yellow),
-        ComposerGate::Resolving => ("读取历史中", Color::Cyan),
-        ComposerGate::NotNavigable => ("不可进入", Color::DarkGray),
+        ComposerGate::Enabled => ("可输入", app.theme.colors().success),
+        ComposerGate::ReadOnly => ("只读", app.theme.colors().muted),
+        ComposerGate::StopOnly => ("仅停止", app.theme.colors().warning),
+        ComposerGate::Resolving => ("读取历史中", app.theme.colors().accent),
+        ComposerGate::NotNavigable => ("不可进入", app.theme.colors().muted),
     };
     // The second row keeps the main title above and adds the child identity:
     // `← 子代理 <task> <state>`.
@@ -223,8 +242,8 @@ fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
         ..area
     };
     let spans = vec![
-        Span::styled("← ", Style::default().fg(Color::Cyan)),
-        Span::styled("子代理 ", Style::default().fg(Color::DarkGray)),
+        Span::styled("← ", Style::default().fg(app.theme.colors().accent)),
+        Span::styled("子代理 ", Style::default().fg(app.theme.colors().muted)),
         Span::styled(label, Style::default().add_modifier(Modifier::BOLD)),
         Span::styled(format!(" {state}"), Style::default().fg(color)),
     ];
@@ -240,7 +259,7 @@ fn draw_app_title(frame: &mut Frame, app: &App, area: Rect) {
         Span::raw("  "),
         Span::styled(
             elide_left(&path, room),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(app.theme.colors().muted),
         ),
     ];
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
@@ -263,6 +282,7 @@ fn draw_schedule(frame: &mut Frame, app: &mut App, area: Rect) {
 fn draw_schedule_body(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_style(app.theme.border_style())
         .title(" 定时任务 · 官方 schedule ");
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -274,7 +294,7 @@ fn draw_schedule_body(frame: &mut Frame, app: &App, area: Rect) {
         if row.kind == RowKind::Selected && selected_line.is_none() {
             selected_line = Some(lines.len());
         }
-        let style = schedule_style(row.kind);
+        let style = schedule_style(row.kind, app.theme);
         for segment in wrap_segments(&row.text, width) {
             lines.push(Line::from(Span::styled(segment.text, style)));
         }
@@ -289,17 +309,18 @@ fn draw_schedule_body(frame: &mut Frame, app: &App, area: Rect) {
     );
 }
 
-fn schedule_style(kind: RowKind) -> Style {
+fn schedule_style(kind: RowKind, theme: Theme) -> Style {
+    let colors = theme.colors();
     match kind {
         RowKind::Title => Style::default()
-            .fg(Color::Cyan)
+            .fg(colors.accent)
             .add_modifier(Modifier::BOLD),
         RowKind::Plain => Style::default(),
-        RowKind::Dim => Style::default().fg(Color::DarkGray),
-        RowKind::Error => Style::default().fg(Color::Red),
-        RowKind::Selected => Style::default().fg(Color::Black).bg(Color::Cyan),
-        RowKind::SelectedDim => Style::default().fg(Color::Black).bg(Color::DarkGray),
-        RowKind::Notice => Style::default().fg(Color::Yellow),
+        RowKind::Dim => Style::default().fg(colors.muted),
+        RowKind::Error => Style::default().fg(colors.error),
+        RowKind::Selected => Style::default().fg(colors.fg).bg(colors.selected_bg),
+        RowKind::SelectedDim => Style::default().fg(colors.muted).bg(colors.selected_bg),
+        RowKind::Notice => Style::default().fg(colors.warning),
     }
 }
 
@@ -315,20 +336,23 @@ fn draw_sessions(frame: &mut Frame, app: &App, area: Rect) {
         }
         None => " 会话 · ↑↓ 选择 · Enter 切换 · n 改名 · c 压缩 · r 刷新 · Esc 关闭 ".to_string(),
     };
-    let block = Block::default().borders(Borders::ALL).title(title);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(app.theme.border_style())
+        .title(title);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let mut rows: Vec<Line<'static>> = Vec::new();
     if app.sessions_panel.loading {
         rows.push(Line::from(Span::styled(
             "正在读取官方会话列表…",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(app.theme.colors().muted),
         )));
     }
     if let Some(error) = &app.sessions_panel.error {
         rows.push(Line::from(Span::styled(
             error.clone(),
-            Style::default().fg(Color::Red),
+            Style::default().fg(app.theme.colors().error),
         )));
     }
     let prefix_rows = rows.len();
@@ -337,6 +361,7 @@ fn draw_sessions(frame: &mut Frame, app: &App, area: Rect) {
         &mut rows,
         app.sessions_panel.selected == 0,
         "＋ 新建会话（Nano 生成新 ID）".to_string(),
+        app.theme,
     );
     for (index, row) in app.sessions_panel.rows.iter().enumerate() {
         let activity = row
@@ -363,12 +388,17 @@ fn draw_sessions(frame: &mut Frame, app: &App, area: Rect) {
                 line.push_str(&format!(" · 目录 {name}（不可切换）"));
             }
         }
-        push_session_row(&mut rows, app.sessions_panel.selected == index + 1, line);
+        push_session_row(
+            &mut rows,
+            app.sessions_panel.selected == index + 1,
+            line,
+            app.theme,
+        );
     }
     if let Some(rename) = &app.sessions_panel.rename {
         rows.push(Line::from(Span::styled(
             format!("新标题：{}", rename.buffer.text()),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(app.theme.colors().accent),
         )));
     }
     let mut footer: Vec<Line<'static>> = vec![Line::from("")];
@@ -377,21 +407,21 @@ fn draw_sessions(frame: &mut Frame, app: &App, area: Rect) {
         footer.push(Line::from(Span::styled(
             format!("压缩：{}", compact.display_text()),
             Style::default().fg(if compact.kind == nano_sessions::CompactionKind::Success {
-                Color::Green
+                app.theme.colors().success
             } else {
-                Color::Yellow
+                app.theme.colors().warning
             }),
         )));
     }
     if app.compact_in_flight {
         footer.push(Line::from(Span::styled(
             "压缩：等待官方结果…（Esc 取消等待，历史以后端为准）",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(app.theme.colors().warning),
         )));
     } else if app.compact_maybe_running {
         footer.push(Line::from(Span::styled(
             "压缩：结果未知，可能仍在运行；Esc 取消等待并重读官方状态",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(app.theme.colors().warning),
         )));
     }
     if app.switch.state().failed() {
@@ -400,12 +430,12 @@ fn draw_sessions(frame: &mut Frame, app: &App, area: Rect) {
                 "{}；Alt+R 重试 / Alt+B 返回上一会话",
                 app.switch.state().label()
             ),
-            Style::default().fg(Color::Red),
+            Style::default().fg(app.theme.colors().error),
         )));
     } else if app.switch.busy() {
         footer.push(Line::from(Span::styled(
             app.switch.state().label(),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(app.theme.colors().accent),
         )));
     }
 
@@ -426,10 +456,11 @@ fn draw_sessions(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(Text::from(visible)), inner);
 }
 
-fn push_session_row(lines: &mut Vec<Line<'static>>, selected: bool, text: String) {
+fn push_session_row(lines: &mut Vec<Line<'static>>, selected: bool, text: String, theme: Theme) {
+    let colors = theme.colors();
     let marker = if selected { "▶ " } else { "  " };
     let style = if selected {
-        Style::default().fg(Color::Black).bg(Color::Cyan)
+        Style::default().fg(colors.fg).bg(colors.selected_bg)
     } else {
         Style::default()
     };
@@ -446,19 +477,19 @@ fn push_context_details(lines: &mut Vec<Line<'static>>, app: &App) {
             lines.push(Line::from(Span::styled(
                 format!("上下文占用（参考值）：{}", occupancy.label()),
                 Style::default().fg(match occupancy {
-                    Occupancy::Known { .. } => Color::Cyan,
-                    Occupancy::Unknown => Color::Yellow,
+                    Occupancy::Known { .. } => app.theme.colors().accent,
+                    Occupancy::Unknown => app.theme.colors().warning,
                 }),
             )));
             if occupancy == Occupancy::Unknown {
                 lines.push(Line::from(Span::styled(
                     "  缺 projectedTokens 或 contextWindow；不补零、不用累计用量冒充",
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(app.theme.colors().warning),
                 )));
             }
             lines.push(Line::from(Span::styled(
                 format!("  {}", meter.provenance_label(now_ms())),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(app.theme.colors().muted),
             )));
             match meter.token_usage {
                 Some(usage) => lines.push(Line::from(Span::styled(
@@ -470,11 +501,11 @@ fn push_context_details(lines: &mut Vec<Line<'static>>, app: &App) {
                         usage.cache_write_tokens,
                         usage.total()
                     ),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(app.theme.colors().muted),
                 ))),
                 None => lines.push(Line::from(Span::styled(
                     "计费用量：未知（官方投影未提供）",
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(app.theme.colors().warning),
                 ))),
             }
             if let Some(breakdown) = meter.breakdown {
@@ -483,13 +514,13 @@ fn push_context_details(lines: &mut Vec<Line<'static>>, app: &App) {
                         "估算构成（启发式，CJK/JSON 可能低估）：系统 {} · 工具 {} · 消息 {}",
                         breakdown.system_tokens, breakdown.tools_tokens, breakdown.message_tokens
                     ),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(app.theme.colors().muted),
                 )));
             }
             if let Some(pressure) = meter.pressure_tokens {
                 lines.push(Line::from(Span::styled(
                     format!("最近一次 provider 压力：{} tokens（非当前占用）", pressure),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(app.theme.colors().muted),
                 )));
             }
         }
@@ -499,7 +530,7 @@ fn push_context_details(lines: &mut Vec<Line<'static>>, app: &App) {
                     Some(error) => format!("上下文：未知（{error}）"),
                     None => "上下文：尚未读取".to_string(),
                 },
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(app.theme.colors().muted),
             )));
         }
     }
@@ -528,18 +559,18 @@ fn draw_subagent_dock(frame: &mut Frame, app: &mut App, area: Rect) {
     // moves the count to the all-agents list.
     let block = Block::default()
         .borders(Borders::TOP)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(app.theme.border_style());
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let blink_on = app.reduced_motion || app.subagents.lifecycle().blink_on(Instant::now());
     let width = inner.width.max(1) as usize;
-    let hover = hover_background(DiffTheme::from_env());
+    let hover = app.theme.colors().hover_bg;
     let mut lines: Vec<Line<'static>> = Vec::new();
     for (index, row) in rows.iter().enumerate() {
         let selected = app.subagents.nav().dock_focus && app.subagents.nav().dock_selected == index;
         let marker = if selected { "›" } else { " " };
         let lamp = app.subagents.lamp(row);
-        let (dot, color) = lamp_glyph(lamp, blink_on);
+        let (dot, color) = lamp_glyph(lamp, blink_on, app.theme);
         let meta = row_status(lamp);
         let name = safe_text(row.display_label());
         let meta_width = meta.chars().map(display_width).sum::<usize>();
@@ -553,9 +584,9 @@ fn draw_subagent_dock(frame: &mut Frame, app: &mut App, area: Rect) {
         } else {
             Style::default()
         };
-        let pointer_style = row_style.fg(Color::Cyan);
+        let pointer_style = row_style.fg(app.theme.colors().accent);
         let dot_style = row_style.fg(color);
-        let status_style = row_style.fg(Color::DarkGray);
+        let status_style = row_style.fg(app.theme.colors().muted);
         let spans = vec![
             Span::styled(format!("{marker} "), pointer_style),
             Span::styled(dot.to_string(), dot_style),
@@ -571,9 +602,9 @@ fn draw_subagent_dock(frame: &mut Frame, app: &mut App, area: Rect) {
             app.subagents.nav().dock_focus && app.subagents.nav().dock_selected == rows.len();
         let marker = if selected { "›" } else { " " };
         let style = if selected {
-            Style::default().fg(Color::Cyan).bg(hover)
+            Style::default().fg(app.theme.colors().accent).bg(hover)
         } else {
-            Style::default().fg(Color::Cyan)
+            Style::default().fg(app.theme.colors().accent)
         };
         lines.push(Line::from(vec![
             Span::styled(format!("{marker} "), style),
@@ -586,17 +617,8 @@ fn draw_subagent_dock(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
 
-/// Focused dock rows use the design's hover token through the same
-/// `NANO_THEME` selection as the diff tokens (batch 2 landed the read first).
-fn hover_background(theme: DiffTheme) -> Color {
-    match theme {
-        DiffTheme::Dark => Color::Rgb(36, 43, 53),
-        DiffTheme::Light => Color::Rgb(232, 232, 229),
-    }
-}
-
-fn muted_style() -> Style {
-    Style::default().fg(Color::DarkGray)
+fn muted_style(theme: Theme) -> Style {
+    Style::default().fg(theme.colors().muted)
 }
 
 /// All-agents list: recursive descendants with parent relationships and
@@ -610,7 +632,10 @@ fn draw_subagent_list(frame: &mut Frame, app: &mut App, area: Rect) {
             app.subagents.local_count()
         )
     };
-    let block = Block::default().borders(Borders::ALL).title(title);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(app.theme.border_style())
+        .title(title);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     app.subagent_list_area = area;
@@ -629,7 +654,7 @@ fn draw_subagent_list(frame: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 "没有已知子代理。"
             },
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(app.theme.colors().muted),
         )));
     }
     for (index, row) in rows.iter().enumerate() {
@@ -653,7 +678,9 @@ fn draw_subagent_list(frame: &mut Frame, app: &mut App, area: Rect) {
             }
         }
         let style = if index == selected {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
+            Style::default()
+                .fg(app.theme.colors().fg)
+                .bg(app.theme.colors().selected_bg)
         } else {
             Style::default()
         };
@@ -673,7 +700,7 @@ fn draw_subagent_list(frame: &mut Frame, app: &mut App, area: Rect) {
         for segment in wrap_segments(&truncate(&text, width.saturating_mul(2)), width) {
             lines.push(Line::from(Span::styled(
                 segment.text,
-                Style::default().fg(Color::Red),
+                Style::default().fg(app.theme.colors().error),
             )));
         }
     }
@@ -681,7 +708,7 @@ fn draw_subagent_list(frame: &mut Frame, app: &mut App, area: Rect) {
         for segment in wrap_segments(&truncate(&safe_text(error), width.saturating_mul(2)), width) {
             lines.push(Line::from(Span::styled(
                 segment.text,
-                Style::default().fg(Color::Red),
+                Style::default().fg(app.theme.colors().error),
             )));
         }
     }
@@ -718,20 +745,21 @@ fn format_duration_ms(ms: u64) -> String {
     }
 }
 
-fn lamp_glyph(lamp: Lamp, blink_on: bool) -> (&'static str, Color) {
+fn lamp_glyph(lamp: Lamp, blink_on: bool, theme: Theme) -> (&'static str, Color) {
+    let colors = theme.colors();
     match lamp {
         Lamp::Running => (
             if blink_on { "●" } else { "○" },
             if blink_on {
-                Color::Cyan
+                colors.accent
             } else {
-                Color::DarkGray
+                colors.muted
             },
         ),
-        Lamp::Completed => ("●", Color::Green),
-        Lamp::Warned => ("●", Color::Yellow),
-        Lamp::Error => ("●", Color::Red),
-        Lamp::Inactive => ("●", Color::DarkGray),
+        Lamp::Completed => ("●", colors.success),
+        Lamp::Warned => ("●", colors.warning),
+        Lamp::Error => ("●", colors.error),
+        Lamp::Inactive => ("●", colors.muted),
     }
 }
 
@@ -775,7 +803,7 @@ fn draw_feed(frame: &mut Frame, app: &mut App, area: Rect) {
     if !app.subagent_active() && app.view.scroll().sticky() && !app.bash_records.is_empty() {
         let before = lines.len();
         for record in &app.bash_records {
-            push_bash_record(&mut lines, record, area.width.max(1) as usize);
+            push_bash_record(&mut lines, record, area.width.max(1) as usize, app.theme);
         }
         let added = lines.len().saturating_sub(before);
         app.feed_hits.extend(std::iter::repeat(None).take(added));
@@ -795,7 +823,7 @@ fn draw_feed(frame: &mut Frame, app: &mut App, area: Rect) {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 empty,
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(app.theme.colors().muted),
             ))),
             area,
         );
@@ -808,8 +836,8 @@ fn draw_feed(frame: &mut Frame, app: &mut App, area: Rect) {
             Paragraph::new(Line::from(Span::styled(
                 " 回到最新 ",
                 Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::REVERSED),
+                    .fg(app.theme.colors().accent)
+                    .bg(app.theme.colors().hover_bg),
             ))),
             rect,
         );
@@ -832,7 +860,11 @@ fn jump_button_rect(area: Rect, visible: bool) -> Option<Rect> {
 fn draw_skills_panel(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(Span::styled(" 技能 ", Style::default().fg(Color::Cyan)));
+        .border_style(app.theme.border_style())
+        .title(Span::styled(
+            " 技能 ",
+            Style::default().fg(app.theme.colors().accent),
+        ));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.height == 0 || inner.width == 0 {
@@ -854,7 +886,7 @@ fn draw_skills_panel(frame: &mut Frame, app: &App, area: Rect) {
         ),
         Span::styled(
             format!(" · {state} · 来源：官方技能目录"),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(app.theme.colors().muted),
         ),
     ]));
     if let Some(reason) = app.skills.stale_reason() {
@@ -863,13 +895,13 @@ fn draw_skills_panel(frame: &mut Frame, app: &App, area: Rect) {
             &format!("刷新失败：{reason}；保留上次可用目录"),
             width,
             300,
-            Color::Yellow,
+            app.theme.colors().warning,
         );
     }
     if app.skills.entries().is_empty() {
         lines.push(Line::from(Span::styled(
             "没有用户可调用的技能；/name 仍按普通文本提交。",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(app.theme.colors().muted),
         )));
     }
 
@@ -895,7 +927,11 @@ fn draw_skills_panel(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled(
                 format!("{marker}/{}", entry.name),
                 Style::default()
-                    .fg(if selected { Color::Cyan } else { Color::White })
+                    .fg(if selected {
+                        app.theme.colors().accent
+                    } else {
+                        app.theme.colors().fg
+                    })
                     .add_modifier(if selected {
                         Modifier::BOLD
                     } else {
@@ -911,13 +947,13 @@ fn draw_skills_panel(frame: &mut Frame, app: &App, area: Rect) {
         if entry.user_only() {
             spans.push(Span::styled(
                 "  [仅用户可调用]",
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(app.theme.colors().warning),
             ));
         }
         if entry.shadowed_by_command {
             spans.push(Span::styled(
                 "  [命令优先]",
-                Style::default().fg(Color::Magenta),
+                Style::default().fg(app.theme.colors().accent),
             ));
         }
         let mut block = vec![Line::from(spans)];
@@ -936,7 +972,7 @@ fn draw_skills_panel(frame: &mut Frame, app: &App, area: Rect) {
             &format!("    {}", detail.join(" · ")),
             width,
             usize::MAX,
-            Color::DarkGray,
+            app.theme.colors().muted,
         );
         blocks.push(block);
     }
@@ -973,50 +1009,54 @@ fn draw_skill_preview(lines: &mut Vec<Line<'static>>, app: &App, width: usize) {
     let name = app.skill_preview_target.clone().unwrap_or_default();
     let mut title = vec![Span::styled(
         format!("── 预览 /{name} "),
-        Style::default().fg(Color::Cyan),
+        Style::default().fg(app.theme.colors().accent),
     )];
     if let Some(preview) = &app.skill_preview {
         title.push(Span::styled(
             preview.path.clone(),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(app.theme.colors().muted),
         ));
     }
     lines.push(Line::from(title));
     if let Some(error) = &app.skill_preview_error {
-        wrap_block(lines, error, width, 600, Color::Red);
+        wrap_block(lines, error, width, 600, app.theme.colors().error);
         return;
     }
     let Some(preview) = &app.skill_preview else {
         lines.push(Line::from(Span::styled(
             "正在读取预览…",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(app.theme.colors().muted),
         )));
         return;
     };
     if let Some(label) = preview.truncation_label() {
-        wrap_block(lines, &label, width, 200, Color::Yellow);
+        wrap_block(lines, &label, width, 200, app.theme.colors().warning);
     }
     if preview.empty() {
         lines.push(Line::from(Span::styled(
             "（文件为空）",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(app.theme.colors().muted),
         )));
         return;
     }
     if preview.text.chars().count() > 4_000 {
         lines.push(Line::from(Span::styled(
             "（面板只显示前 4000 字符；完整内容以官方文件为准）",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(app.theme.colors().warning),
         )));
     }
-    wrap_block(lines, &preview.text, width, 4_000, Color::Gray);
+    wrap_block(lines, &preview.text, width, 4_000, app.theme.colors().fg);
 }
 
 /// Workspace-instruction sources, load time, and the official budget notice.
 fn draw_instructions_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(Span::styled(" 项目规矩 ", Style::default().fg(Color::Cyan)));
+        .border_style(app.theme.border_style())
+        .title(Span::styled(
+            " 项目规矩 ",
+            Style::default().fg(app.theme.colors().accent),
+        ));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.height == 0 || inner.width == 0 {
@@ -1044,7 +1084,7 @@ fn draw_instructions_panel(frame: &mut Frame, app: &mut App, area: Rect) {
                         "增量"
                     }
                 ),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(app.theme.colors().muted),
             ),
         ]));
     } else {
@@ -1053,19 +1093,19 @@ fn draw_instructions_panel(frame: &mut Frame, app: &mut App, area: Rect) {
             "本次会话尚未加载项目规矩（官方 agent-instructions 未产生消息）。",
             width,
             300,
-            Color::Yellow,
+            app.theme.colors().warning,
         );
     }
     if let Some(notice) = &app.instructions.budget_notice {
         // The bridge already bounds this at 8192 code points and sets
         // `truncated`; rendering the whole bound value avoids a second silent
         // cut without a marker.
-        wrap_block(&mut lines, notice, width, 8_192, Color::Yellow);
+        wrap_block(&mut lines, notice, width, 8_192, app.theme.colors().warning);
     }
     if app.instructions.truncated {
         lines.push(Line::from(Span::styled(
             "来源投影已截断：只显示部分来源与提示。",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(app.theme.colors().warning),
         )));
     }
     let order_hint = if app.instructions.baseline {
@@ -1075,13 +1115,13 @@ fn draw_instructions_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     };
     lines.push(Line::from(Span::styled(
         order_hint,
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(app.theme.colors().muted),
     )));
     for source in &app.instructions.sources {
         lines.push(Line::from(vec![
             Span::styled(
                 format!("  {:<4}", source.action.label()),
-                Style::default().fg(Color::Green),
+                Style::default().fg(app.theme.colors().success),
             ),
             Span::raw(" "),
             Span::raw(source.path.clone()),
@@ -1114,20 +1154,26 @@ fn visible_block_start(heights: &[usize], selected: usize, rows: usize) -> usize
     start
 }
 
-fn push_bash_record(lines: &mut Vec<Line<'static>>, record: &BashRecord, width: usize) {
+fn push_bash_record(
+    lines: &mut Vec<Line<'static>>,
+    record: &BashRecord,
+    width: usize,
+    theme: Theme,
+) {
+    let colors = theme.colors();
     let color = match &record.state {
-        BashState::Running => Color::Yellow,
+        BashState::Running => colors.warning,
         BashState::Done => match record.result.as_ref().and_then(|result| result.exit_code) {
-            Some(0) => Color::Green,
-            _ => Color::Red,
+            Some(0) => colors.success,
+            _ => colors.error,
         },
-        BashState::Failed(_) | BashState::Unknown(_) => Color::Red,
+        BashState::Failed(_) | BashState::Unknown(_) => colors.error,
     };
     lines.push(Line::from(vec![
-        Span::styled("bash ", Style::default().fg(Color::Yellow)),
+        Span::styled("bash ", Style::default().fg(colors.warning)),
         Span::styled(
             format!("!{}", record.command),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(colors.warning),
         ),
         Span::raw(" · "),
         Span::styled(record.outcome_label(), Style::default().fg(color)),
@@ -1136,20 +1182,20 @@ fn push_bash_record(lines: &mut Vec<Line<'static>>, record: &BashRecord, width: 
     if !stdout.is_empty() {
         // Keep the tail: the official truncation/spill notice is appended at
         // the end and must not be cut away by the display bound.
-        wrap_tail_block(lines, &stdout, width, 4_000, Color::White);
+        wrap_tail_block(lines, &stdout, width, 4_000, colors.fg, theme);
     }
     let stderr = record.stderr();
     if !stderr.is_empty() {
         lines.push(Line::from(Span::styled(
             "[stderr]",
-            Style::default().fg(Color::Red),
+            Style::default().fg(colors.error),
         )));
-        wrap_tail_block(lines, &stderr, width, 4_000, Color::Red);
+        wrap_tail_block(lines, &stderr, width, 4_000, colors.error, theme);
     }
     if let Some(error) = &record.inject_error {
         lines.push(Line::from(Span::styled(
             format!("（输出未注入会话：{error}）"),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(colors.warning),
         )));
     }
 }
@@ -1187,7 +1233,10 @@ fn draw_jobs(frame: &mut Frame, app: &mut App, area: Rect) {
             app.jobs.active_count()
         )
     };
-    let block = Block::default().borders(Borders::ALL).title(title);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(app.theme.border_style())
+        .title(title);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let width = inner.width.max(1) as usize;
@@ -1206,7 +1255,7 @@ fn draw_jobs(frame: &mut Frame, app: &mut App, area: Rect) {
         };
         lines.push(Line::from(Span::styled(
             message,
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(app.theme.colors().muted),
         )));
     } else {
         push_job_list(&mut lines, app);
@@ -1248,16 +1297,16 @@ fn push_job_list(lines: &mut Vec<Line<'static>>, app: &App) {
         let mut spans = vec![
             Span::styled(
                 format!("{marker} [{}] ", job.kind),
-                Style::default().fg(Color::Magenta),
+                Style::default().fg(app.theme.colors().accent),
             ),
             Span::raw(format!("{} · ", truncate(&job.label, 96))),
             Span::styled(
                 job.status_line(),
-                Style::default().fg(job_color(job.status())),
+                Style::default().fg(job_color(job.status(), app.theme)),
             ),
             Span::styled(
                 format!(" · {}{}", job.id, call),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(app.theme.colors().muted),
             ),
         ];
         if let Some(monitor) = app.monitor.monitor_for_job(&job.id) {
@@ -1281,9 +1330,9 @@ fn push_job_list(lines: &mut Vec<Line<'static>>, app: &App) {
                     delivery
                 ),
                 Style::default().fg(if monitor.exhausted {
-                    Color::Yellow
+                    app.theme.colors().warning
                 } else {
-                    Color::Cyan
+                    app.theme.colors().accent
                 }),
             ));
         }
@@ -1295,19 +1344,19 @@ fn push_job_detail(lines: &mut Vec<Line<'static>>, app: &App, width: usize) {
     let Some(job) = app.jobs.detail_job() else {
         lines.push(Line::from(Span::styled(
             "（任务已从官方列表移除；按 Esc 返回）",
-            Style::default().fg(Color::Red),
+            Style::default().fg(app.theme.colors().error),
         )));
         return;
     };
     lines.push(Line::from(vec![
         Span::styled(
             format!("{} {}", job.kind, job.label),
-            Style::default().fg(Color::Magenta),
+            Style::default().fg(app.theme.colors().accent),
         ),
         Span::raw(" · "),
         Span::styled(
             job.status_line(),
-            Style::default().fg(job_color(job.status())),
+            Style::default().fg(job_color(job.status(), app.theme)),
         ),
     ]));
     lines.push(Line::from(Span::styled(
@@ -1315,18 +1364,18 @@ fn push_job_detail(lines: &mut Vec<Line<'static>>, app: &App, width: usize) {
             "输出 ring：已写 {} 字节 · 最早保留 {} 字节（只读跟随，不影响模型的 job_output 游标）",
             job.output.total, job.output.earliest
         ),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(app.theme.colors().muted),
     )));
     if let Some(call) = &job.tool_call {
         lines.push(Line::from(Span::styled(
             format!("所属调用：{}（根调用 {}）", call.call_id, call.root_call_id),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(app.theme.colors().muted),
         )));
     }
     for path in &job.output.spill_paths {
         lines.push(Line::from(Span::styled(
             format!("完整输出：{path}"),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(app.theme.colors().warning),
         )));
     }
     if let Some(monitor) = app.monitor.monitor_for_job(&job.id) {
@@ -1336,25 +1385,25 @@ fn push_job_detail(lines: &mut Vec<Line<'static>>, app: &App, width: usize) {
                 monitor.mode.label(),
                 monitor.stream.label()
             ),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(app.theme.colors().accent),
         )));
         lines.push(Line::from(Span::styled(
             monitor.budget_label(),
             Style::default().fg(if monitor.exhausted {
-                Color::Yellow
+                app.theme.colors().warning
             } else {
-                Color::DarkGray
+                app.theme.colors().muted
             }),
         )));
         lines.push(Line::from(Span::styled(
             format!("{} · {}", monitor.identity_label(), monitor.offset_label()),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(app.theme.colors().muted),
         )));
     }
     if app.following.contains(&job.id) {
         lines.push(Line::from(Span::styled(
             "正在读取输出…",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(app.theme.colors().warning),
         )));
     }
     match app.jobs.output(&job.id) {
@@ -1362,29 +1411,36 @@ fn push_job_detail(lines: &mut Vec<Line<'static>>, app: &App, width: usize) {
             if buffer.head_truncated {
                 lines.push(Line::from(Span::styled(
                     "（显示端已裁剪较早的本地缓存；完整输出以官方 ring/spill 为准）",
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(app.theme.colors().warning),
                 )));
             }
             if buffer.lossy {
                 lines.push(Line::from(Span::styled(
                     "（ring 已裁剪：更早字节不可读，不能用后续内容冒充连续输出）",
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(app.theme.colors().warning),
                 )));
             }
             if buffer.text.is_empty() {
                 lines.push(Line::from(Span::styled(
                     "（暂无输出）",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(app.theme.colors().muted),
                 )));
             } else {
                 // The buffer keeps its tail; render the tail as well, never the
                 // head of a tail buffer.
-                wrap_tail_block(lines, &buffer.text, width, 200_000, Color::Gray);
+                wrap_tail_block(
+                    lines,
+                    &buffer.text,
+                    width,
+                    200_000,
+                    app.theme.colors().fg,
+                    app.theme,
+                );
             }
         }
         None => lines.push(Line::from(Span::styled(
             "（尚未读取输出；按 r 读取）",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(app.theme.colors().muted),
         ))),
     }
 }
@@ -1395,18 +1451,18 @@ fn push_monitor_form(lines: &mut Vec<Line<'static>>, app: &App, width: usize) {
     };
     lines.push(Line::from(Span::styled(
         format!("附着监听 · {}", form.job_label),
-        Style::default().fg(Color::Cyan),
+        Style::default().fg(app.theme.colors().accent),
     )));
     lines.push(Line::from(Span::styled(
         format!("任务 {}", form.job_id),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(app.theme.colors().muted),
     )));
     lines.push(Line::from(Span::styled(
         format!(
             "已有 {} 字节未读；先选范围：n 只看新输出（跳过这些字节） / a 从开头（重放 retained head）",
             form.unread_bytes
         ),
-        Style::default().fg(Color::Yellow),
+        Style::default().fg(app.theme.colors().warning),
     )));
     lines.push(Line::from(Span::styled(
         if form.from_earliest {
@@ -1414,7 +1470,7 @@ fn push_monitor_form(lines: &mut Vec<Line<'static>>, app: &App, width: usize) {
         } else {
             "当前范围：只看新输出；附着后不会重放已有字节。"
         },
-        Style::default().fg(Color::Gray),
+        Style::default().fg(app.theme.colors().fg),
     )));
     lines.push(Line::from(Span::styled(
         if form.quiet {
@@ -1422,7 +1478,7 @@ fn push_monitor_form(lines: &mut Vec<Line<'static>>, app: &App, width: usize) {
         } else {
             "模式：notify（官方 followup；唤醒 Agent，会产生模型调用和费用）"
         },
-        Style::default().fg(if form.quiet { Color::DarkGray } else { Color::Yellow }),
+        Style::default().fg(if form.quiet { app.theme.colors().muted } else { app.theme.colors().warning }),
     )));
     let filter = if form.filter.is_empty() {
         "过滤：无（每行都是候选）".to_string()
@@ -1447,14 +1503,19 @@ fn push_monitor_form(lines: &mut Vec<Line<'static>>, app: &App, width: usize) {
             }
         )
     };
-    push_wrapped(lines, &filter, width, Style::default().fg(Color::Gray));
+    push_wrapped(
+        lines,
+        &filter,
+        width,
+        Style::default().fg(app.theme.colors().fg),
+    );
     lines.push(Line::from(Span::styled(
         "t 模式 · f 编辑过滤 · r 字面/正则 · Enter 创建 · Esc 取消",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(app.theme.colors().muted),
     )));
     lines.push(Line::from(Span::styled(
         "提示：同一任务已有活动监听时返回现有监听；停止监听不会停止任务。",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(app.theme.colors().muted),
     )));
 }
 
@@ -1462,22 +1523,22 @@ fn push_monitor_view(lines: &mut Vec<Line<'static>>, app: &App, width: usize) {
     let Some(monitor) = app.monitor.selected_monitor() else {
         lines.push(Line::from(Span::styled(
             "（暂无监听。在任务列表选中任务后按 m 创建。）",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(app.theme.colors().muted),
         )));
         return;
     };
     lines.push(Line::from(vec![
         Span::styled(
             format!("监听 {}", monitor.job_id),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(app.theme.colors().accent),
         ),
         Span::raw(" · "),
         Span::styled(
             monitor.stream.label(),
             Style::default().fg(if monitor.stream.is_terminal() {
-                Color::Yellow
+                app.theme.colors().warning
             } else {
-                Color::Green
+                app.theme.colors().success
             }),
         ),
     ]));
@@ -1485,13 +1546,13 @@ fn push_monitor_view(lines: &mut Vec<Line<'static>>, app: &App, width: usize) {
         lines,
         &monitor.identity_label(),
         width,
-        Style::default().fg(Color::Yellow),
+        Style::default().fg(app.theme.colors().warning),
     );
     push_wrapped(
         lines,
         &monitor.mode.label().to_string(),
         width,
-        Style::default().fg(Color::Gray),
+        Style::default().fg(app.theme.colors().fg),
     );
     push_wrapped(
         lines,
@@ -1501,7 +1562,7 @@ fn push_monitor_view(lines: &mut Vec<Line<'static>>, app: &App, width: usize) {
             monitor.offset_label()
         ),
         width,
-        Style::default().fg(Color::Gray),
+        Style::default().fg(app.theme.colors().fg),
     );
     if matches!(monitor.from, nano_monitor::MonitorFrom::Earliest) && monitor.initial_offset > 0 {
         lines.push(Line::from(Span::styled(
@@ -1509,7 +1570,7 @@ fn push_monitor_view(lines: &mut Vec<Line<'static>>, app: &App, width: usize) {
                 "retained head 从字节 {} 开始；更早字节已被 ring 裁剪（已裁剪）。",
                 monitor.initial_offset
             ),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(app.theme.colors().warning),
         )));
     }
     let filter = monitor
@@ -1521,12 +1582,12 @@ fn push_monitor_view(lines: &mut Vec<Line<'static>>, app: &App, width: usize) {
         lines,
         &format!("合并窗口 {} ms · 过滤：{}", monitor.merge_window_ms, filter),
         width,
-        Style::default().fg(Color::Gray),
+        Style::default().fg(app.theme.colors().fg),
     );
     let budget_color = if monitor.exhausted {
-        Color::Yellow
+        app.theme.colors().warning
     } else {
-        Color::Gray
+        app.theme.colors().fg
     };
     push_wrapped(
         lines,
@@ -1541,19 +1602,19 @@ fn push_monitor_view(lines: &mut Vec<Line<'static>>, app: &App, width: usize) {
             } else {
                 "预算已用尽：普通行投递已停止，计数保留；按 b 显式重置后恢复。"
             },
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(app.theme.colors().warning),
         )));
     }
     if monitor.stopped_by_user {
         lines.push(Line::from(Span::styled(
             "用户已停止监听；被观察任务未受影响。",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(app.theme.colors().warning),
         )));
     }
     if monitor.lossy {
         lines.push(Line::from(Span::styled(
             "已裁剪：监听的请求位置早于官方 ring 保留范围，更早字节不可读。",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(app.theme.colors().warning),
         )));
     }
     if monitor.gaps > 0 {
@@ -1562,7 +1623,7 @@ fn push_monitor_view(lines: &mut Vec<Line<'static>>, app: &App, width: usize) {
                 "输出缺口 {} 次：更早字节不可读，监听不会把缺口前后拼成假连续文本。",
                 monitor.gaps
             ),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(app.theme.colors().warning),
         )));
     }
     if let Some(detail) = &monitor.stream_detail {
@@ -1570,7 +1631,7 @@ fn push_monitor_view(lines: &mut Vec<Line<'static>>, app: &App, width: usize) {
             lines,
             &format!("流结束原因：{detail}"),
             width,
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(app.theme.colors().muted),
         );
     }
     if let Some(error) = &monitor.last_error {
@@ -1578,26 +1639,26 @@ fn push_monitor_view(lines: &mut Vec<Line<'static>>, app: &App, width: usize) {
             lines,
             &format!("最近错误：{error}"),
             width,
-            Style::default().fg(Color::Red),
+            Style::default().fg(app.theme.colors().error),
         );
     }
     lines.push(Line::from(Span::styled(
         "投递回执：submitted/inserted/claimed 都不证明模型收到；只有 durable user/message 是 accepted。",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(app.theme.colors().muted),
     )));
     if monitor.deliveries.is_empty() {
         lines.push(Line::from(Span::styled(
             "（还没有通知投递）",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(app.theme.colors().muted),
         )));
     } else {
         for delivery in monitor.deliveries.iter().rev().take(10) {
             let color = if delivery.state.is_proven() {
-                Color::Green
+                app.theme.colors().success
             } else if delivery.state.is_failure() {
-                Color::Red
+                app.theme.colors().error
             } else {
-                Color::Yellow
+                app.theme.colors().warning
             };
             lines.push(Line::from(Span::styled(
                 format!(
@@ -1615,25 +1676,26 @@ fn push_monitor_view(lines: &mut Vec<Line<'static>>, app: &App, width: usize) {
                     lines,
                     &format!("  {detail}"),
                     width,
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(app.theme.colors().muted),
                 );
             }
         }
     }
     lines.push(Line::from(Span::styled(
         "s 停止监听（不停止任务） · b 重置预算 · r 刷新 · Esc 返回",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(app.theme.colors().muted),
     )));
 }
 
-fn job_color(status: JobStatus) -> Color {
+fn job_color(status: JobStatus, theme: Theme) -> Color {
+    let colors = theme.colors();
     match status {
-        JobStatus::Running => Color::Yellow,
-        JobStatus::Stopping => Color::Yellow,
-        JobStatus::Completed => Color::Green,
-        JobStatus::Killed => Color::Red,
-        JobStatus::Failed => Color::Red,
-        JobStatus::Unknown => Color::Magenta,
+        JobStatus::Running => colors.warning,
+        JobStatus::Stopping => colors.warning,
+        JobStatus::Completed => colors.success,
+        JobStatus::Killed => colors.error,
+        JobStatus::Failed => colors.error,
+        JobStatus::Unknown => colors.muted,
     }
 }
 
@@ -1718,16 +1780,19 @@ fn draw_decision(frame: &mut Frame, app: &mut App, area: Rect) {
         None => false,
     };
     let (title, lines, hits) = match app.decisions.top() {
-        Some(DecisionTop::Approval(card)) => render_approval(card, area),
-        Some(DecisionTop::Question(card)) => render_question(card, area),
+        Some(DecisionTop::Approval(card)) => render_approval(card, area, app.theme),
+        Some(DecisionTop::Question(card)) => render_question(card, area, app.theme),
         None => (String::new(), Vec::new(), Vec::new()),
     };
     let block = if flat {
         Block::default()
             .borders(Borders::TOP)
-            .border_style(Style::default().fg(Color::Cyan))
+            .border_style(Style::default().fg(app.theme.colors().accent))
     } else {
-        Block::default().borders(Borders::ALL).title(title)
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(app.theme.border_style())
+            .title(title)
     };
     let inner = block.inner(area);
     let visible: Vec<Line<'static>> = lines.iter().take(inner.height as usize).cloned().collect();
@@ -1756,6 +1821,7 @@ fn map_decision_hits(
 fn render_approval(
     card: &nano_decisions::ApprovalCard,
     area: Rect,
+    theme: Theme,
 ) -> (String, Vec<Line<'static>>, Vec<Option<DecisionClick>>) {
     let width = area.width.max(1) as usize;
     let title = String::new();
@@ -1769,7 +1835,7 @@ fn render_approval(
     lines.push(Line::from(Span::styled(
         question,
         Style::default()
-            .fg(Color::White)
+            .fg(theme.colors().fg)
             .add_modifier(Modifier::BOLD),
     )));
     hits.push(None);
@@ -1780,7 +1846,7 @@ fn render_approval(
     for row in display_rows(reason, width) {
         lines.push(Line::from(Span::styled(
             row,
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.colors().muted),
         )));
         hits.push(None);
     }
@@ -1802,31 +1868,45 @@ fn render_approval(
         for row in command_rows.iter().skip(start).take(available) {
             lines.push(Line::from(Span::styled(
                 format!("  {row}"),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.colors().muted),
             )));
             hits.push(None);
         }
     } else {
         lines.push(Line::from(Span::styled(
             "官方请求没有可关联的命令；不猜测命令",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.colors().muted),
         )));
         hits.push(None);
     }
     let allow_focused = card.focus() == ApprovalFocus::Allow;
     let reject_focused = card.focus() == ApprovalFocus::Reject;
-    lines.push(option_line(allow_focused, "1.", "允许一次", None, false));
+    lines.push(option_line(
+        allow_focused,
+        "1.",
+        "允许一次",
+        None,
+        false,
+        theme,
+    ));
     hits.push(Some(DecisionClick::ApprovalAllow));
     lines.push(Line::from(Span::styled(
         "     仅本次；不更改后续权限",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.colors().muted),
     )));
     hits.push(Some(DecisionClick::ApprovalAllow));
-    lines.push(option_line(reject_focused, "2.", "拒绝", None, false));
+    lines.push(option_line(
+        reject_focused,
+        "2.",
+        "拒绝",
+        None,
+        false,
+        theme,
+    ));
     hits.push(Some(DecisionClick::ApprovalReject));
     lines.push(Line::from(Span::styled(
         "     不执行本次操作",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.colors().muted),
     )));
     hits.push(Some(DecisionClick::ApprovalReject));
     let mut footer = String::from("↑↓ 切换 · Enter 确认 · Esc 取消");
@@ -1835,19 +1915,19 @@ fn render_approval(
     }
     lines.push(Line::from(Span::styled(
         footer,
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.colors().muted),
     )));
     hits.push(None);
     if let ApprovalCardState::Settled(outcome) = card.state() {
         lines.push(Line::from(Span::styled(
             outcome.label().to_string(),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.colors().muted),
         )));
         hits.push(None);
     } else if let Some(notice) = card.notice() {
         lines.push(Line::from(Span::styled(
             notice.to_string(),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.colors().warning),
         )));
         hits.push(None);
     }
@@ -1893,13 +1973,14 @@ fn submit_footer(card: &QuestionCard) -> String {
 fn render_question(
     card: &QuestionCard,
     area: Rect,
+    theme: Theme,
 ) -> (String, Vec<Line<'static>>, Vec<Option<DecisionClick>>) {
     let width = area.width.max(1) as usize;
     if card.state() == QuestionCardState::ReadOnly {
-        return render_read_only(card, area);
+        return render_read_only(card, area, theme);
     }
     if card.plan_review().is_some() {
-        return render_plan_review(card, area);
+        return render_plan_review(card, area, theme);
     }
     let title = if card.timed().continued {
         " 问卷 · 可继续回答 ".to_string()
@@ -1927,10 +2008,10 @@ fn render_question(
                 format!("{}{} ", if answered { "[x]" } else { "[ ]" }, label),
                 if current {
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(theme.colors().accent)
                         .add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(Color::DarkGray)
+                    Style::default().fg(theme.colors().muted)
                 },
             ));
         }
@@ -1946,10 +2027,10 @@ fn render_question(
             ),
             if card.page() == card.questions().len() {
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(theme.colors().accent)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(theme.colors().muted)
             },
         ));
         lines.push(Line::from(tabs));
@@ -1974,7 +2055,7 @@ fn render_question(
                     } else {
                         "[x] "
                     },
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.colors().muted),
                 ),
                 Span::styled(
                     question
@@ -1983,14 +2064,17 @@ fn render_question(
                         .unwrap_or_else(|| question.id.clone()),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(format!("  {text}"), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("  {text}"),
+                    Style::default().fg(theme.colors().muted),
+                ),
             ]));
             hits.push(Some(DecisionClick::QuestionOption(index)));
         }
         for row in display_rows(&submit_footer(card), width) {
             lines.push(Line::from(Span::styled(
                 row,
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.colors().muted),
             )));
             hits.push(Some(DecisionClick::QuestionSubmit));
         }
@@ -2016,6 +2100,7 @@ fn render_question(
                     None
                 },
                 selected,
+                theme,
             ));
             hits.push(Some(DecisionClick::QuestionOption(index)));
             if let Some(description) = &option.description {
@@ -2026,7 +2111,7 @@ fn render_question(
                 }
                 lines.push(Line::from(Span::styled(
                     format!("     {row}"),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.colors().muted),
                 )));
                 hits.push(Some(DecisionClick::QuestionOption(index)));
             }
@@ -2036,23 +2121,23 @@ fn render_question(
         lines.push(Line::from(vec![
             Span::styled(
                 format!("{} ", if other_focused { ">" } else { " " }),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(theme.colors().accent),
             ),
             Span::styled(
                 format!("{}. ", question.options.len() + 1),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.colors().muted),
             ),
             Span::raw("其他："),
             Span::styled(
                 format!("{}{caret}", draft.custom),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme.colors().warning),
             ),
         ]));
         hits.push(Some(DecisionClick::QuestionOther));
         for row in display_rows(&question_footer(card, question), width) {
             lines.push(Line::from(Span::styled(
                 row,
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.colors().muted),
             )));
             hits.push(Some(DecisionClick::QuestionSkip));
         }
@@ -2060,14 +2145,14 @@ fn render_question(
     if let Some(error) = card.error() {
         lines.push(Line::from(Span::styled(
             error.to_string(),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.colors().error),
         )));
         hits.push(None);
     }
     if let Some(notice) = card.notice() {
         lines.push(Line::from(Span::styled(
             notice.to_string(),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.colors().muted),
         )));
         hits.push(None);
     }
@@ -2077,6 +2162,7 @@ fn render_question(
 fn render_plan_review(
     card: &QuestionCard,
     area: Rect,
+    theme: Theme,
 ) -> (String, Vec<Line<'static>>, Vec<Option<DecisionClick>>) {
     let width = area.width.saturating_sub(4) as usize;
     let question = &card.questions()[0];
@@ -2100,7 +2186,7 @@ fn render_plan_review(
     hits.push(Some(DecisionClick::PlanView));
     lines.push(Line::from(Span::styled(
         format!("批准选项：{}", intent.approve),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.colors().muted),
     )));
     hits.push(None);
     if card.plan_expanded() {
@@ -2109,7 +2195,7 @@ fn render_plan_review(
             for row in rows.iter().skip(card.detail_offset()).take(10) {
                 lines.push(Line::from(Span::styled(
                     row.clone(),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.colors().muted),
                 )));
                 hits.push(None);
             }
@@ -2128,25 +2214,40 @@ fn render_plan_review(
         },
         None,
         false,
+        theme,
     ));
     hits.push(Some(DecisionClick::PlanView));
-    lines.push(option_line(changes_focused, "2.", "请求修改", None, false));
+    lines.push(option_line(
+        changes_focused,
+        "2.",
+        "请求修改",
+        None,
+        false,
+        theme,
+    ));
     hits.push(Some(DecisionClick::PlanRequestChanges));
     lines.push(Line::from(Span::styled(
         "     取消本次等待，回到输入框说明修改（不提交批准）",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.colors().muted),
     )));
     hits.push(Some(DecisionClick::PlanRequestChanges));
-    lines.push(option_line(approve_focused, "3.", "批准", None, false));
+    lines.push(option_line(
+        approve_focused,
+        "3.",
+        "批准",
+        None,
+        false,
+        theme,
+    ));
     hits.push(Some(DecisionClick::PlanApprove));
     lines.push(Line::from(Span::styled(
         "     返回官方批准标签",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.colors().muted),
     )));
     hits.push(Some(DecisionClick::PlanApprove));
     lines.push(Line::from(Span::styled(
         "↑↓ 选择 · Enter 确认 · Esc 取消（不会批准）",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.colors().muted),
     )));
     hits.push(None);
     (title, lines, hits)
@@ -2155,6 +2256,7 @@ fn render_plan_review(
 fn render_read_only(
     card: &QuestionCard,
     area: Rect,
+    theme: Theme,
 ) -> (String, Vec<Line<'static>>, Vec<Option<DecisionClick>>) {
     let width = area.width.saturating_sub(4) as usize;
     let title = " 问卷回看 · 只读 ".to_string();
@@ -2174,7 +2276,7 @@ fn render_read_only(
             for row in display_rows(&question.question, width) {
                 lines.push(Line::from(Span::styled(
                     row,
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.colors().muted),
                 )));
                 hits.push(None);
             }
@@ -2197,14 +2299,14 @@ fn render_read_only(
         for row in display_rows(&format!("  {text}"), width) {
             lines.push(Line::from(Span::styled(
                 row,
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.colors().muted),
             )));
             hits.push(None);
         }
     }
     lines.push(Line::from(Span::styled(
         "Esc 关闭",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.colors().muted),
     )));
     hits.push(Some(DecisionClick::QuestionSubmit));
     (title, lines, hits)
@@ -2216,32 +2318,34 @@ fn option_line(
     label: &str,
     checkbox: Option<bool>,
     selected: bool,
+    theme: Theme,
 ) -> Line<'static> {
+    let colors = theme.colors();
     let mut spans = vec![
         Span::styled(
             format!("{} ", if focused { ">" } else { " " }),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(colors.accent),
         ),
-        Span::styled(format!("{number} "), Style::default().fg(Color::DarkGray)),
+        Span::styled(format!("{number} "), Style::default().fg(colors.muted)),
     ];
     if let Some(checked) = checkbox {
         spans.push(Span::styled(
             format!("{} ", if checked { "[x]" } else { "[ ]" }),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(colors.muted),
         ));
     }
     let label_style = if focused {
         Style::default()
-            .fg(Color::Cyan)
+            .fg(colors.accent)
             .add_modifier(Modifier::BOLD)
     } else if selected {
-        Style::default().fg(Color::Green)
+        Style::default().fg(colors.success)
     } else {
         Style::default()
     };
     spans.push(Span::styled(label.to_string(), label_style));
     if checkbox.is_none() && selected {
-        spans.push(Span::styled(" ✓", Style::default().fg(Color::Green)));
+        spans.push(Span::styled(" ✓", Style::default().fg(colors.success)));
     }
     Line::from(spans)
 }
@@ -2321,7 +2425,10 @@ fn draw_queue(frame: &mut Frame, app: &App, area: Rect) {
         preview,
         total
     );
-    let block = Block::default().borders(Borders::TOP).title(title);
+    let block = Block::default()
+        .borders(Borders::TOP)
+        .border_style(app.theme.border_style())
+        .title(title);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let items: Vec<_> = app.model.inbox().iter().collect();
@@ -2340,7 +2447,9 @@ fn draw_queue(frame: &mut Frame, app: &App, area: Rect) {
         let marker = if selected { "▶" } else { " " };
         let text = truncate(&item.text.replace('\n', " "), 120);
         let style = if selected {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
+            Style::default()
+                .fg(app.theme.colors().fg)
+                .bg(app.theme.colors().selected_bg)
         } else {
             Style::default()
         };
@@ -2356,17 +2465,17 @@ fn input_notice(app: &App) -> Option<(String, Color)> {
     if app.shell_confirm.is_some() {
         Some((
             "人工命令（用户权限，不是 Agent 授权）· Enter 执行 · Esc 取消".to_string(),
-            Color::Yellow,
+            app.theme.colors().warning,
         ))
     } else if app.picker.is_some() {
         Some((
             "附加文件 · 输入路径 · Enter 确认 · Esc 取消".to_string(),
-            Color::DarkGray,
+            app.theme.colors().muted,
         ))
     } else if let Some(message_id) = app.editing_queue() {
         Some((
             format!("编辑队列项 {message_id} · Enter 应用 · Esc 取消"),
-            Color::DarkGray,
+            app.theme.colors().muted,
         ))
     } else if app.subagent_active() {
         let gate = app
@@ -2376,7 +2485,10 @@ fn input_notice(app: &App) -> Option<(String, Color)> {
         if gate.can_send() {
             None
         } else {
-            Some((format!("子代理 · {}", gate.hint()), Color::Yellow))
+            Some((
+                format!("子代理 · {}", gate.hint()),
+                app.theme.colors().warning,
+            ))
         }
     } else {
         None
@@ -2399,22 +2511,23 @@ fn input_height(app: &App, width: u16) -> u16 {
 
 /// The top and bottom composer lines. The left segment shows context
 /// occupancy; the rest stays the ordinary border.
-fn draw_input_border(frame: &mut Frame, row: Rect, occupancy: Occupancy) {
+fn draw_input_border(frame: &mut Frame, row: Rect, occupancy: Occupancy, theme: Theme) {
+    let colors = theme.colors();
     let width = row.width as usize;
     let (segment, style) = match occupancy {
         Occupancy::Known { projected, window } if window > 0 => {
             let percent = projected.saturating_mul(100) / window;
             let color = if percent >= 95 {
-                Color::Red
+                colors.error
             } else if percent >= 80 {
-                Color::Yellow
+                colors.warning
             } else {
-                Color::Cyan
+                colors.accent
             };
             let cells = ((width as u64).saturating_mul(projected.min(window)) / window) as usize;
             (cells.min(width), Style::default().fg(color))
         }
-        _ => (0, Style::default().fg(Color::DarkGray)),
+        _ => (0, Style::default().fg(colors.rule)),
     };
     let mut spans = Vec::new();
     if segment > 0 {
@@ -2423,7 +2536,7 @@ fn draw_input_border(frame: &mut Frame, row: Rect, occupancy: Occupancy) {
     if segment < width {
         spans.push(Span::styled(
             "─".repeat(width - segment),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(colors.rule),
         ));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), row);
@@ -2449,7 +2562,7 @@ fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
     };
     app.send_area = Rect::default();
     if area.height >= 2 {
-        draw_input_border(frame, Rect { height: 1, ..area }, occupancy);
+        draw_input_border(frame, Rect { height: 1, ..area }, occupancy, app.theme);
         draw_input_border(
             frame,
             Rect {
@@ -2458,6 +2571,7 @@ fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
                 ..area
             },
             occupancy,
+            app.theme,
         );
     }
     let inner = Rect::new(
@@ -2480,7 +2594,7 @@ fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
         let prefix = "路径：";
         let text = format!("{prefix}{}", picker.path);
         lines.push(Line::from(vec![
-            Span::styled(prefix, muted_style()),
+            Span::styled(prefix, muted_style(app.theme)),
             Span::raw(picker.path.clone()),
         ]));
         cursor = Some((lines.len() - 1, text.chars().map(display_width).sum()));
@@ -2504,8 +2618,8 @@ fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
                 };
                 let placeholder = truncate(&placeholder, width.saturating_sub(3));
                 lines.push(Line::from(vec![
-                    Span::styled("> ", Style::default().fg(Color::Cyan)),
-                    Span::styled(placeholder, muted_style()),
+                    Span::styled("> ", Style::default().fg(app.theme.colors().accent)),
+                    Span::styled(placeholder, muted_style(app.theme)),
                 ]));
                 cursor = Some((start, 2));
             } else {
@@ -2513,7 +2627,7 @@ fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
                 for (index, text) in input_lines(app, text_width).into_iter().enumerate() {
                     let prefix = if index == 0 { "> " } else { "  " };
                     lines.push(Line::from(vec![
-                        Span::styled(prefix, Style::default().fg(Color::Cyan)),
+                        Span::styled(prefix, Style::default().fg(app.theme.colors().accent)),
                         Span::raw(text),
                     ]));
                 }
@@ -2522,11 +2636,11 @@ fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
         } else if draft.trim().is_empty() {
             lines.push(Line::from(Span::styled(
                 "只读记录 · 没有可用的输入框",
-                muted_style(),
+                muted_style(app.theme),
             )));
         } else {
             for text in input_lines(app, width) {
-                lines.push(Line::from(Span::styled(text, muted_style())));
+                lines.push(Line::from(Span::styled(text, muted_style(app.theme))));
             }
         }
     }
@@ -2545,8 +2659,10 @@ fn draw_input(frame: &mut Frame, app: &mut App, area: Rect) {
                 let used = line.spans.iter().map(|span| span.width()).sum::<usize>();
                 if used < width {
                     line.spans.push(Span::raw(" ".repeat(width - used - 1)));
-                    line.spans
-                        .push(Span::styled("↑", Style::default().fg(Color::Cyan)));
+                    line.spans.push(Span::styled(
+                        "↑",
+                        Style::default().fg(app.theme.colors().accent),
+                    ));
                     app.send_area = Rect::new(
                         inner.x.saturating_add(width as u16 - 1),
                         inner.y.saturating_add(visible_row as u16),
@@ -2592,16 +2708,16 @@ fn attachment_lines(app: &App) -> Vec<(String, Color)> {
     let mut lines = Vec::new();
     for card in cards.iter().take(3) {
         let color = match &card.state {
-            AttachmentState::Ready => Color::Green,
-            AttachmentState::Uploading { .. } => Color::Yellow,
-            AttachmentState::Failed(_) | AttachmentState::Unknown(_) => Color::Red,
+            AttachmentState::Ready => app.theme.colors().success,
+            AttachmentState::Uploading { .. } => app.theme.colors().warning,
+            AttachmentState::Failed(_) | AttachmentState::Unknown(_) => app.theme.colors().error,
         };
         lines.push((format!("  {}", card.label()), color));
     }
     if cards.len() > 3 {
         lines.push((
             format!("  … 还有 {} 个附件", cards.len() - 3),
-            Color::DarkGray,
+            app.theme.colors().muted,
         ));
     }
     lines
@@ -2613,7 +2729,10 @@ fn draw_completion(frame: &mut Frame, app: &App, area: Rect) {
         " 文件补全（{} 项）· ↑↓ 选择 · Enter/Tab 插入 · Esc 关闭 ",
         app.completion.candidates().len()
     );
-    let block = Block::default().borders(Borders::TOP).title(title);
+    let block = Block::default()
+        .borders(Borders::TOP)
+        .border_style(app.theme.border_style())
+        .title(title);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let mut lines = Vec::new();
@@ -2625,7 +2744,9 @@ fn draw_completion(frame: &mut Frame, app: &App, area: Rect) {
             CandidateKind::File => "",
         };
         let style = if selected {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
+            Style::default()
+                .fg(app.theme.colors().fg)
+                .bg(app.theme.colors().selected_bg)
         } else {
             Style::default()
         };
@@ -2663,12 +2784,14 @@ fn draw_activity(frame: &mut Frame, app: &App, area: Rect) {
         "○"
     };
     let color = match kind {
-        ActivityKind::Running => Color::Cyan,
-        ActivityKind::AwaitingApproval | ActivityKind::AwaitingQuestion => Color::Yellow,
+        ActivityKind::Running => app.theme.colors().accent,
+        ActivityKind::AwaitingApproval | ActivityKind::AwaitingQuestion => {
+            app.theme.colors().warning
+        }
     };
     let spans = vec![
         Span::styled(format!("{glyph} "), Style::default().fg(color)),
-        Span::styled(kind.label(), muted_style()),
+        Span::styled(kind.label(), muted_style(app.theme)),
     ];
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
@@ -2708,15 +2831,15 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect, width: u16) {
     let middle_width = text_width(&middle);
     let pad = width.saturating_sub(left_width + middle_width + right_width);
     let transient_color = if app.error.is_some() {
-        Color::Red
+        app.theme.colors().error
     } else {
-        Color::DarkGray
+        app.theme.colors().muted
     };
     let spans = vec![
-        Span::styled(left, muted_style()),
+        Span::styled(left, muted_style(app.theme)),
         Span::styled(middle, Style::default().fg(transient_color)),
         Span::raw(" ".repeat(pad)),
-        Span::styled(right, muted_style()),
+        Span::styled(right, muted_style(app.theme)),
     ];
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
@@ -2755,7 +2878,7 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
         &mut lines,
         &panel_header(app),
         inner_width,
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(app.theme.colors().muted),
     );
     let mut selected_line = 0;
     if rows.is_empty() {
@@ -2763,7 +2886,7 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
             &mut lines,
             &empty_panel_reason(app),
             inner_width,
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(app.theme.colors().warning),
         );
     } else {
         let mut previous_group: Option<String> = None;
@@ -2773,7 +2896,7 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
                     lines.push(Line::from(Span::styled(
                         group.to_string(),
                         Style::default()
-                            .fg(Color::DarkGray)
+                            .fg(app.theme.colors().muted)
                             .add_modifier(Modifier::BOLD),
                     )));
                     previous_group = Some(group.to_string());
@@ -2783,13 +2906,13 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
             if selected {
                 selected_line = lines.len();
             }
-            lines.push(panel_row_line(row, selected, inner_width));
+            lines.push(panel_row_line(row, selected, inner_width, app.theme));
             if selected {
                 if let Some(detail) = &row.detail {
                     for segment in wrap_segments(&detail.replace('\r', ""), inner_width) {
                         lines.push(Line::from(Span::styled(
                             segment.text,
-                            Style::default().fg(Color::DarkGray),
+                            Style::default().fg(app.theme.colors().muted),
                         )));
                     }
                 }
@@ -2798,19 +2921,23 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     lines.push(Line::from(Span::styled(
         "↑↓ 选择 · Enter 确认 · Esc 返回 · 输入筛选",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(app.theme.colors().muted),
     )));
     let height = (lines.len() as u16 + 2)
         .min(area.height.saturating_sub(2))
         .max(3);
     let rect = centered(area, width, height);
     frame.render_widget(Clear, rect);
+    frame.buffer_mut().set_style(rect, app.theme.base_style());
     let title = format!(
         " {} · 查询：{} ",
         app.panel.mode().title(),
         app.panel.query()
     );
-    let block = Block::default().borders(Borders::ALL).title(title);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(app.theme.border_style())
+        .title(title);
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
     let viewport = inner.height as usize;
@@ -2896,7 +3023,7 @@ fn empty_panel_reason(app: &App) -> String {
 
 /// One row: marker, label, current flag, and either the inline detail or the
 /// unavailability reason.
-fn panel_row_line(row: &PanelRow, selected: bool, width: usize) -> Line<'static> {
+fn panel_row_line(row: &PanelRow, selected: bool, width: usize, theme: Theme) -> Line<'static> {
     let marker = if selected { "▶ " } else { "  " };
     let current = if row.current { "（当前）" } else { "" };
     let mut text = format!("{marker}{}{current}", row.label);
@@ -2910,9 +3037,11 @@ fn panel_row_line(row: &PanelRow, selected: bool, width: usize) -> Line<'static>
         }
     }
     let style = if row.disabled.is_some() {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(theme.colors().muted)
     } else if selected {
-        Style::default().fg(Color::Black).bg(Color::Cyan)
+        Style::default()
+            .fg(theme.colors().fg)
+            .bg(theme.colors().selected_bg)
     } else {
         Style::default()
     };
@@ -3085,13 +3214,14 @@ fn wrap_tail_block(
     width: usize,
     max_chars: usize,
     color: Color,
+    theme: Theme,
 ) {
     let characters = text.chars().count();
     if characters > max_chars {
         let tail: String = text.chars().skip(characters - max_chars).collect();
         lines.push(Line::from(Span::styled(
             format!("[显示已截断：仅显示最后 {max_chars} 字符；完整输出以官方输出为准]"),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.colors().warning),
         )));
         wrap_block(lines, &tail, width, max_chars, color);
     } else {
@@ -3203,7 +3333,7 @@ mod tests {
     #[test]
     fn the_tail_renderer_keeps_the_newest_text_and_marks_truncation() {
         let mut lines = Vec::new();
-        wrap_tail_block(&mut lines, "abcdef", 10, 3, Color::White);
+        wrap_tail_block(&mut lines, "abcdef", 10, 3, Color::White, Theme::Dark);
         let joined: String = lines
             .iter()
             .flat_map(|line| line.spans.iter().map(|span| span.content.as_ref()))
@@ -3320,7 +3450,7 @@ mod tests {
             ]
         }])));
         let card = QuestionCard::new(None, None, questions, None);
-        let (_, lines, _) = render_question(&card, Rect::new(0, 0, 60, 20));
+        let (_, lines, _) = render_question(&card, Rect::new(0, 0, 60, 20), Theme::Dark);
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -3339,10 +3469,10 @@ mod tests {
 
     #[test]
     fn a_selected_single_option_shows_a_check_mark() {
-        let single = option_line(false, "1.", "A", None, true).to_string();
+        let single = option_line(false, "1.", "A", None, true, Theme::Dark).to_string();
         assert!(single.contains("✓"));
         assert!(!single.contains("[ ]"));
-        let multi = option_line(false, "1.", "A", Some(true), true).to_string();
+        let multi = option_line(false, "1.", "A", Some(true), true, Theme::Dark).to_string();
         assert!(multi.contains("[x]"));
     }
 
@@ -3358,7 +3488,7 @@ mod tests {
             Some(command.into()),
             Instant::now(),
         );
-        let (_, lines, _) = render_approval(&card, Rect::new(0, 0, 60, 30));
+        let (_, lines, _) = render_approval(&card, Rect::new(0, 0, 60, 30), Theme::Dark);
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -3387,7 +3517,7 @@ mod tests {
             questions,
             Some(TimedState::start(30_000, Instant::now())),
         );
-        let (_, lines, _) = render_question(&card, Rect::new(0, 0, 60, 24));
+        let (_, lines, _) = render_question(&card, Rect::new(0, 0, 60, 24), Theme::Dark);
         let text = lines
             .iter()
             .map(ToString::to_string)
@@ -3413,7 +3543,7 @@ mod tests {
             ]
         }])));
         let card = QuestionCard::new(None, None, questions, None);
-        let (_, lines, _) = render_question(&card, Rect::new(0, 0, 60, 24));
+        let (_, lines, _) = render_question(&card, Rect::new(0, 0, 60, 24), Theme::Dark);
         let visible: Vec<String> = lines.iter().take(23).map(ToString::to_string).collect();
         let text = visible.join("\n");
         assert!(text.contains("4. D"), "fourth option stays visible");
@@ -3474,29 +3604,285 @@ mod tests {
     }
 
     #[test]
-    fn the_context_line_uses_cyan_yellow_red_and_a_plain_unknown_border() {
+    fn the_context_line_uses_accent_warning_error_and_a_plain_unknown_border() {
         let mut app = app();
         let colors = border_colors(&mut app);
-        assert!(colors.iter().all(|(_, color)| *color == Color::DarkGray));
+        let rule = app.theme.colors().rule;
+        let accent = app.theme.colors().accent;
+        let warning = app.theme.colors().warning;
+        let error = app.theme.colors().error;
+        assert!(colors.iter().all(|(_, color)| *color == rule));
 
         app.context = Some(meter(50, 100));
         let colors = border_colors(&mut app);
-        let colored = colors
-            .iter()
-            .filter(|(_, color)| *color == Color::Cyan)
-            .count();
+        let colored = colors.iter().filter(|(_, color)| *color == accent).count();
         // 100 columns minus the 2ch margins on each side.
         assert_eq!(colored, 48);
-        assert_eq!(colors[48].1, Color::DarkGray);
+        assert_eq!(colors[48].1, rule);
 
         app.context = Some(meter(80, 100));
         assert!(border_colors(&mut app)
             .iter()
-            .any(|(_, color)| *color == Color::Yellow));
+            .any(|(_, color)| *color == warning));
         app.context = Some(meter(95, 100));
         assert!(border_colors(&mut app)
             .iter()
-            .any(|(_, color)| *color == Color::Red));
+            .any(|(_, color)| *color == error));
+    }
+
+    #[test]
+    fn the_frame_uses_theme_foreground_over_terminal_background() {
+        let mut app = app();
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("draw the frame");
+        let cell = &terminal.backend().buffer()[(0, 15)];
+        assert_eq!(cell.fg, app.theme.colors().fg);
+        assert_eq!(cell.bg, Color::Reset);
+    }
+
+    #[test]
+    fn the_light_theme_uses_the_light_foreground() {
+        let mut app = App::with_theme(
+            crate::cli::Cli::default(),
+            "root".to_string(),
+            false,
+            Theme::Light,
+        );
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("draw the frame");
+        let cell = &terminal.backend().buffer()[(0, 15)];
+        assert_eq!(cell.fg, Theme::Light.colors().fg);
+        assert_ne!(Theme::Light.colors().fg, Theme::Dark.colors().fg);
+    }
+
+    #[test]
+    fn the_approval_first_line_uses_the_theme_foreground() {
+        let card = ApprovalCard::new(
+            "call".into(),
+            "bash".into(),
+            None,
+            Default::default(),
+            None,
+            Some("echo".into()),
+            Instant::now(),
+        );
+        let (_, lines, _) = render_approval(&card, Rect::new(0, 0, 60, 30), Theme::Light);
+        let first = lines.first().expect("approval question");
+        assert_eq!(first.spans[0].style.fg, Some(Theme::Light.colors().fg));
+        assert!(first.spans[0].style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn self_drawn_colors_are_explicit_rgb_over_terminal_background() {
+        let mut app = app();
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("draw the frame");
+        let mut skip = 0usize;
+        for (index, cell) in terminal.backend().buffer().content().iter().enumerate() {
+            let x = index % 100;
+            let y = index / 100;
+            if skip > 0 {
+                // The backend does not receive cells hidden by a preceding
+                // multi-width glyph; their color is not rendered.
+                skip -= 1;
+                continue;
+            }
+            assert!(
+                matches!(cell.fg, Color::Rgb(..)),
+                "foreground must be explicit RGB at ({x},{y}): {cell:?}"
+            );
+            assert_eq!(
+                cell.bg,
+                Color::Reset,
+                "ordinary frame background stays Reset at ({x},{y}): {cell:?}"
+            );
+            skip = cell
+                .symbol()
+                .chars()
+                .next()
+                .map(display_width)
+                .unwrap_or(0)
+                .saturating_sub(1);
+        }
+    }
+
+    #[test]
+    fn theme_roles_are_wired_on_surface_helpers() {
+        for theme in [Theme::Dark, Theme::Light] {
+            let colors = theme.colors();
+            assert_eq!(
+                schedule_style(RowKind::Title, theme).fg,
+                Some(colors.accent)
+            );
+            assert_eq!(schedule_style(RowKind::Dim, theme).fg, Some(colors.muted));
+            assert_eq!(schedule_style(RowKind::Error, theme).fg, Some(colors.error));
+            assert_eq!(
+                schedule_style(RowKind::Notice, theme).fg,
+                Some(colors.warning)
+            );
+            assert_eq!(
+                schedule_style(RowKind::Selected, theme).bg,
+                Some(colors.selected_bg)
+            );
+            assert_eq!(
+                schedule_style(RowKind::SelectedDim, theme).fg,
+                Some(colors.muted)
+            );
+            assert_eq!(
+                schedule_style(RowKind::SelectedDim, theme).bg,
+                Some(colors.selected_bg)
+            );
+            assert_eq!(job_color(JobStatus::Completed, theme), colors.success);
+            assert_eq!(job_color(JobStatus::Failed, theme), colors.error);
+            assert_eq!(job_color(JobStatus::Unknown, theme), colors.muted);
+            assert_eq!(lamp_glyph(Lamp::Completed, true, theme).1, colors.success);
+            assert_eq!(lamp_glyph(Lamp::Warned, true, theme).1, colors.warning);
+            assert_eq!(lamp_glyph(Lamp::Inactive, true, theme).1, colors.muted);
+            let focused = option_line(true, "1.", "A", None, false, theme);
+            assert_eq!(focused.spans[0].style.fg, Some(colors.accent));
+            let selected = option_line(false, "1.", "A", None, true, theme);
+            assert_eq!(
+                selected.spans.last().expect("checkmark").style.fg,
+                Some(colors.success)
+            );
+        }
+    }
+
+    #[test]
+    fn the_light_theme_renders_60_columns_with_theme_roles() {
+        let mut app = App::with_theme(
+            crate::cli::Cli::default(),
+            "root".to_string(),
+            false,
+            Theme::Light,
+        );
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("wide frame");
+        terminal
+            .resize(Rect::new(0, 0, 60, 20))
+            .expect("resize to 60 columns");
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("60-column frame");
+        let mut skip = 0usize;
+        let mut saw_rule = false;
+        for (index, cell) in terminal.backend().buffer().content().iter().enumerate() {
+            let x = index % 60;
+            let y = index / 60;
+            if skip > 0 {
+                skip -= 1;
+                continue;
+            }
+            assert!(
+                matches!(cell.fg, Color::Rgb(..)),
+                "foreground must be explicit RGB at ({x},{y}): {cell:?}"
+            );
+            assert_eq!(
+                cell.bg,
+                Color::Reset,
+                "ordinary frame background stays Reset at ({x},{y}): {cell:?}"
+            );
+            if cell.symbol() == "─" && cell.fg == Theme::Light.colors().rule {
+                saw_rule = true;
+            }
+            skip = cell
+                .symbol()
+                .chars()
+                .next()
+                .map(display_width)
+                .unwrap_or(0)
+                .saturating_sub(1);
+        }
+        assert!(saw_rule, "composer border uses the light rule role");
+    }
+
+    #[test]
+    fn the_panel_overlay_and_close_keep_explicit_theme_colors() {
+        let mut app = app();
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        let mut draw_once = |app: &mut App| {
+            let backend = TestBackend::new(100, 30);
+            let mut terminal = Terminal::new(backend).expect("test terminal");
+            terminal
+                .draw(|frame| draw(frame, app))
+                .expect("draw the frame");
+            terminal.backend().buffer().clone()
+        };
+        assert!(app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL)));
+        let open = draw_once(&mut app);
+        let allowed_bg = [
+            Color::Reset,
+            app.theme.colors().selected_bg,
+            app.theme.colors().hover_bg,
+        ];
+        let mut skip = 0usize;
+        for cell in open.content() {
+            if skip > 0 {
+                skip -= 1;
+                continue;
+            }
+            assert!(
+                matches!(cell.fg, Color::Rgb(..)),
+                "overlay foreground must be explicit RGB: {cell:?}"
+            );
+            assert!(
+                allowed_bg.contains(&cell.bg),
+                "overlay background is a local highlight or Reset: {cell:?}"
+            );
+            skip = cell
+                .symbol()
+                .chars()
+                .next()
+                .map(display_width)
+                .unwrap_or(0)
+                .saturating_sub(1);
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let closed = draw_once(&mut app);
+        let mut skip = 0usize;
+        for cell in closed.content() {
+            if skip > 0 {
+                skip -= 1;
+                continue;
+            }
+            assert!(
+                matches!(cell.fg, Color::Rgb(..)),
+                "closed frame foreground must be explicit RGB: {cell:?}"
+            );
+            assert_eq!(
+                cell.bg,
+                Color::Reset,
+                "no overlay background may remain after close: {cell:?}"
+            );
+            skip = cell
+                .symbol()
+                .chars()
+                .next()
+                .map(display_width)
+                .unwrap_or(0)
+                .saturating_sub(1);
+        }
     }
 
     fn running_event() -> serde_json::Value {
@@ -3805,11 +4191,8 @@ mod tests {
 
     #[test]
     fn dock_hover_uses_theme_tokens() {
-        assert_eq!(hover_background(DiffTheme::Dark), Color::Rgb(36, 43, 53));
-        assert_eq!(
-            hover_background(DiffTheme::Light),
-            Color::Rgb(232, 232, 229)
-        );
+        assert_eq!(Theme::Dark.colors().hover_bg, Color::Rgb(36, 43, 53));
+        assert_eq!(Theme::Light.colors().hover_bg, Color::Rgb(232, 232, 229));
     }
 
     fn screen_bg(app: &mut App, width: u16, height: u16, x: u16, y: u16) -> Color {
@@ -3834,8 +4217,9 @@ mod tests {
         let _ = screen(&mut app, 100, 30);
         let y = app.subagent_dock_area.y + 1;
         let bg = screen_bg(&mut app, 100, 30, 5, y);
+        let hover = app.theme.colors().hover_bg;
         assert!(
-            bg == Color::Rgb(36, 43, 53) || bg == Color::Rgb(232, 232, 229),
+            bg == hover,
             "focused dock row uses the hover token, got {bg:?}"
         );
     }

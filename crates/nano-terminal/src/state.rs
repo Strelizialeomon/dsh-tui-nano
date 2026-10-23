@@ -5,6 +5,7 @@
 use std::collections::BTreeSet;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+use nano_theme::Theme;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -531,12 +532,12 @@ impl TerminalState {
     }
 
     /// Draw the terminal screen (or its current placeholder).
-    pub fn draw(&mut self, frame: &mut Frame, area: Rect) {
+    pub fn draw(&mut self, frame: &mut Frame, area: Rect, theme: Theme) {
         self.set_viewport(area.width, area.height);
         if self.parser.is_none() {
-            self.draw_placeholder(frame, area);
+            self.draw_placeholder(frame, area, theme);
             if self.shell_picker.is_some() {
-                self.draw_picker(frame, area);
+                self.draw_picker(frame, area, theme);
             }
             return;
         }
@@ -545,6 +546,19 @@ impl TerminalState {
         cursor.hide();
         let widget = PseudoTerminal::new(parser.screen()).cursor(cursor);
         frame.render_widget(widget, area);
+        // tui-term reports a default foreground as `Reset`. Nano owns that
+        // default, while explicit program colors stay untouched.
+        let default_fg = theme.colors().fg;
+        let buffer = frame.buffer_mut();
+        for row in area.top()..area.bottom() {
+            for column in area.left()..area.right() {
+                if let Some(cell) = buffer.cell_mut((column, row)) {
+                    if cell.fg == Color::Reset {
+                        cell.set_fg(default_fg);
+                    }
+                }
+            }
+        }
         if let Some(selection) = &self.selection {
             let buffer = frame.buffer_mut();
             for row in 0..area.height {
@@ -560,7 +574,7 @@ impl TerminalState {
             }
         }
         if self.shell_picker.is_some() {
-            self.draw_picker(frame, area);
+            self.draw_picker(frame, area, theme);
             return;
         }
         if self.writable
@@ -1386,14 +1400,18 @@ impl TerminalState {
         }
     }
 
-    fn draw_placeholder(&self, frame: &mut Frame, area: Rect) {
+    fn draw_placeholder(&self, frame: &mut Frame, area: Rect, theme: Theme) {
+        let colors = theme.colors();
         let title = format!(" 终端 · {} ", self.phase.label());
-        let block = Block::default().borders(Borders::ALL).title(title);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(theme.border_style())
+            .title(title);
         let mut lines = vec![
             Line::from(Span::styled(
                 "官方交互终端",
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(colors.accent)
                     .add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
@@ -1401,17 +1419,17 @@ impl TerminalState {
         if let Some(error) = &self.error {
             lines.push(Line::from(Span::styled(
                 error.clone(),
-                Style::default().fg(Color::Red),
+                Style::default().fg(colors.error),
             )));
         } else if let Some(notice) = &self.notice {
             lines.push(Line::from(Span::styled(
                 notice.clone(),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(colors.warning),
             )));
         } else {
             lines.push(Line::from(Span::styled(
                 "正在读取官方终端状态…",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(colors.muted),
             )));
         }
         if matches!(self.phase, Phase::Idle | Phase::Failed | Phase::Closed) {
@@ -1421,7 +1439,7 @@ impl TerminalState {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "终端输出不进入会话历史，也不会发送给模型。",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(colors.muted),
         )));
         let paragraph = Paragraph::new(lines)
             .block(block)
@@ -1430,7 +1448,7 @@ impl TerminalState {
         frame.render_widget(paragraph, area);
     }
 
-    fn draw_picker(&self, frame: &mut Frame, area: Rect) {
+    fn draw_picker(&self, frame: &mut Frame, area: Rect, theme: Theme) {
         let Some(picker) = &self.shell_picker else {
             return;
         };
@@ -1446,7 +1464,11 @@ impl TerminalState {
             height,
         );
         frame.render_widget(ratatui::widgets::Clear, popup);
-        let block = Block::default().borders(Borders::ALL).title(" 选择 shell ");
+        frame.buffer_mut().set_style(popup, theme.base_style());
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(theme.border_style())
+            .title(" 选择 shell ");
         let inner = block.inner(popup);
         frame.render_widget(block, popup);
         let rows: Vec<Line> = self
@@ -1467,7 +1489,9 @@ impl TerminalState {
                     format!("{}  {}", shell.name, shell.path)
                 };
                 let style = if index == picker.selected {
-                    Style::default().fg(Color::Black).bg(Color::Cyan)
+                    Style::default()
+                        .fg(theme.colors().fg)
+                        .bg(theme.colors().selected_bg)
                 } else {
                     Style::default()
                 };
@@ -2307,7 +2331,7 @@ mod fix_tests {
         state.shell_picker = Some(ShellPicker { selected: 0 });
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).unwrap();
         terminal
-            .draw(|frame| state.draw(frame, frame.area()))
+            .draw(|frame| state.draw(frame, frame.area(), Theme::Dark))
             .expect("picker draw");
         let text = terminal
             .backend()
@@ -2323,8 +2347,57 @@ mod fix_tests {
 
         let mut narrow = Terminal::new(TestBackend::new(15, 6)).unwrap();
         narrow
-            .draw(|frame| state.draw(frame, frame.area()))
+            .draw(|frame| state.draw(frame, frame.area(), Theme::Dark))
             .expect("narrow picker draw must not panic");
+    }
+
+    #[test]
+    fn default_foreground_follows_theme_and_explicit_colors_survive() {
+        let mut state = connected();
+        let _ = state.on_notification(
+            "nano.terminal.output",
+            &json!({
+                "attachmentId": "att-1",
+                "terminalId": "term-1",
+                "sequence": 1,
+                "data": "plain \u{1b}[31mred\u{1b}[0m \u{1b}[38;2;1;2;3mrgb\u{1b}[0m \u{1b}[48;2;4;5;6mBG\u{1b}[0m \u{1b}[7mrev\u{1b}[0m"
+            }),
+        );
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        let backend = TestBackend::new(20, 4);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| state.draw(frame, frame.area(), Theme::Light))
+            .expect("draw terminal");
+        let buffer = terminal.backend().buffer();
+        let cells = buffer.content();
+        let plain = cells
+            .iter()
+            .find(|cell| cell.symbol() == "p")
+            .expect("plain cell");
+        assert_eq!(plain.fg, Theme::Light.colors().fg);
+        assert_eq!(plain.bg, Color::Reset);
+        let red = cells
+            .iter()
+            .find(|cell| cell.symbol() == "r")
+            .expect("explicit red cell");
+        assert_eq!(red.fg, Color::Indexed(1));
+        let rgb = cells
+            .iter()
+            .find(|cell| cell.symbol() == "g")
+            .expect("explicit RGB cell");
+        assert_eq!(rgb.fg, Color::Rgb(1, 2, 3));
+        let background = cells
+            .iter()
+            .find(|cell| cell.symbol() == "B")
+            .expect("explicit background cell");
+        assert_eq!(background.bg, Color::Rgb(4, 5, 6));
+        let reversed = cells
+            .iter()
+            .find(|cell| cell.symbol() == "v")
+            .expect("reverse cell");
+        assert!(reversed.modifier.contains(Modifier::REVERSED));
     }
 
     #[test]
