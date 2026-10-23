@@ -54,15 +54,6 @@ SCREEN_EVENTS = [
     {"type": "message_stop"},
 ]
 
-DARK = {
-    "bg": "#17191d", "fg": "#e8e6e0", "muted": "#8d95a6", "accent": "#7da1de",
-    "error": "#da8a93", "warning": "#d8b270", "success": "#9ac4a6",
-}
-LIGHT = {
-    "bg": "#f6f3ed", "fg": "#343945", "muted": "#626978", "accent": "#365f9d",
-    "error": "#a33e4c", "warning": "#855b18", "success": "#315f3e",
-}
-
 
 class MockModel(BaseHTTPRequestHandler):
     def do_POST(self):
@@ -196,21 +187,6 @@ def capture(title, path):
     return window_id
 
 
-def palette_args(theme):
-    return [
-        f"--background={theme['bg']}",
-        f"--foreground={theme['fg']}",
-        f"--palette=0={theme['bg']}",
-        f"--palette=1={theme['error']}",
-        f"--palette=2={theme['success']}",
-        f"--palette=3={theme['warning']}",
-        f"--palette=6={theme['accent']}",
-        f"--palette=8={theme['muted']}",
-        f"--palette=9={theme['error']}",
-        f"--palette=10={theme['success']}",
-    ]
-
-
 SPAWNED_GHOSTTY = set()
 
 
@@ -219,7 +195,7 @@ def ghostty_pids():
     return {int(line) for line in result.stdout.split() if line.strip().isdigit()}
 
 
-def launch(title, run_script, cols, rows, theme, fullscreen=False, font_size=None):
+def launch(title, run_script, cols, rows, fullscreen=False, font_size=None):
     before = ghostty_pids()
     args = [
         "open", "-na", "Ghostty.app", "--args",
@@ -231,7 +207,6 @@ def launch(title, run_script, cols, rows, theme, fullscreen=False, font_size=Non
         "--wait-after-command=false",
         "--macos-option-as-alt=true",
         "--window-save-state=never",
-        *palette_args(theme),
     ]
     if font_size is not None:
         args.append(f"--font-size={font_size}")
@@ -374,7 +349,7 @@ if let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: An
     try:
         # --- Dark, 100 columns: panels, CJK, response, copy, wheel, exit. ---
         title = "nano-s13-dark-100"
-        launch(title, write_run_script("dark100"), COLS, ROWS, DARK)
+        launch(title, write_run_script("dark100"), COLS, ROWS)
         main_dark = out / "01-dark-100-main.png"
         capture(title, main_dark)
         check("dark 100 main captured", main_dark.exists())
@@ -450,7 +425,7 @@ if let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: An
 
         # --- Light, 60 columns. ---
         light_title = "nano-s13-light-60"
-        launch(light_title, write_run_script("light60"), LIGHT_COLS, LIGHT_ROWS, LIGHT)
+        launch(light_title, write_run_script("light60"), LIGHT_COLS, LIGHT_ROWS)
         light_main = out / "07-light-60-main.png"
         capture(light_title, light_main)
         check("light 60 main captured", light_main.exists())
@@ -465,7 +440,7 @@ if let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: An
 
         # --- Fullscreen dark, 100 columns (font sized to keep ~100 columns). ---
         full_title = "nano-s13-fullscreen"
-        launch(full_title, write_run_script("fullscreen"), COLS, ROWS, DARK, fullscreen=True, font_size=27)
+        launch(full_title, write_run_script("fullscreen"), COLS, ROWS, fullscreen=True, font_size=27)
         full = out / "09-dark-fullscreen.png"
         capture(full_title, full)
         check("fullscreen capture exists", full.exists() and full.stat().st_size > 0)
@@ -478,7 +453,6 @@ if let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: An
             write_run_script("fullscreen60"),
             LIGHT_COLS,
             LIGHT_ROWS,
-            DARK,
             fullscreen=True,
             font_size=45,
         )
@@ -489,7 +463,7 @@ if let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: An
 
         # --- Reduced motion: launch and confirm it draws; motion itself is unit-tested. ---
         rm_title = "nano-s13-reduced-motion"
-        launch(rm_title, write_run_script("reduced", reduced_motion=True), COLS, ROWS, DARK)
+        launch(rm_title, write_run_script("reduced", reduced_motion=True), COLS, ROWS)
         rm_shot = out / "10-reduced-motion-main.png"
         capture(rm_title, rm_shot)
         check("reduced-motion main captured", rm_shot.exists())

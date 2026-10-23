@@ -40,6 +40,7 @@ use nano_terminal::{
     is_close_key, is_toggle_key, Command as TerminalCommand, Failure, RequestKind, TerminalState,
     TerminalStore,
 };
+use nano_theme::Theme;
 use nano_transcript::{Hit, HitKind, RecordedQuestionState, TranscriptSource, TranscriptView};
 use ratatui::layout::Rect;
 use serde_json::{json, Value};
@@ -509,6 +510,8 @@ pub struct App {
     pub feed_height: usize,
     /// Reading view (transcript, line budgets, expansion, scroll).
     pub view: TranscriptView,
+    /// Theme parsed once at startup; every surface reads this value.
+    pub theme: Theme,
     /// Question and approval cards.
     pub decisions: DecisionsModel,
     /// Whether the transcript entries need rebuilding before the next draw.
@@ -698,6 +701,16 @@ pub struct App {
 impl App {
     /// Create the app before the host is ready.
     pub fn new(cli: Cli, root_session_id: String, replay_truncated: bool) -> Self {
+        Self::with_theme(cli, root_session_id, replay_truncated, Theme::from_env())
+    }
+
+    /// Create the app with an explicit theme (tests inject one directly).
+    pub fn with_theme(
+        cli: Cli,
+        root_session_id: String,
+        replay_truncated: bool,
+        theme: Theme,
+    ) -> Self {
         let address = SessionAddress::root(root_session_id);
         let jobs_root = address.root_session_id.clone();
         let mut registry = FeatureRegistry::new();
@@ -738,7 +751,8 @@ impl App {
             submit_backups: HashMap::new(),
             pending: HashMap::new(),
             feed_height: 10,
-            view: TranscriptView::new(address.clone(), TranscriptSource::Interactive),
+            view: TranscriptView::new(address.clone(), TranscriptSource::Interactive, theme),
+            theme,
             decisions: DecisionsModel::new(address.clone()),
             transcript_dirty: true,
             feed_hits: Vec::new(),
@@ -986,7 +1000,7 @@ impl App {
             .as_ref()
             .map(|child| child.child_session_id.clone());
         let key = address.key();
-        let placeholder = TranscriptView::new(address, TranscriptSource::ReadOnly);
+        let placeholder = TranscriptView::new(address, TranscriptSource::ReadOnly, self.theme);
         if self.parent_view.is_none() {
             self.parent_view = Some(std::mem::replace(&mut self.view, placeholder));
         } else {
@@ -1054,7 +1068,7 @@ impl App {
             let view = self
                 .child_views
                 .remove(&key)
-                .unwrap_or_else(|| TranscriptView::new(address.clone(), source));
+                .unwrap_or_else(|| TranscriptView::new(address.clone(), source, self.theme));
             let old = std::mem::replace(&mut self.view, view);
             if let Some(old_key) = self.active_child_key.take() {
                 self.child_views.insert(old_key, old);
@@ -7281,7 +7295,7 @@ impl App {
         self.model = ConversationModel::new(address.clone());
         self.drafts.switch_to(address.clone());
         self.attachments.switch_to(address.clone());
-        self.view = TranscriptView::new(address.clone(), TranscriptSource::Interactive);
+        self.view = TranscriptView::new(address.clone(), TranscriptSource::Interactive, self.theme);
         self.subagents = SubagentState::new(address.root_session_id.clone());
         self.child_models.clear();
         self.child_views.clear();

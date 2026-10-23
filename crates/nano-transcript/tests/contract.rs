@@ -255,7 +255,7 @@ fn events_for_another_address_do_not_enrich_this_transcript() {
         &mut scroll,
         80,
         20,
-        nano_transcript::DiffTheme::Dark,
+        nano_transcript::Theme::Dark,
     );
     assert_eq!(rendered.lines.len(), 0);
 }
@@ -263,9 +263,16 @@ fn events_for_another_address_do_not_enrich_this_transcript() {
 #[test]
 fn the_same_renderer_serves_both_d04_views() {
     let address = root();
-    let interactive =
-        nano_transcript::TranscriptView::new(address.clone(), TranscriptSource::Interactive);
-    let read_only = nano_transcript::TranscriptView::new(address, TranscriptSource::ReadOnly);
+    let interactive = nano_transcript::TranscriptView::new(
+        address.clone(),
+        TranscriptSource::Interactive,
+        nano_transcript::Theme::Dark,
+    );
+    let read_only = nano_transcript::TranscriptView::new(
+        address,
+        TranscriptSource::ReadOnly,
+        nano_transcript::Theme::Dark,
+    );
     assert_ne!(interactive.source(), read_only.source());
     assert_eq!(interactive.source(), TranscriptSource::Interactive);
     assert_eq!(read_only.source(), TranscriptSource::ReadOnly);
@@ -285,7 +292,11 @@ fn a_submission_echo_is_display_only_and_does_not_become_history() {
 #[test]
 fn the_reading_anchor_survives_preview_to_message_handoff() {
     let mut model = ConversationModel::new(root());
-    let mut view = nano_transcript::TranscriptView::new(root(), TranscriptSource::Interactive);
+    let mut view = nano_transcript::TranscriptView::new(
+        root(),
+        TranscriptSource::Interactive,
+        nano_transcript::Theme::Dark,
+    );
     model.apply_event(
         "conversation.stream",
         &json!({

@@ -26,14 +26,6 @@ from PIL import Image  # noqa: E402
 
 ROWS, COLS = 35, 100
 SMALL_ROWS, SMALL_COLS = 30, 60
-DARK = {
-    "bg": "#17191d", "fg": "#e8e6e0", "muted": "#8d95a6", "accent": "#7da1de",
-    "error": "#da8a93", "warning": "#d8b270", "success": "#9ac4a6",
-}
-LIGHT = {
-    "bg": "#f6f3ed", "fg": "#343945", "muted": "#626978", "accent": "#365f9d",
-    "error": "#a33e4c", "warning": "#855b18", "success": "#315f3e",
-}
 TOOL_INPUT = json.dumps(
     {"description": "followup-tui", "prompt": "只回复一行 S12CHILD，不要调用任何工具。"},
     ensure_ascii=False,
@@ -186,21 +178,6 @@ def capture(title, path):
         return image.size
 
 
-def palette_args(theme):
-    return [
-        f"--background={theme['bg']}",
-        f"--foreground={theme['fg']}",
-        f"--palette=0={theme['bg']}",
-        f"--palette=1={theme['error']}",
-        f"--palette=2={theme['success']}",
-        f"--palette=3={theme['warning']}",
-        f"--palette=6={theme['accent']}",
-        f"--palette=8={theme['muted']}",
-        f"--palette=9={theme['error']}",
-        f"--palette=10={theme['success']}",
-    ]
-
-
 SPAWNED = set()
 
 
@@ -209,7 +186,7 @@ def ghostty_pids():
     return {int(line) for line in result.stdout.split() if line.strip().isdigit()}
 
 
-def launch(title, script, cols, rows, theme, extra_env=""):
+def launch(title, script, cols, rows, extra_env=""):
     before = ghostty_pids()
     args = [
         "open", "-na", "Ghostty.app", "--args",
@@ -221,7 +198,6 @@ def launch(title, script, cols, rows, theme, extra_env=""):
         "--wait-after-command=false",
         "--macos-option-as-alt=true",
         "--window-save-state=never",
-        *palette_args(theme),
     ]
     run(args, check=True)
     for pid in ghostty_pids() - before:
@@ -326,7 +302,7 @@ if let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: An
 
     # 100-column dark run: empty main, running dock, completed, cleaned.
     title = "nano-followup-100-dark"
-    launch(title, run_script("dark", "dark"), COLS, ROWS, DARK)
+    launch(title, run_script("dark", "dark"), COLS, ROWS)
     size = capture(title, out / "01-main-100-dark.png")
     check("main 100 dark captured", size[0] > 0, str(size))
     paste(title, PROMPT)
@@ -345,7 +321,7 @@ if let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: An
     # 60-column dark run: empty main and running dock.
     title = "nano-followup-60-dark"
     MockModel.count = 0
-    launch(title, run_script("dark60", "dark"), SMALL_COLS, SMALL_ROWS, DARK)
+    launch(title, run_script("dark60", "dark"), SMALL_COLS, SMALL_ROWS)
     size = capture(title, out / "05-main-60-dark.png")
     check("main 60 dark captured", size[0] > 0, str(size))
     paste(title, PROMPT)
@@ -358,7 +334,7 @@ if let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: An
     # Light-theme run: focused dock row.
     title = "nano-followup-100-light"
     MockModel.count = 0
-    launch(title, run_script("light", "light"), COLS, ROWS, LIGHT)
+    launch(title, run_script("light", "light"), COLS, ROWS)
     paste(title, PROMPT)
     send_key(title, KEY_CODES["return"])
     time.sleep(5)

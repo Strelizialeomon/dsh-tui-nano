@@ -131,6 +131,16 @@ cd packaging/dist/dsh-tui-nano-0.1.0-arm64
 
 完整键位和参数见 `nano --help`。`!command` 以你的用户权限运行，不是 Agent 授权；输出会作为合成上下文注入，但不唤醒模型。
 
+## 主题与透明
+
+- `NANO_THEME=dark|light` 选择 Nano 自有界面的配色，默认 `dark`；启动时读取一次，修改后重启生效。
+- 自有文字、边框、状态、焦点和 diff 输出固定 RGB，不依赖终端的 ANSI 调色板或默认前景。
+- 普通背景保留终端默认背景：壁纸、透明度和模糊照常生效；Nano 不铺整屏实色。
+- diff、选择、hover 等局部高亮使用 Nano 自己的 RGB；它们是否参与透明合成由终端决定（Ghostty 的 `background-opacity-cells`）。
+- 内嵌终端保留子程序自己的显式颜色，不做全屏改色。
+- macOS 原生全屏会禁用背景透明；要在半透明窗口里使用，请用普通窗口。
+- Nano 不读取、不修改你的 Ghostty 配置。
+
 ## 当前状态
 
 | 项目 | 状态 |

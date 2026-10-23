@@ -296,6 +296,7 @@ dependencies = [
  "nano-skills",
  "nano-subagents",
  "nano-terminal",
+ "nano-theme",
  "nano-transcript",
  "ratatui",
  "serde_json",
@@ -405,6 +406,7 @@ name = "nano-terminal"
 version = "0.1.0"
 dependencies = [
  "crossterm",
+ "nano-theme",
  "ratatui",
  "serde",
  "serde_json",
@@ -414,11 +416,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "nano-theme"
+version = "0.1.0"
+dependencies = [
+ "ratatui",
+]
+
+[[package]]
 name = "nano-transcript"
 version = "0.1.0"
 dependencies = [
  "nano-conversation",
  "nano-decisions",
+ "nano-theme",
  "ratatui",
  "serde_json",
  "unicode-width 0.2.0",

@@ -29,6 +29,16 @@ python3 tests/e2e/ghostty-acceptance.py \
 
 脚本只截取本次运行拥有的窗口（`screencapture -l`），截图前把窗口尺寸固定为 100/60 列；模型响应来自本地 mock，不产生费用。截图写入 `docs/release/<version>/evidence/ghostty/`。运行前会保存用户剪贴板，结束时恢复；若无法把目标窗口置前，脚本直接中止，不会把按键发给前台应用。
 
+## 主题配色与透明
+
+```sh
+python3 tests/e2e/ghostty-theme-transparency.py
+```
+
+覆盖 2 种 TUI 主题 × 2 套故意错配的终端调色板 × 60/100 列的 8 组颜色独立性，以及主体透明、不透明回归、组件/退出与临时配置哈希。结果写入 `docs/evidence/2026-10-22-theme-transparency/`。
+
+受限环境可加 `--capture-only`：跳过键盘输入，只抓首帧并按 PID 关闭窗口，不能替代完整证据。
+
 ## 边界
 
 - `--test-name-pattern` 可单跑某个跨功能用例。

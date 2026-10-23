@@ -13,6 +13,7 @@ members = [
     "crates/nano-monitor",
     "crates/nano-sessions",
     "crates/nano-subagents",
+    "crates/nano-theme",
     "crates/nano-app",
 ]
 resolver = "2"

@@ -11,9 +11,10 @@ use nano_conversation::{ConversationModel, SessionAddress};
 use serde_json::Value;
 
 use crate::model::{TranscriptModel, TranscriptSource};
-use crate::render::{render, DiffTheme, Hit, RenderCache, TranscriptRender};
+use crate::render::{render, Hit, RenderCache, TranscriptRender};
 use crate::scroll::ScrollState;
 use crate::tool::QuestionRecord;
+use nano_theme::Theme;
 
 /// One mounted transcript view.
 #[derive(Debug, Clone)]
@@ -21,17 +22,17 @@ pub struct TranscriptView {
     model: TranscriptModel,
     cache: RenderCache,
     scroll: ScrollState,
-    theme: DiffTheme,
+    theme: Theme,
 }
 
 impl TranscriptView {
-    /// Mount a view for one address.
-    pub fn new(address: SessionAddress, source: TranscriptSource) -> Self {
+    /// Mount a view for one address using the theme chosen by the app boundary.
+    pub fn new(address: SessionAddress, source: TranscriptSource, theme: Theme) -> Self {
         Self {
             model: TranscriptModel::new(address, source),
             cache: RenderCache::new(),
             scroll: ScrollState::default(),
-            theme: DiffTheme::from_env(),
+            theme,
         }
     }
 

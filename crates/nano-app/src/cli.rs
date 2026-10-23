@@ -175,7 +175,7 @@ nano — 极简 DeepSeek Harness 终端界面
   -h, --help               显示本帮助
 
 环境变量：
-  NANO_THEME=dark|light    diff 底色主题（默认 dark，只影响差异底色）
+  NANO_THEME=dark|light    自有界面配色（默认 dark；普通背景与透明度由终端决定，重启生效）
   NANO_REDUCED_MOTION=1    关闭忙碌指示与子代理状态灯动效
 
 按键：
