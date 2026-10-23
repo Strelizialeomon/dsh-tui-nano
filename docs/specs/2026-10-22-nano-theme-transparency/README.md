@@ -218,4 +218,4 @@
 
 修订后需重新过闸；档位由用户当场再点。
 
-- 2026-10-23：实施单 #56 完成。主题色表/选择、缓存隔离、默认前景与显式色、RGB-only、帮助与 README 均有单测；`cargo test --workspace`、bridge、cargo e2e、跨功能 e2e 全绿；真实 Ghostty 证据 54 项全绿，见 [证据说明](../../evidence/2026-10-22-theme-transparency/README.md)。
+- 2026-10-23：实施单 #56 完成。主题色表/选择、缓存隔离、默认前景与显式色（索引/RGB/反显/背景）、RGB-only、浅色角色映射、60 列与覆盖层开/关均有单测；帮助文案有断言；`cargo test --workspace`、bridge、cargo e2e、跨功能 e2e 全绿；真实 Ghostty 证据 54 项全绿，见 [证据说明](../../evidence/2026-10-22-theme-transparency/README.md)。

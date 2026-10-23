@@ -170,13 +170,14 @@ cd packaging/dist/dsh-tui-nano-0.1.0-arm64
 npm install --prefix bridge   # 桥接依赖
 npm run test:bridge           # 契约 + 桥接单测（无需凭据）
 npm run test:rust             # Rust workspace
+python3 tests/e2e/theme-pty.py # 默认 TUI 无头测试：不开窗口、不抢焦点、不动剪贴板
 
 # 真实宿主集成测试：会安装 profile、启动真实 dsh，可能产生费用
 cargo test -p nano-runtime --test integration -- --ignored --test-threads=1 \
   --skip shutdown_budget_is_bounded_when_cleanup_hangs
 ```
 
-跨功能 e2e、真实 Ghostty 验收和发布复核见 [`tests/e2e/README.md`](tests/e2e/README.md) 与 [`docs/release/0.1.0/README.md`](docs/release/0.1.0/README.md)。各功能的真实 PTY 证据脚本在 `scripts/`，运行前请读脚本头部的前置说明。所有集成测试使用临时 `DSH_HOME` 和数据根，不读写用户的真实会话。
+跨功能 e2e、真实 Ghostty 验收和发布复核见 [`tests/e2e/README.md`](tests/e2e/README.md) 与 [`docs/release/0.1.0/README.md`](docs/release/0.1.0/README.md)。TUI 的输入/配色回归默认走无头 PTY；Ghostty 截图测试按需、跑前需用户确认。所有集成测试使用临时 `DSH_HOME` 和数据根，不读写用户的真实会话。
 
 ## 架构
 

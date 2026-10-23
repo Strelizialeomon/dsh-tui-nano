@@ -319,7 +319,7 @@ fn schedule_style(kind: RowKind, theme: Theme) -> Style {
         RowKind::Dim => Style::default().fg(colors.muted),
         RowKind::Error => Style::default().fg(colors.error),
         RowKind::Selected => Style::default().fg(colors.fg).bg(colors.selected_bg),
-        RowKind::SelectedDim => Style::default().fg(colors.fg).bg(colors.selected_bg),
+        RowKind::SelectedDim => Style::default().fg(colors.muted).bg(colors.selected_bg),
         RowKind::Notice => Style::default().fg(colors.warning),
     }
 }
@@ -1695,7 +1695,7 @@ fn job_color(status: JobStatus, theme: Theme) -> Color {
         JobStatus::Completed => colors.success,
         JobStatus::Killed => colors.error,
         JobStatus::Failed => colors.error,
-        JobStatus::Unknown => colors.accent,
+        JobStatus::Unknown => colors.muted,
     }
 }
 
@@ -3718,6 +3718,134 @@ mod tests {
                 .unwrap_or(0)
                 .saturating_sub(1);
         }
+    }
+
+    #[test]
+    fn theme_roles_are_wired_on_surface_helpers() {
+        for theme in [Theme::Dark, Theme::Light] {
+            let colors = theme.colors();
+            assert_eq!(
+                schedule_style(RowKind::Title, theme).fg,
+                Some(colors.accent)
+            );
+            assert_eq!(schedule_style(RowKind::Dim, theme).fg, Some(colors.muted));
+            assert_eq!(schedule_style(RowKind::Error, theme).fg, Some(colors.error));
+            assert_eq!(
+                schedule_style(RowKind::Notice, theme).fg,
+                Some(colors.warning)
+            );
+            assert_eq!(
+                schedule_style(RowKind::Selected, theme).bg,
+                Some(colors.selected_bg)
+            );
+            assert_eq!(
+                schedule_style(RowKind::SelectedDim, theme).fg,
+                Some(colors.muted)
+            );
+            assert_eq!(
+                schedule_style(RowKind::SelectedDim, theme).bg,
+                Some(colors.selected_bg)
+            );
+            assert_eq!(job_color(JobStatus::Completed, theme), colors.success);
+            assert_eq!(job_color(JobStatus::Failed, theme), colors.error);
+            assert_eq!(job_color(JobStatus::Unknown, theme), colors.muted);
+            assert_eq!(lamp_glyph(Lamp::Completed, true, theme).1, colors.success);
+            assert_eq!(lamp_glyph(Lamp::Warned, true, theme).1, colors.warning);
+            assert_eq!(lamp_glyph(Lamp::Inactive, true, theme).1, colors.muted);
+            let focused = option_line(true, "1.", "A", None, false, theme);
+            assert_eq!(focused.spans[0].style.fg, Some(colors.accent));
+            let selected = option_line(false, "1.", "A", None, true, theme);
+            assert_eq!(
+                selected.spans.last().expect("checkmark").style.fg,
+                Some(colors.success)
+            );
+        }
+    }
+
+    #[test]
+    fn the_light_theme_renders_60_columns_with_theme_roles() {
+        let mut app = App::with_theme(
+            crate::cli::Cli::default(),
+            "root".to_string(),
+            false,
+            Theme::Light,
+        );
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        let backend = TestBackend::new(60, 20);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw(frame, &mut app))
+            .expect("draw the frame");
+        let mut skip = 0usize;
+        let mut saw_rule = false;
+        for (index, cell) in terminal.backend().buffer().content().iter().enumerate() {
+            let x = index % 60;
+            let y = index / 60;
+            if skip > 0 {
+                skip -= 1;
+                continue;
+            }
+            assert!(
+                matches!(cell.fg, Color::Rgb(..)),
+                "foreground must be explicit RGB at ({x},{y}): {cell:?}"
+            );
+            assert!(
+                matches!(cell.bg, Color::Reset | Color::Rgb(..)),
+                "background must be terminal default or an explicit local highlight at ({x},{y}): {cell:?}"
+            );
+            if cell.symbol() == "─" && cell.fg == Theme::Light.colors().rule {
+                saw_rule = true;
+            }
+            skip = cell
+                .symbol()
+                .chars()
+                .next()
+                .map(display_width)
+                .unwrap_or(0)
+                .saturating_sub(1);
+        }
+        assert!(saw_rule, "composer border uses the light rule role");
+    }
+
+    #[test]
+    fn the_panel_overlay_and_close_keep_explicit_theme_colors() {
+        let mut app = app();
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        let mut draw_once = |app: &mut App| {
+            let backend = TestBackend::new(100, 30);
+            let mut terminal = Terminal::new(backend).expect("test terminal");
+            terminal
+                .draw(|frame| draw(frame, app))
+                .expect("draw the frame");
+            terminal.backend().buffer().clone()
+        };
+        assert!(app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL)));
+        let open = draw_once(&mut app);
+        let mut skip = 0usize;
+        for cell in open.content() {
+            if skip > 0 {
+                skip -= 1;
+                continue;
+            }
+            assert!(
+                matches!(cell.fg, Color::Rgb(..)),
+                "overlay foreground must be explicit RGB: {cell:?}"
+            );
+            skip = cell
+                .symbol()
+                .chars()
+                .next()
+                .map(display_width)
+                .unwrap_or(0)
+                .saturating_sub(1);
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let closed = draw_once(&mut app);
+        let margin = &closed[(0, 15)];
+        assert_eq!(margin.fg, app.theme.colors().fg);
+        assert_eq!(margin.bg, Color::Reset);
     }
 
     fn running_event() -> serde_json::Value {

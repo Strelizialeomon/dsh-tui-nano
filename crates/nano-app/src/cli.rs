@@ -216,6 +216,8 @@ mod tests {
             "Alt+L",
             "子代理 dock",
             "子代理详情",
+            "NANO_THEME=dark|light",
+            "自有界面配色",
         ] {
             assert!(HELP.contains(key), "help is missing {key}");
         }

@@ -21,6 +21,7 @@ import tempfile
 import threading
 import time
 import warnings
+from collections import Counter
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -33,6 +34,9 @@ except ImportError:
 
 ROWS, COLS = 32, 100
 EDIT_PATH = None
+CONFIG_FILE = None
+LAUNCHES = []
+CAPTURES = []
 SMALL_ROWS, SMALL_COLS = 26, 60
 PROMPT = "只回复一行 THEME-TRANSPARENCY，不要调用任何工具。"
 MARKER = "THEME-TRANSPARENCY"
@@ -50,8 +54,16 @@ PALETTE_B = {
     "6": "#aa5500", "8": "#404040", "9": "#00aa00", "10": "#aa00aa",
 }
 THEMES = {
-    "dark": {"fg": "#e8e6e0", "accent": "#7da1de", "rule": "#424953"},
-    "light": {"fg": "#343945", "accent": "#365f9d", "rule": "#c4c6c9"},
+    "dark": {
+        "fg": "#e8e6e0", "accent": "#7da1de", "rule": "#424953",
+        "selected_bg": "#3b4a66", "hover_bg": "#242b35",
+        "diff_add_bg": "#24382c", "diff_del_bg": "#38252a",
+    },
+    "light": {
+        "fg": "#343945", "accent": "#365f9d", "rule": "#c4c6c9",
+        "selected_bg": "#d5def2", "hover_bg": "#e8e8e5",
+        "diff_add_bg": "#dcebdd", "diff_del_bg": "#f1dcdf",
+    },
 }
 
 
@@ -177,6 +189,23 @@ end run
 
 KEY_CODES = {"esc": 53, "return": 36, "tab": 48, "down": 125, "up": 126}
 
+RESIZE_SCRIPT = """
+on run argv
+  set targetTitle to item 1 of argv
+  tell application "System Events"
+    repeat with p in (every process whose name is "Ghostty")
+      try
+        if (name of windows of p) contains targetTitle then
+          set size of window targetTitle of p to {900, 700}
+          return "ok"
+        end if
+      end try
+    end repeat
+  end tell
+  return ""
+end run
+"""
+
 
 def applescript(script, *args):
     return run(["osascript", "-e", script, *args])
@@ -218,6 +247,8 @@ def wait_for_window_gone(title, timeout=20):
 def capture(title, path):
     window_id = wait_for_window(title)
     subprocess.run(["screencapture", "-x", "-l", str(window_id), "-o", str(path)], check=True)
+    with Image.open(path) as image:
+        CAPTURES.append({"path": str(path), "window": title, "size": list(image.size)})
     return path
 
 
@@ -230,28 +261,34 @@ def window_exists(title):
     )
 
 
+def process_alive(title):
+    return bool(run(["pgrep", "-f", "--", f"--title={title}"]).stdout.strip())
+
+
 def kill_window(title):
-    result = run(["pgrep", "-f", f"--title={title}"])
+    result = run(["pgrep", "-f", "--", f"--title={title}"])
     for line in result.stdout.split():
         try:
             os.kill(int(line), signal.SIGKILL)
         except (ValueError, ProcessLookupError):
             pass
-    if wait_for_window_gone(title, 8):
-        return True
-    return not run(["pgrep", "-f", f"--title={title}"]).stdout.strip()
+    for _ in range(16):
+        if not process_alive(title):
+            return True
+        time.sleep(0.5)
+    return False
 
 
 def quit_window(title):
     for _ in range(2):
-        if not window_exists(title):
+        if not window_exists(title) and not process_alive(title):
             return True
         try:
             focus(title)
         except RuntimeError:
             break
         applescript('tell application "System Events" to key code 8 using control down')
-        if wait_for_window_gone(title, 6):
+        if wait_for_window_gone(title, 6) and not process_alive(title):
             return True
     return kill_window(title)
 
@@ -278,6 +315,7 @@ def palette_args(palette):
 def launch(title, script, cols, rows, palette, *, opacity=1.0, cells=False,
            background_image=None, fullscreen=False, font_size=None, config_file=None,
            focus_after=True):
+    kill_window(title)
     before = ghostty_pids()
     args = [
         "open", "-na", "Ghostty.app", "--args",
@@ -294,6 +332,8 @@ def launch(title, script, cols, rows, palette, *, opacity=1.0, cells=False,
         f"--background-opacity={opacity}",
         f"--background-opacity-cells={'true' if cells else 'false'}",
     ]
+    if config_file is None:
+        config_file = CONFIG_FILE
     if config_file is not None:
         args.append(f"--config-file={config_file}")
     if background_image is not None:
@@ -302,6 +342,15 @@ def launch(title, script, cols, rows, palette, *, opacity=1.0, cells=False,
         args.append("--fullscreen=true")
     if font_size is not None:
         args.append(f"--font-size={font_size}")
+    LAUNCHES.append({
+        "title": title,
+        "cols": cols,
+        "rows": rows,
+        "opacity": opacity,
+        "cells": cells,
+        "background_image": str(background_image) if background_image else None,
+        "args": args,
+    })
     run(args, check=True)
     for pid in ghostty_pids() - before:
         command = run(["ps", "-o", "command=", "-p", str(pid)]).stdout
@@ -367,6 +416,46 @@ def blank_variance(colors, width, height, box):
     return len(sample)
 
 
+def image_diff(left, right):
+    from PIL import ImageChops
+    with Image.open(left) as a, Image.open(right) as b:
+        if a.size != b.size:
+            return 1.0
+        diff = ImageChops.difference(a.convert("RGB"), b.convert("RGB"))
+        pixels = list(diff.getdata())
+        changed = sum(1 for pixel in pixels if pixel != (0, 0, 0))
+        return changed / max(1, len(pixels))
+
+
+def theme_color_count(path, theme, role, tolerance=24):
+    return count_near(analyze(path), hex_rgb(THEMES[theme][role]), tolerance)
+
+
+def composite_over_checker(path):
+    with Image.open(path) as image:
+        image = image.convert("RGBA")
+        checker = checkerboard(image.size).convert("RGBA")
+        return Image.alpha_composite(checker, image).convert("RGB")
+
+
+def composite_colors(path):
+    return list(composite_over_checker(path).getdata())
+
+
+def composite_variance(path, box):
+    image = composite_over_checker(path)
+    width, height = image.size
+    colors = list(image.getdata())
+    return blank_variance(colors, width, height, box)
+
+
+def alpha_mode(path, box):
+    with Image.open(path) as image:
+        rgba = image.convert("RGBA")
+        crop = rgba.crop(box)
+        return Counter(pixel[3] for pixel in crop.getdata()).most_common(1)[0][0]
+
+
 def checkerboard(size, cell=12):
     image = Image.new("RGB", size)
     pixels = image.load()
@@ -399,12 +488,13 @@ def main():
     work = root / "work"
     for path in (home, dsh_home, data, work):
         path.mkdir(parents=True, exist_ok=True)
-    global EDIT_PATH
+    global EDIT_PATH, CONFIG_FILE
     EDIT_PATH = str(work / "theme-diff.txt")
     Path(EDIT_PATH).write_text("alpha\n")
 
     config = root / "ghostty-config"
     config.write_text("window-save-state=never\nmacos-option-as-alt=true\n")
+    CONFIG_FILE = str(config)
     config_before = hashlib.sha256(config.read_bytes()).hexdigest()
 
     swift_source = root / "list-windows.swift"
@@ -540,29 +630,69 @@ def main():
         for theme in ("dark", "light"):
             title = f"nano-theme-transparent-{theme}"
             launch(title, run_script(f"transparent-{theme}", theme), COLS, ROWS,
-                   PALETTE_A, opacity=0.7, cells=False, background_image=checker_path)
+                   PALETTE_A, opacity=0.7, cells=False)
+            before = out / f"transparent-{theme}-before.png"
+            capture(title, before)
             drive(title, theme)
             path = out / f"transparent-{theme}.png"
             capture(title, path)
-            colors = analyze(path)
+            colors = composite_colors(path)
             width, height = Image.open(path).size
-            variance = blank_variance(colors, width, height, (2, 2, 40, 20))
-            check(f"transparent {theme} background not a solid fill", variance > 8,
-                  f"variance={variance}")
+            box = (width // 4, height // 3, width * 3 // 4, height * 2 // 3)
+            variance = blank_variance(colors, width, height, box)
+            alpha = alpha_mode(path, box)
+            check(f"transparent {theme} background is blended, not a solid fill",
+                  alpha < 255 and variance >= 2,
+                  f"alpha={alpha} variance={variance}")
+            if not args.capture_only:
+                try:
+                    focus(title)
+                    applescript('tell application "System Events" to keystroke "p" using control down')
+                    time.sleep(1.0)
+                    panel = out / f"transparent-{theme}-panel.png"
+                    capture(title, panel)
+                    send_key(title, KEY_CODES["esc"])
+                    time.sleep(0.8)
+                    after = out / f"transparent-{theme}-after-panel.png"
+                    capture(title, after)
+                    after_alpha = alpha_mode(after, box)
+                    check(f"transparent {theme} restored after panel close",
+                          after_alpha < 255,
+                          f"alpha={after_alpha}")
+                    resized = applescript(RESIZE_SCRIPT, title)
+                    time.sleep(1.0)
+                    if resized.stdout.strip():
+                        resized_shot = out / f"transparent-{theme}-resized.png"
+                        capture(title, resized_shot)
+                        rw, rh = Image.open(resized_shot).size
+                        resized_box = (rw // 4, rh // 3, rw * 3 // 4, rh * 2 // 3)
+                        resized_alpha = alpha_mode(resized_shot, resized_box)
+                        check(f"transparent {theme} restored after resize",
+                              resized_alpha < 255,
+                              f"alpha={resized_alpha}")
+                    else:
+                        check(f"transparent {theme} restored after resize", False,
+                              "window not found")
+                except RuntimeError as error:
+                    check(f"transparent {theme} restored after panel close", False, str(error))
             close(title)
 
         # --- Opaque regression: opacity 1 with the checker image. ---
         title = "nano-theme-opaque"
         launch(title, run_script("opaque", "dark"), COLS, ROWS, PALETTE_A,
-               opacity=1.0, cells=False, background_image=checker_path)
+               opacity=1.0, cells=False)
         drive(title, "dark")
         path = out / "opaque-dark.png"
         capture(title, path)
-        colors = analyze(path)
-        magenta = count_near(colors, (255, 0, 255), tolerance=4)
-        cyan = count_near(colors, (0, 255, 255), tolerance=4)
-        check("opaque checker visible", magenta + cyan > 1000,
-              f"magenta={magenta} cyan={cyan}")
+        width, height = Image.open(path).size
+        box = (width // 4, height // 3, width * 3 // 4, height * 2 // 3)
+        alpha = alpha_mode(path, box)
+        checker = count_near(composite_colors(path), (255, 0, 255), tolerance=4) + count_near(
+            composite_colors(path), (0, 255, 255), tolerance=4
+        )
+        check("opaque background is a solid terminal background",
+              alpha == 255 and checker < 1000,
+              f"alpha={alpha} exact_checker={checker}")
         close(title)
 
         # --- Component pass: root feed, command panel, schedule, terminal. ---
@@ -589,7 +719,12 @@ def main():
                     time.sleep(1.0)
                     path = out / f"components-{name}.png"
                     capture(title, path)
-                    check(f"components {name} captured", path.exists())
+                    changed = image_diff(base, path)
+                    check(f"components {name} rendered", changed > 0.001, f"diff={changed}")
+                    if name == "command":
+                        selected = theme_color_count(path, "dark", "selected_bg")
+                        check("components command selected_bg present", selected > 20,
+                              f"selected_bg={selected}")
                     if name != "terminal":
                         send_key(title, KEY_CODES["esc"])
                 except RuntimeError as error:
@@ -604,7 +739,8 @@ def main():
         drive(title, "dark")
         decision = out / "components-decision.png"
         capture(title, decision)
-        check("components decision card captured", decision.exists())
+        changed = image_diff(base, decision)
+        check("components decision card rendered", changed > 0.001, f"diff={changed}")
         close(title)
         MockModel.mode = "text"
 
@@ -623,7 +759,9 @@ def main():
                 pass
         cells_true = out / "local-cells-true.png"
         capture(title, cells_true)
-        check("local background cells=true captured", cells_true.exists())
+        hover = theme_color_count(cells_true, "dark", "hover_bg")
+        check("local background cells=true captured", cells_true.exists() and hover > 10,
+              f"hover_bg={hover}")
         close(title)
         MockModel.mode = "text"
 
@@ -637,14 +775,19 @@ def main():
         time.sleep(2)
         diff_cells = out / "local-diff-cells-true.png"
         capture(title, diff_cells)
-        check("local diff cells=true captured", diff_cells.exists())
+        diff_colors = theme_color_count(diff_cells, "dark", "diff_add_bg") + theme_color_count(
+            diff_cells, "dark", "diff_del_bg"
+        )
+        check("local diff cells=true captured", diff_cells.exists() and diff_colors > 20,
+              f"diff_bg={diff_colors}")
         close(title)
         MockModel.mode = "text"
 
         # --- Dock / child session: a subagent tool call creates the dock. ---
         MockModel.mode = "subagent"
         title = "nano-theme-dock"
-        launch(title, run_script("dock", "dark"), COLS, ROWS, PALETTE_A)
+        launch(title, run_script("dock", "dark"), COLS, ROWS, PALETTE_A,
+               opacity=0.7, cells=False, background_image=checker_path)
         drive(title, "dark")
         if not args.capture_only:
             try:
@@ -655,7 +798,8 @@ def main():
                 pass
         dock = out / "components-dock.png"
         capture(title, dock)
-        check("components dock captured", dock.exists())
+        hover = theme_color_count(dock, "dark", "hover_bg")
+        check("components dock rendered", dock.exists() and hover > 10, f"hover_bg={hover}")
         if not args.capture_only:
             try:
                 focus(title)
@@ -663,7 +807,8 @@ def main():
                 time.sleep(1.0)
                 child = out / "components-child.png"
                 capture(title, child)
-                check("components child captured", child.exists())
+                changed = image_diff(dock, child)
+                check("components child rendered", changed > 0.001, f"diff={changed}")
             except RuntimeError as error:
                 check("components child captured", False, str(error))
         close(title)
@@ -672,12 +817,17 @@ def main():
         # --- Diff: the mock asks the edit tool to change a fixture file. ---
         MockModel.mode = "edit"
         title = "nano-theme-diff"
-        launch(title, run_script("diff", "dark"), COLS, ROWS, PALETTE_A)
+        launch(title, run_script("diff", "dark"), COLS, ROWS, PALETTE_A,
+               opacity=0.7, cells=False, background_image=checker_path)
         drive(title, "dark")
         time.sleep(2)
         diff_shot = out / "components-diff.png"
         capture(title, diff_shot)
-        check("components diff captured", diff_shot.exists())
+        diff_colors = theme_color_count(diff_shot, "dark", "diff_add_bg") + theme_color_count(
+            diff_shot, "dark", "diff_del_bg"
+        )
+        check("components diff rendered", diff_shot.exists() and diff_colors > 20,
+              f"diff_bg={diff_colors}")
         close(title)
         MockModel.mode = "text"
 
@@ -687,7 +837,8 @@ def main():
                opacity=0.7, fullscreen=True, focus_after=False)
         path = out / "fullscreen-dark.png"
         capture(title, path)
-        check("fullscreen captured", path.exists() and path.stat().st_size > 0)
+        rule = theme_color_count(path, "dark", "rule")
+        check("fullscreen rendered", path.exists() and rule > 100, f"rule={rule}")
         close(title)
 
         title = "nano-theme-fullscreen-60"
@@ -695,12 +846,32 @@ def main():
                opacity=0.7, fullscreen=True, font_size=45, focus_after=False)
         path = out / "fullscreen-dark-60.png"
         capture(title, path)
-        check("fullscreen 60 captured", path.exists() and path.stat().st_size > 0)
+        rule = theme_color_count(path, "dark", "rule")
+        check("fullscreen 60 rendered", path.exists() and rule > 100, f"rule={rule}")
         close(title)
 
         config_after = hashlib.sha256(config.read_bytes()).hexdigest()
-        check("config unchanged", config_before == config_after,
+        check("config unchanged after normal exits", config_before == config_after,
               f"{config_before} -> {config_after}")
+
+        # --- Error exit: startup fails before the terminal loop; config must
+        # stay untouched. ---
+        error_script = root / "run-error.sh"
+        error_script.write_text(
+            "#!/bin/sh\n"
+            f"export HOME='{home}'\n"
+            f"export DSH_HOME='{dsh_home}'\n"
+            f"export NANO_DATA_ROOT='{data}'\n"
+            f"exec '{binary}' --no-install --dsh-home '{dsh_home}' "
+            f"--data-root '{data}' --cwd '{work}' --dsh-bin /nonexistent/nano-dsh\n"
+        )
+        error_script.chmod(0o755)
+        error_result = subprocess.run([str(error_script)], capture_output=True, text=True)
+        check("error exit is non-zero", error_result.returncode != 0,
+              (error_result.stderr or error_result.stdout).strip()[-200:])
+        config_error = hashlib.sha256(config.read_bytes()).hexdigest()
+        check("config unchanged after error exit", config_before == config_error,
+              f"{config_before} -> {config_error}")
     finally:
         server.shutdown()
         for pid in SPAWNED:
@@ -712,12 +883,16 @@ def main():
             shutil.rmtree(root, ignore_errors=True)
 
     passed = all(item["ok"] for item in checks)
+    build_commit = run(["git", "-C", str(repo), "rev-parse", "HEAD"]).stdout.strip()
     report = {
         "ghostty": run(["ghostty", "--version"]).stdout.splitlines()[0] if run(["ghostty", "--version"]).stdout else "",
         "macos": run(["sw_vers", "-productVersion"]).stdout.strip(),
         "arch": run(["uname", "-m"]).stdout.strip(),
+        "build_commit": build_commit,
         "binary": str(binary),
         "binary_mtime": binary.stat().st_mtime,
+        "launches": LAUNCHES,
+        "captures": CAPTURES,
         "checks": checks,
         "color_counts": {
             f"{theme}-{width}": entry for (theme, width), entry in counts.items()

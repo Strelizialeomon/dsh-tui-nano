@@ -2360,7 +2360,7 @@ mod fix_tests {
                 "attachmentId": "att-1",
                 "terminalId": "term-1",
                 "sequence": 1,
-                "data": "plain \u{1b}[31mred\u{1b}[0m"
+                "data": "plain \u{1b}[31mred\u{1b}[0m \u{1b}[38;2;1;2;3mrgb\u{1b}[0m \u{1b}[48;2;4;5;6mBG\u{1b}[0m \u{1b}[7mrev\u{1b}[0m"
             }),
         );
         use ratatui::backend::TestBackend;
@@ -2383,6 +2383,21 @@ mod fix_tests {
             .find(|cell| cell.symbol() == "r")
             .expect("explicit red cell");
         assert_eq!(red.fg, Color::Indexed(1));
+        let rgb = cells
+            .iter()
+            .find(|cell| cell.symbol() == "g")
+            .expect("explicit RGB cell");
+        assert_eq!(rgb.fg, Color::Rgb(1, 2, 3));
+        let background = cells
+            .iter()
+            .find(|cell| cell.symbol() == "B")
+            .expect("explicit background cell");
+        assert_eq!(background.bg, Color::Rgb(4, 5, 6));
+        let reversed = cells
+            .iter()
+            .find(|cell| cell.symbol() == "v")
+            .expect("reverse cell");
+        assert!(reversed.modifier.contains(Modifier::REVERSED));
     }
 
     #[test]

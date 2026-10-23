@@ -327,7 +327,7 @@ if let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: An
     if install.returncode != 0:
         return 1
 
-    def write_run_script(name, reduced_motion=False):
+    def write_run_script(name, reduced_motion=False, theme="dark"):
         path = ROOT / f"run-{name}.sh"
         path.write_text(
             "#!/bin/sh\n"
@@ -339,7 +339,8 @@ if let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: An
             "export DEEPSEEK_API_KEY='nano-s13-test-key'\n"
             f"export DEEPSEEK_BASE_URL='http://127.0.0.1:{server.server_address[1]}'\n"
             f"export NANO_REDUCED_MOTION='{'1' if reduced_motion else '0'}'\n"
-            f"exec '{ROOT / 'bin/nano'}' --no-install "
+            + (f"export NANO_THEME='light'\n" if theme == "light" else "")
+            + f"exec '{ROOT / 'bin/nano'}' --no-install "
             f"--cwd '{work}' --provider deepseek-official --model deepseek-flash "
             f"2>'{ROOT / 'nano.stderr.log'}'\n"
         )
@@ -425,7 +426,7 @@ if let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: An
 
         # --- Light, 60 columns. ---
         light_title = "nano-s13-light-60"
-        launch(light_title, write_run_script("light60"), LIGHT_COLS, LIGHT_ROWS)
+        launch(light_title, write_run_script("light60", theme="light"), LIGHT_COLS, LIGHT_ROWS)
         light_main = out / "07-light-60-main.png"
         capture(light_title, light_main)
         check("light 60 main captured", light_main.exists())
