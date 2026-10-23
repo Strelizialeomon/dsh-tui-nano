@@ -44,8 +44,8 @@
 现行约束处理：
 
 - **取代**：旧 [主题 ADR](../../decisions/2026-10-22-nano-theme-scope.md) 的效力由新 ADR 承接；旧记录只改状态与取代链接。
-- **本次规格承接**：[visual-v1](../2026-10-22-nano-visual-v1/README.md) §3/§9、[visual-followup](../2026-10-22-nano-visual-followup/README.md) §2.2/§3.2/§7、[视觉清单](../../design/2026-10-22-visual-alignment/checklist.md) 的颜色/token 行，以及 [design-contract](../../release/design-contract.md) §3 中依赖 ANSI 色名、默认前景或终端决定全部 RGB 的条款。冲突只在主题归属、RGB 和背景边界上由本 spec 取代；旧 spec、旧证据及历史正文不回写。
-- **沿用**：现有布局、符号、字重/焦点含义、上下文阈值、状态灯判定和动效。输入历史与 dock 生命周期 ADR 不变。
+- **本次规格承接**：[visual-v1](../2026-10-22-nano-visual-v1/README.md) §3/§9、[visual-followup](../2026-10-22-nano-visual-followup/README.md) §2.2/§3.2/§7、[视觉清单](../../design/2026-10-22-visual-alignment/checklist.md) 的颜色/token 行（含审批卡首行白色加粗问句的颜色归属），以及 [design-contract](../../release/design-contract.md) §3 中依赖 ANSI 色名、默认前景或终端决定全部 RGB 的条款。冲突只在主题归属、RGB 和背景边界上由本 spec 取代；旧 spec、旧证据及历史正文不回写。
+- **沿用**：现有布局、符号、字重/焦点含义、上下文阈值、状态灯判定和动效。输入历史与 dock 生命周期 ADR 不变（两份 ADR 均不涉及配色/主题，检索无 `NANO_THEME`/`theme` 引用）。
 - **新增机制**：仅 §7 的共享语义配色；没有额外自动探测、配置持久化或主题加载框架。
 - 开工检索词：`ghostty|theme|主题|透明|opacity|palette`，命中旧主题 ADR；按旧 ID/文件名反查消费者，并核了开放 issue 列表。无其他透明背景 ADR 命中，不据此声称历史上无人讨论过。
 
@@ -86,6 +86,7 @@
 - 选择行前景使用 `fg`；dock 聚焦行仅使用 `hover_bg`，文字/灯颜色与字重保持原含义。
 - diff 正文/词级前景用 `fg`，词级保留已有加粗；标记/统计使用各自的增删前景角色，行号用 `muted`。不新增语法高亮功能。
 - 原本承担正文含义的 White/Gray/Black/default foreground 改用 `fg`；承担次要信息的 DarkGray 改用 `muted`；普通边框单独用 `rule`，不再和次要文字共用同一颜色。
+- 审批卡首行问句改用 `fg`（深色主题接近白、浅色主题为深色），强调由加粗承载，不再固定 White。此项收敛开放 issue #49 的 minor 9；执行 issue 创建时注明该结论。
 - 原 Magenta 若只是分类/标题强调，归 `accent`；未知/不可用状态仍按已有业务事实取 `muted`、`warning` 或 `error`，不得因颜色迁移改判为成功。
 - 自有界面不再直接输出命名 ANSI 色、`Color::Indexed` 或 reset/default 前景作为最终颜色。允许 style patch 的未指定字段继承已铺好的主题前景；终态 Buffer/协议检查负责证明没有漏色。
 
@@ -198,4 +199,13 @@
 
 ## 10. 审核修订记录
 
-- 2026-10-22：用户确认独立功能配色与主体半透明边界，要求出新 spec；共享配色机制已获准，结构卡选择不拆（1 spec + 1 执行 issue）。审核档位待选。规格中的实施验收均未执行，不据文档创建宣称能力已经交付。
+- 2026-10-22：用户确认独立功能配色与主体半透明边界，要求出新 spec；共享配色机制已获准，结构卡选择不拆（1 spec + 1 执行 issue）。规格中的实施验收均未执行，不据文档创建宣称能力已经交付。
+- 2026-10-23：轻审（1 个 agent，由主 agent 按用户点选档位派发）结论 0 阻断 / 2 重要 / 1 建议，原文见 [PR #55 评论](https://github.com/nano-sun99/dsh-tui-nano/pull/55#issuecomment-6356013435)。用户选择「改」，处置如下：
+
+| # | 严重度 | 发现 | 处置 |
+| --- | --- | --- | --- |
+| 1 | 重要 | design-contract 未指向本 spec，正文仍称主题由终端决定 | 本 PR 在 design-contract 顶部补指向说明，沿用 visual-v1 先例 |
+| 2 | 重要 | 审批卡首行白字归属未写入承接清单，#49 minor 9 仍待拍板 | §2 承接清单点名；§3.2 明确改用 `fg`；执行 issue 创建时注明 |
+| 3 | 建议 | 两 ADR「不变」未写无及原因 | §2 沿用条补检索依据 |
+
+修订后需重新过闸；档位由用户当场再点。
